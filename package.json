@@ -1,0 +1,12 @@
+{
+  "name": "iptv-multiview",
+  "version": "0.1.0",
+  "description": "Self-hosted IPTV multiview with a buffering relay for Xtream Codes providers",
+  "private": true,
+  "license": "MIT",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node --test test/server.test.js"
+  }
+}

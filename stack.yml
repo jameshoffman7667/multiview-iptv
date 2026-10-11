@@ -1,0 +1,20 @@
+# Dockhand / Portainer-style stack: pulls the prebuilt image from Docker Hub.
+# Change the tag to upgrade (see CHANGELOG.md). Settings are kept in the iptv-data volume.
+services:
+  iptv-multiview:
+    image: mybadreligon/multiview-iptv:0.1.0
+    container_name: iptv-multiview
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      - TZ=America/Toronto
+      # Creates the first admin account when no accounts exist yet (or create it in the app).
+      # - ADMIN_USER=james
+      # - ADMIN_PASSWORD=change-this-password
+      # - RING_MB=16
+    volumes:
+      - iptv-data:/data
+
+volumes:
+  iptv-data:

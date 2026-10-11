@@ -1,0 +1,22 @@
+services:
+  iptv-multiview:
+    build: .
+    container_name: iptv-multiview
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      - TZ=America/Toronto
+      # Create the first admin account at start (otherwise create it in the app: Logins > Users and logins).
+      # Do this if anything other than your own LAN can reach this port:
+      # - ADMIN_USER=james
+      # - ADMIN_PASSWORD=change-this-password
+      # Per-stream relay buffer in MB (about 10-20 s of an HD channel at 16):
+      # - RING_MB=16
+    volumes:
+      # Named volume: Docker gives it the right owner automatically.
+      # To use a folder instead:  - ./data:/data   (then run: mkdir data && chown 1000:1000 data)
+      - iptv-data:/data
+
+volumes:
+  iptv-data:
