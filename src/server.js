@@ -11,6 +11,7 @@ const capture = require('./capture');
 const { Readable } = require('stream');
 const { pipeline } = require('stream/promises');
 const { Relay, Client } = require('./relay');
+const { Compose, cleanSpec } = require('./compose');
 const xtream = require('./xtream');
 const { Users, Views } = require('./users');
 const { isUpgrade: isWsUpgrade, handshake: wsHandshake, WsSink } = require('./ws');
@@ -41,6 +42,7 @@ function createApp(options = {}) {
     stallMs: Number(env('STALL_SECONDS', 15)) * 1000,
     ...(options.relay || {}),
   });
+  const compose = new Compose(relay, { idleMs: options.composeIdleMs !== undefined ? options.composeIdleMs : Number(env('COMPOSE_IDLE_SECONDS', 8)) * 1000 });
   const maxQueue = (options.maxClientQueueMB !== undefined ? options.maxClientQueueMB : Number(env('CLIENT_QUEUE_MB', 8))) * MB;
 
   const MIME = {
@@ -145,7 +147,7 @@ function createApp(options = {}) {
   }
 
   // Attach `sink` (an HTTP response or a WebSocket) to the shared upstream. Throws { deny } when refused.
-  async function runStream(me, providerId, sid, sink, { burst, failover, begin }) {
+  async function runStream(me, providerId, sid, sink, { burst, failover, sd, begin }) {
     const denied = streamDenied(me, providerId, sid);
     if (denied) { const e = new Error(denied.message); e.deny = denied; throw e; }
     let mine = null;
@@ -164,7 +166,7 @@ function createApp(options = {}) {
       if (up) { if (attached) up.detach(client); else up.unpend(); }
     });
     try {
-      up = await relay.open(providerId, sid, { failover });
+      up = await relay.open(providerId, sid, { failover, sd });
     } catch (e) {
       up = null;
       if (gone) return;
@@ -182,10 +184,12 @@ function createApp(options = {}) {
     const sid = decodeURIComponent(m[2]);
     const burst = Math.max(0, Math.min(300, Number(url.searchParams.get('buf')) || 0));
     const failover = url.searchParams.get('failover') !== '0';
+    const sd = url.searchParams.get('q') === 'sd';
     try {
       await runStream(me, providerId, sid, res, {
         burst,
         failover,
+        sd,
         begin(up) {
           if (res.socket) res.socket.setNoDelay(true);
           res.writeHead(200, {
@@ -196,6 +200,55 @@ function createApp(options = {}) {
             'X-Relay-Provider': up.provider.id,
           });
         },
+      });
+    } catch (e) {
+      if (!e.deny) throw e;
+      sendJson(req, res, e.deny.status, { error: e.deny.error, message: e.deny.message });
+    }
+  }
+
+  // ---- shared screen / per-tile transcode: one ffmpeg output, delivered like a normal stream
+  const denyOf = (status, error, message) => Object.assign(new Error(message), { deny: { status, error, message } });
+  async function runCompose(me, id, sink, begin) {
+    if (!me) throw denyOf(401, 'login_required', 'Login required');
+    const spec = compose.specFor(id);
+    if (!spec) throw denyOf(404, 'gone', 'This shared screen has ended - reload the page');
+    for (const c of spec.cells) {
+      const d = streamDenied(me, c.p, c.sid);
+      if (d) throw denyOf(d.status, d.error, d.message);
+    }
+    let job;
+    try { job = compose.acquire(spec); } catch (e) { throw denyOf(e.status || 502, e.code || 'compose_failed', e.message); }
+    let mine = null;
+    if (me.username) {
+      mine = streamsByUser.get(me.username);
+      if (!mine) { mine = new Set(); streamsByUser.set(me.username, mine); }
+      mine.add(sink);
+    }
+    const client = new Client(sink, maxQueue);
+    let started = false;
+    const viewer = { send(c) { if (started) client.send(c); }, end() { client.end(); } };
+    job.addViewer(viewer);
+    sink.on('close', () => {
+      if (mine) { mine.delete(sink); if (!mine.size) streamsByUser.delete(me.username); }
+      job.removeViewer(viewer);
+    });
+    try {
+      await job.ready();
+    } catch (e) {
+      job.removeViewer(viewer);
+      throw denyOf(e.status || 502, e.limit ? 'provider_limit' : (e.code || 'compose_failed'), e.message);
+    }
+    if (sink.destroyed) return;
+    begin();
+    started = true;
+  }
+
+  async function handleComposeStream(req, res, m, me) {
+    try {
+      await runCompose(me, decodeURIComponent(m[1]), res, () => {
+        if (res.socket) res.socket.setNoDelay(true);
+        res.writeHead(200, { 'Content-Type': 'video/mp2t', 'Cache-Control': 'no-store', 'Connection': 'keep-alive', 'X-Accel-Buffering': 'no' });
       });
     } catch (e) {
       if (!e.deny) throw e;
@@ -248,12 +301,24 @@ function createApp(options = {}) {
   async function handleWs(req, socket) {
     const url = new URL(req.url, 'http://localhost');
     const m = /^\/ws\/stream\/([^/]+)\/([^/]+?)(?:\.ts)?$/.exec(url.pathname);
+    const cm = /^\/ws\/compose\/([A-Za-z0-9]{8,32})$/.exec(url.pathname);
     const refuse = (status, text) => { socket.end(`HTTP/1.1 ${status} ${text}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`); };
-    if (!m || !isWsUpgrade(req)) return refuse(404, 'Not Found');
+    if ((!m && !cm) || !isWsUpgrade(req)) return refuse(404, 'Not Found');
     if (!authorised(req)) return refuse(401, 'Unauthorized');
     if (!sameOrigin(req)) return refuse(403, 'Forbidden');
     const me = whoIs(req);
     if (!me) return refuse(401, 'Unauthorized');
+    if (cm) {
+      wsHandshake(req, socket);
+      const csink = new WsSink(socket);
+      try {
+        await runCompose(me, cm[1], csink, () => {});
+      } catch (e) {
+        if (!e.deny) { console.error(e); return csink.close(1011, 'error'); }
+        csink.close(1011, e.deny.error);
+      }
+      return;
+    }
     const providerId = decodeURIComponent(m[1]);
     const sid = decodeURIComponent(m[2]);
     wsHandshake(req, socket);
@@ -262,6 +327,7 @@ function createApp(options = {}) {
       await runStream(me, providerId, sid, sink, {
         burst: Math.max(0, Math.min(300, Number(url.searchParams.get('buf')) || 0)),
         failover: url.searchParams.get('failover') !== '0',
+        sd: url.searchParams.get('q') === 'sd',
         begin() {},
       });
     } catch (e) {
@@ -387,7 +453,23 @@ function createApp(options = {}) {
       const entry = epg.data.get(prov.id);
       return sendJson(req, res, 200, { from, to, available: !!(entry && entry.ok) || Object.values(progs).some((l) => l.length), programmes: progs });
     }
+    if (req.method === 'POST' && p === '/api/compose') {
+      if (!me) throw httpError(401, 'Login required', 'login_required');
+      const spec = cleanSpec(await readJson(req));
+      for (const c of spec.cells) {
+        const d = streamDenied(me, c.p, c.sid);
+        if (d) throw httpError(d.status, d.message, d.error);
+      }
+      compose.acquire(spec); // refuses now (limit, or a transcode that needs a GPU) rather than on the first frame
+      compose.remember(spec);
+      return sendJson(req, res, 200, { id: spec.id, kind: spec.kind, res: spec.res, stream: `/stream/compose/${spec.id}.ts`, ws: `/ws/compose/${spec.id}` });
+    }
     needAdmin(me);
+    if (req.method === 'GET' && p === '/api/compose/info') return sendJson(req, res, 200, compose.info());
+    if (req.method === 'POST' && p === '/api/compose/test') {
+      const body = await readJson(req);
+      return sendJson(req, res, 200, await compose.test(String(body.encoder || '')));
+    }
     if (req.method === 'GET' && p === '/api/state') {
       return sendJson(req, res, 200, relay.state());
     }
@@ -483,6 +565,8 @@ function createApp(options = {}) {
         return res.end('Login required');
       }
       const me = whoIs(req);
+      const cm = /^\/stream\/compose\/([A-Za-z0-9]{8,32})(?:\.ts)?$/.exec(url.pathname);
+      if (cm && req.method === 'GET') return await handleComposeStream(req, res, cm, me);
       const sm = /^\/stream\/([^/]+)\/([^/]+?)(?:\.ts)?$/.exec(url.pathname);
       if (sm && req.method === 'GET') return await handleStream(req, res, url, sm, me);
       const vm = /^\/vod\/([^/]+)\/([^/]+)$/.exec(url.pathname);
@@ -512,12 +596,13 @@ function createApp(options = {}) {
 
   function close() {
     users.flush();
+    compose.closeAll();
     relay.closeAll();
     server.close();
     server.closeAllConnections();
   }
 
-  return { server, config, lists, relay, users, views, epg, close };
+  return { server, config, lists, relay, compose, users, views, epg, close };
 }
 
 module.exports = { createApp };

@@ -1,7 +1,9 @@
 FROM node:22-alpine
 ENV NODE_ENV=production PORT=1234 DATA_DIR=/data
-# ffmpeg is only used for local capture cards (Providers > Add capture card)
-RUN apk add --no-cache su-exec ffmpeg
+# ffmpeg: local capture cards, the shared screen and 480p tile transcoding.
+# The VA drivers let ffmpeg encode on an Intel (intel-media-driver, Quick Sync) or AMD (mesa-va-gallium) GPU when
+# /dev/dri is passed into the container; without a GPU everything falls back to the CPU encoder.
+RUN apk add --no-cache su-exec ffmpeg libva-utils intel-media-driver mesa-va-gallium
 WORKDIR /app
 COPY package.json ./
 COPY src ./src

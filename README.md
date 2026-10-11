@@ -21,7 +21,7 @@ Open `http://<server-ip>:1234` on the PC, and the same address in the Android TV
 
 First run opens the **Providers** window: enter the server URL, username and password from your provider and press **Test**. It reads how many connections your plan allows and fills that in. Add as many providers as you like. Then pick a tile, press Enter (or click it) and choose a channel.
 
-**Dockhand / prebuilt image:** create a stack from `stack.yml` (it uses `mybadreligon/multiview-iptv:0.3.0` from Docker Hub). Add `ADMIN_USER` / `ADMIN_PASSWORD` under environment if the port is reachable beyond your LAN.
+**Dockhand / prebuilt image:** create a stack from `stack.yml` (it uses `mybadreligon/multiview-iptv:0.4.0` from Docker Hub). Add `ADMIN_USER` / `ADMIN_PASSWORD` under environment if the port is reachable beyond your LAN.
 
 Without Docker: `node src/server.js` (Node 20+, no packages to install). Settings are stored in the `/data` volume (`providers.json`, channel list cache).
 
@@ -65,6 +65,13 @@ A capture card (HDMI-to-USB dongle, TV tuner card with a V4L2 driver) plugged in
 3. Save. The sources appear in the channel picker under the capture card's name and work in multiviews and shared multiviews like any channel.
 
 The server runs `ffmpeg` and encodes the card to H.264 + AAC MPEG-TS, once per source, however many people watch. It uses no provider connection but does use CPU (the *Encoder* option can use an Intel/AMD GPU through VAAPI or an NVIDIA GPU through NVENC when the container has access to them; software x264 works everywhere). HDMI sources with HDCP copy protection cannot be captured. The container user is added to the groups that own the devices at start-up.
+
+## Lower quality for small tiles, shared screen, 480p transcode
+
+- **Small tiles prefer SD** (Settings, on by default): a tile that is a sixth of the screen or less asks for the provider's SD / low-quality version of the channel (matched by name, `ESPN SD` for `ESPN FHD`) when one exists, at any enabled provider; otherwise it plays the channel you chose. Tile menu > *Quality* overrides it per tile (Auto / SD / As chosen / 480p transcode). The stats overlay (`I`) shows `SD`.
+- **Shared screen** (Settings > Shared screen: 480p / 720p / 1080p): the server combines the visible tiles into ONE H.264 stream and the page just plays it, for boxes that struggle with many streams (Fire TV Stick, Google TV). The server encodes only while someone watches. Selecting another tile moves the sound to it (the picture restarts for a moment). Zooming a tile sends only that channel. Movies and series are not part of the picture and keep playing on their own. Decoding and scaling of the inputs happens on the server CPU; the encode can use the GPU.
+- **480p tile transcode** (tile menu > Quality): the server re-encodes that one channel at 480p. It needs a GPU encoder (or `TRANSCODE_ALLOW_CPU=1`); if it is declined the original plays.
+- **GPU encoding.** Pass `/dev/dri` into the container (`devices:` in `stack.yml`; with Proxmox the GPU must first be passed through to the VM/LXC that runs Docker). Settings > Shared screen has *Test CPU encoder* and *Test GPU encoder* buttons. Intel Quick Sync (UHD 630) is usually the better choice than an older AMD card (Polaris encodes H.264 only, which is all that is needed). Limits are set with `COMPOSE_MAX` and `TRANSCODE_MAX`.
 
 ## Logins and sharing a multiview
 
@@ -120,6 +127,10 @@ Tuning: `RING_MB` (default 32) is the relay buffer per channel, about a minute o
 | `RING_MB` | 32 | relay buffer per channel in MB (about 1 minute of an HD channel). Needs raising for buffers longer than that |
 | `FFMPEG_PATH` | `ffmpeg` | ffmpeg binary used for capture cards |
 | `VAAPI_DEVICE` | `/dev/dri/renderD128` | render device used when a capture source selects the VAAPI encoder |
+| `COMPOSE_ENCODER` | `auto` | encoder for the shared screen and 480p transcodes: `auto` (GPU when `/dev/dri` is present, else CPU), `vaapi`, `x264`, `nvenc` |
+| `COMPOSE_MAX`, `TRANSCODE_MAX` | 2, 2 | shared screens / 480p channel transcodes allowed at once |
+| `TRANSCODE_ALLOW_CPU` | off | set to `1` to let 480p tile transcoding use the CPU (otherwise it needs a GPU encoder) |
+| `COMPOSE_IDLE_SECONDS` | 8 | stop a shared screen / transcode this long after its last viewer leaves |
 | `IDLE_SECONDS` | 8 | keep a channel's provider connection this long after the last viewer leaves (quick switching back). It is released at once if another channel needs the slot |
 | `STALL_SECONDS` | 15 | reconnect if the provider sends nothing for this long |
 | `CLIENT_QUEUE_MB` | 8 | a viewer that falls this far behind is disconnected (the page reconnects it) |
@@ -141,6 +152,6 @@ Your provider credentials stay on the server; the browser only sees channel ids.
 
 ## Tests
 
-`npm test` runs the relay, accounts, guide, movies and capture tests (Node only, a mock Xtream provider, and ffmpeg for the capture test; no packages). `test/ui.test.mjs` drives the page in Chromium and needs Playwright (dev only).
+`npm test` runs the relay, accounts, guide, movies, capture, SD-variant and shared-screen tests (Node only, a mock Xtream provider, and ffmpeg for the capture test; no packages). `test/ui.test.mjs` drives the page in Chromium and needs Playwright (dev only).
 
 Bundled: mpegts.js 1.8.2 (Apache-2.0, `public/vendor/`).

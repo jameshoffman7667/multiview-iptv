@@ -347,7 +347,7 @@ class Relay {
   }
 
   // Resolves to an Upstream that already has data (pending count held until attach/unpend).
-  async open(providerId, sid, { failover = true } = {}) {
+  async open(providerId, sid, { failover = true, sd = false } = {}) {
     const primary = this.config.get(providerId);
     if (!primary || !primary.enabled) throw httpError(404, 'Unknown or disabled provider');
     sid = String(sid);
@@ -357,6 +357,12 @@ class Relay {
         const p = this.config.get(a.providerId);
         if (p) cands.push({ provider: p, sid: a.sid });
       }
+    }
+    let sdKey = '';
+    if (sd) { // a lower-quality version of the same channel goes first; the chosen one stays as the fallback
+      const v = this.lists.lowerVariant(providerId, sid);
+      const vp = v && this.config.get(v.providerId);
+      if (vp && vp.enabled) { cands.unshift({ provider: vp, sid: v.sid }); sdKey = `${vp.id}:${v.sid}`; }
     }
     const tried = new Set();
     let lastErr = null;
@@ -385,14 +391,14 @@ class Relay {
       pick.pending++;
       try {
         await pick.ready;
-        if (pick.provider.id !== providerId) log(`[failover] ${primary.name} -> ${pick.provider.name} for ${sid}`);
+        if (pick.provider.id !== providerId && pick.key !== sdKey) log(`[failover] ${primary.name} -> ${pick.provider.name} for ${sid}`);
         return pick;
       } catch (e) {
         pick.unpend();
         tried.add(pick.key);
         lastErr = e;
         if (e.limit) this.cool.set(pick.provider.id, Date.now() + this.opts.cooldownMs);
-        if (!failover) break;
+        if (!failover && pick.key !== sdKey) break;
       }
     }
     if (lastErr) throw lastErr;

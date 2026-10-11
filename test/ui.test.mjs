@@ -490,6 +490,85 @@ describe('browser', () => {
     assert.deepEqual(errors, []);
     await ctx.close();
   });
+  test('overlays hide after 5 s idle; the sound marker is pastel red and absent with one screen', async () => {
+    const { ctx, page, errors } = await openPage({ state: { layout: '2x2', sel: 1, tiles: [{ p: 'p1', sid: '1', name: 'ESPN' }, { p: 'p1', sid: '2', name: 'CNN' }, null, null] } });
+    await page.waitForFunction(() => window.__players.length === 2);
+    await page.mouse.move(100, 100);
+    const css = () => page.evaluate(() => ({
+      bar: document.querySelector('#toolbar').classList.contains('hide'),
+      speaker: getComputedStyle(document.querySelector('.tile:nth-child(2) .speaker')).display,
+      speakerBg: getComputedStyle(document.querySelector('.tile:nth-child(2) .speaker')).backgroundColor,
+      labelOp: getComputedStyle(document.querySelector('.tile:nth-child(2) .label')).opacity,
+      box: getComputedStyle(document.querySelector('.tile:nth-child(2)'), '::after').boxShadow,
+    }));
+    let c = await css();
+    assert.equal(c.bar, false);
+    assert.equal(c.speaker, 'block');
+    assert.match(c.speakerBg, /rgb\(244, 166, 166\)/, 'pastel red bubble');
+    assert.match(c.box, /rgba\(244, 166, 166, [\d.]+\) 0px 0px 0px 2px inset/, 'thin pastel red box');
+    assert.equal(c.labelOp, '1');
+    await page.waitForTimeout(5600);
+    c = await css();
+    assert.equal(c.bar, true, 'toolbar hidden');
+    assert.equal(c.speaker === 'block' && Number(await page.evaluate(() => getComputedStyle(document.querySelector('.tile:nth-child(2) .speaker')).opacity)) > 0.01, false, 'bubble hidden');
+    assert.equal(Number(c.labelOp) < 0.01, true, 'channel name hidden');
+    await page.mouse.move(300, 300);
+    await page.waitForTimeout(400);
+    c = await css();
+    assert.equal(c.bar, false, 'any input brings them back');
+    assert.equal(c.labelOp, '1');
+    await page.evaluate(() => window.__mv.setLayout('1'));
+    assert.equal(await page.evaluate(() => document.body.classList.contains('single')), true);
+    await page.waitForTimeout(300); // the outline fades out over 80 ms
+    assert.equal(await page.evaluate(() => getComputedStyle(document.querySelector('.tile .speaker')).display), 'none', 'no bubble with one screen');
+    assert.equal(await page.evaluate(() => getComputedStyle(document.querySelector('.tile'), '::after').boxShadow), 'none', 'no box with one screen');
+    assert.deepEqual(errors, []);
+    await ctx.close();
+  });
+
+  test('small tiles ask for SD; the big tile and per-tile choices do not', async () => {
+    const { ctx, page, errors } = await openPage({ state: { layout: '1+7', tiles: [{ p: 'p1', sid: '1', name: 'ESPN' }, { p: 'p1', sid: '2', name: 'CNN' }, { p: 'p1', sid: '3', name: 'BBC', q: 'full' }, { p: 'p1', sid: '4', name: 'W', q: 'sd' }] } });
+    await page.waitForFunction(() => window.__players.length === 4);
+    const urls = await page.evaluate(() => window.__players.map((p) => p.ds.url));
+    const has = (sid) => urls.find((u) => u.includes('/p1/' + sid + '.ts'));
+    assert.doesNotMatch(has('1'), /q=sd/, 'the big tile plays as chosen');
+    assert.match(has('2'), /q=sd/, 'a small tile asks for SD');
+    assert.doesNotMatch(has('3'), /q=sd/, 'As chosen wins');
+    assert.match(has('4'), /q=sd/, 'SD wins');
+    // zooming a small tile makes it big: it restarts without SD
+    await page.evaluate(() => window.__mv.toggleZoom(1));
+    await page.waitForFunction(() => window.__players.some((p) => !p.destroyed && p.ds.url.includes('/p1/2.ts') && !p.ds.url.includes('q=sd')));
+    assert.deepEqual(errors, []);
+    await ctx.close();
+  });
+
+  test('480p tile choice falls back to the original stream when the server has no GPU', async () => {
+    const { ctx, page, errors } = await openPage({ state: { layout: '1', tiles: [{ p: 'p1', sid: '1', name: 'ESPN', q: '480' }] } });
+    await page.waitForFunction(() => window.__players.length === 1);
+    assert.match(await page.evaluate(() => window.__players[0].ds.url), /\/ws\/stream\/p1\/1\.ts/);
+    assert.match(await page.textContent('#banner'), /480p transcode not available/);
+    assert.deepEqual(errors.filter((e) => !/503|Service Unavailable/.test(e)), []);
+    await ctx.close();
+  });
+
+  test('shared screen: tiles do not play on their own, one player gets the composed stream, and it falls back when refused', async () => {
+    const { ctx, page, errors } = await openPage({ state: { layout: '2x2', shared: '480', sel: 0, tiles: [{ p: 'p1', sid: '1', name: 'ESPN' }, { p: 'p1', sid: '2', name: 'CNN' }, null, null] } });
+    await page.waitForFunction(() => window.__players.length === 1, null, { timeout: 5000 });
+    const url = await page.evaluate(() => window.__players[0].ds.url);
+    assert.match(url, /\/ws\/compose\/[0-9a-f]{16}$/);
+    assert.equal(await page.evaluate(() => document.body.classList.contains('shared')), true);
+    assert.equal(await page.evaluate(() => !!document.querySelector('#shared')), true);
+    // moving the sound to tile 2 changes the picture description and restarts the shared stream
+    await page.evaluate(() => window.__mv.select(1));
+    await page.waitForFunction(() => window.__players.length === 2, null, { timeout: 5000 });
+    assert.notEqual(await page.evaluate(() => window.__players[1].ds.url), url);
+    // turning it off gives every tile its own player again
+    await page.evaluate(() => { window.__mv.S.shared = ''; window.__mv.sharedApply(); });
+    await page.waitForFunction(() => window.__players.filter((p) => !p.destroyed).length === 2, null, { timeout: 5000 });
+    assert.equal(await page.evaluate(() => document.body.classList.contains('shared')), false);
+    assert.deepEqual(errors.filter((e) => !/503|Service Unavailable/.test(e)), []);
+    await ctx.close();
+  });
 });
 
 describe('real mpegts.js against the relay', { skip: !CLIP }, () => {

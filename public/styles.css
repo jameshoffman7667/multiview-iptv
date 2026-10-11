@@ -9,6 +9,7 @@
   --good: #3ecf8e;
   --warn: #f5b942;
   --bad: #ff6b6b;
+  --sound: #f4a6a6;
 }
 * { box-sizing: border-box; }
 html, body { margin: 0; height: 100%; background: #000; color: var(--text); overflow: hidden;
@@ -24,16 +25,20 @@ button { cursor: pointer; }
 .tile video { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: #000; object-fit: contain; }
 body.fill .tile video { object-fit: cover; }
 .tile::after { content: ""; position: absolute; top: 0; left: 0; right: 0; bottom: 0; pointer-events: none; z-index: 5;
-  box-shadow: inset 0 0 0 0 var(--accent); transition: box-shadow .08s; }
-.tile.sel::after { box-shadow: inset 0 0 0 3px rgba(77, 163, 255, .55); }
-.tile:focus::after { box-shadow: inset 0 0 0 4px var(--accent); }
+  box-shadow: inset 0 0 0 0 var(--sound); transition: box-shadow .08s; }
+.tile.sel::after { box-shadow: inset 0 0 0 2px rgba(244, 166, 166, .7); }
+.tile:focus::after { box-shadow: inset 0 0 0 2px var(--sound); }
+body.single .tile::after { box-shadow: none; }
 .tile .num { position: absolute; top: 6px; left: 6px; z-index: 6; min-width: 20px; height: 20px; padding: 0 5px; border-radius: 10px;
   background: rgba(0,0,0,.55); color: #fff; font-size: 12px; line-height: 20px; text-align: center; pointer-events: none; }
 .tile .label { position: absolute; top: 6px; left: 34px; right: 44px; z-index: 6; font-size: 13px; text-shadow: 0 1px 3px #000, 0 0 6px #000;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; pointer-events: none; opacity: .0; transition: opacity .2s; }
 .tile.sel .label, .tile:hover .label, .tile:focus .label, body.showlabels .tile .label { opacity: 1; }
-.tile .speaker { position: absolute; top: 6px; right: 40px; z-index: 6; font-size: 11px; padding: 1px 6px; border-radius: 8px; background: var(--accent); color: #001; display: none; }
+.tile .speaker { position: absolute; top: 6px; right: 40px; z-index: 6; font-size: 11px; padding: 1px 6px; border-radius: 8px; background: var(--sound); color: #3a1414; display: none; }
 .tile.audio .speaker { display: block; }
+body.single .tile .speaker { display: none; }
+/* no input for a few seconds: names and the sound bubble go away with the toolbar */
+body.idle .tile .label, body.idle .tile .speaker { opacity: 0 !important; transition: opacity .25s; }
 .tile .more { position: absolute; top: 4px; right: 4px; z-index: 7; width: 30px; height: 26px; border: 0; border-radius: 6px; background: rgba(0,0,0,.55);
   color: #fff; font-size: 16px; line-height: 1; opacity: 0; transition: opacity .15s; }
 .tile:hover .more, .tile.sel .more, .tile:focus .more, .tile .more:focus { opacity: 1; }
@@ -176,3 +181,10 @@ body.viewer .tile .empty b, body.viewer .tile .empty span { display: none; }
 .gch:focus, .prog:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(77,163,255,.5); position: relative; z-index: 2; }
 .gnow { position: absolute; top: 28px; bottom: 0; width: 2px; background: var(--bad); opacity: .8; pointer-events: none; z-index: 1; }
 @media (max-width: 700px) { .guide { --gname: 110px; } }
+
+/* ---------- shared screen: the server's combined picture plays behind transparent tiles ---------- */
+#shared { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: #000; object-fit: contain; display: none; }
+body.fill #shared { object-fit: cover; }
+body.shared #shared { display: block; }
+body.shared .grid { background: transparent; gap: 0; }
+body.shared .tile { background: transparent; }

@@ -62,7 +62,7 @@
   var S = loadState();
   var ME = null; // set after /api/me: { admin, user, open, authRequired }
   function loadState() {
-    var d = { layout: '3x3', tiles: [], sel: 0, muted: false, bufSec: 4, keepSec: 0, transport: 'auto', fit: 'contain', failover: true, workers: true, stats: false, labels: false, epgOn: true, favs: {}, pk: {} };
+    var d = { layout: '3x3', tiles: [], sel: 0, muted: false, bufSec: 4, keepSec: 0, transport: 'auto', fit: 'contain', failover: true, smallSd: true, shared: '', workers: true, stats: false, labels: false, epgOn: true, favs: {}, pk: {} };
     var j = {};
     try { j = JSON.parse(localStorage.getItem(LS_KEY)) || {}; } catch (e) { j = {}; }
     Object.keys(d).forEach(function (k) { if (j[k] !== undefined && typeof j[k] === typeof d[k]) d[k] = j[k]; });
@@ -82,6 +82,7 @@
   function cleanTile(t) {
     if (!t || typeof t.p !== 'string' || t.sid == null) return null;
     var o = { p: t.p, sid: String(t.sid), name: String(t.name || ''), icon: String(t.icon || '') };
+    if (t.q === 'sd' || t.q === 'full' || t.q === '480') o.q = t.q;
     if (t.vod === 'movie' || t.vod === 'series') { o.vod = t.vod; o.ext = String(t.ext || 'mp4').replace(/[^a-z0-9]/gi, '').slice(0, 5) || 'mp4'; }
     return o;
   }
@@ -262,7 +263,7 @@
     this.empty.style.display = c ? 'none' : '';
     this.labName.textContent = c ? c.name || ('Channel ' + c.sid) : '';
     this.labNow.textContent = c && !c.vod && this.now && S.epgOn ? 'Now: ' + this.now : '';
-    this.video.style.visibility = c ? '' : 'hidden';
+    this.video.style.visibility = c && !(sharedOn() && !c.vod) ? '' : 'hidden';
     if (!c) this.setStatus('');
   };
 
@@ -304,11 +305,31 @@
     return 0;
   };
 
+  // A small tile (a ninth of the screen or less, not zoomed) asks for the provider's SD version of the channel when one exists.
+  function isSmallTile(idx) {
+    var L = layout();
+    var c = L.cells[idx];
+    return !!c && zoom < 0 && L.cells.length > 1 && (c[2] * c[3]) / (L.cols * L.rows) <= 1 / 6;
+  }
+  Tile.prototype.wantSd = function () {
+    var c = this.cfg;
+    if (!c || c.vod) return false;
+    if (c.q === 'sd') return true;
+    if (c.q === 'full' || c.q === '480') return false;
+    return !!S.smallSd && isSmallTile(this.idx);
+  };
+  // after a layout, zoom or setting change: switch the stream only when the wanted quality changed
+  Tile.prototype.applyQuality = function () {
+    if (!this.cfg || !this.visible || this.cfg.vod || this.phase === 'idle' || this.phase === 'vod') return;
+    if (this.wantSd() !== this.sdUsed) this.start();
+  };
+
   Tile.prototype.start = function () {
     this.stop();
     if (!this.cfg || !this.visible) { this.render(); return; }
     var self = this;
     if (this.cfg.vod) { this.startVod(); return; }
+    if (sharedOn()) { this.render(); this.setStatus(''); return; } // the shared screen shows live channels
     var mp = window.mpegts;
     if (!mp || !mp.getFeatureList || !mp.getFeatureList().mseLivePlayback) {
       this.setStatus('This browser cannot play live MPEG-TS (no MSE live playback)', true);
@@ -326,30 +347,49 @@
     // connections per address, which a 3x3 grid would hit; plain HTTP stays as a fallback.
     var useWs = S.transport !== 'http' && !wsBlocked && typeof WebSocket !== 'undefined';
     this.viaWs = useWs;
-    var path = encodeURIComponent(c.p) + '/' + encodeURIComponent(c.sid) + '.ts?buf=' + S.bufSec + (S.failover ? '' : '&failover=0');
+    this.sdUsed = this.wantSd();
+    var path = encodeURIComponent(c.p) + '/' + encodeURIComponent(c.sid) + '.ts?buf=' + S.bufSec + (S.failover ? '' : '&failover=0') + (this.sdUsed ? '&q=sd' : '');
     var url = useWs ? (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws/stream/' + path : location.origin + '/stream/' + path;
-    var player;
-    try {
-      player = mp.createPlayer({ type: 'mpegts', isLive: true, url: url }, {
-        enableWorker: !!S.workers,
-        enableStashBuffer: true,
-        liveBufferLatencyChasing: false,
-        autoCleanupSourceBuffer: true,
-        autoCleanupMaxBackwardDuration: 20,
-        autoCleanupMinBackwardDuration: 10,
-        fixAudioTimestampGap: true
+    this.txUsed = false;
+    function begin(url) {
+      if (gen !== self.gen) return;
+      var player;
+      try {
+        player = mp.createPlayer({ type: 'mpegts', isLive: true, url: url }, {
+          enableWorker: !!S.workers,
+          enableStashBuffer: true,
+          liveBufferLatencyChasing: false,
+          autoCleanupSourceBuffer: true,
+          autoCleanupMaxBackwardDuration: 20,
+          autoCleanupMinBackwardDuration: 10,
+          fixAudioTimestampGap: true
+        });
+      } catch (e) {
+        self.setStatus('Player error: ' + e.message, true);
+        return;
+      }
+      player.on(mp.Events.ERROR, function (type, detail, info) { if (gen === self.gen) self.onError(type, detail, info); });
+      player.on(mp.Events.LOADING_COMPLETE, function () { if (gen === self.gen) self.onError('ended'); });
+      player.attachMediaElement(self.video);
+      player.load();
+      self.player = player;
+      self.tickTimer = setInterval(function () { self.tick(); }, 400);
+      applyAudio();
+    }
+    if (c.q === '480') {
+      // the server re-encodes this one channel at 480p (needs a GPU encoder there); if it declines, play the original
+      api('/api/compose', { method: 'POST', body: { kind: 'tile', res: 480, cols: 1, rows: 1, audio: 0, cells: [{ x: 1, y: 1, w: 1, h: 1, p: c.p, sid: c.sid }] } }).then(function (r) {
+        if (gen !== self.gen) return;
+        self.txUsed = true;
+        begin(useWs ? (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + r.ws : location.origin + r.stream);
+      }, function (e) {
+        if (gen !== self.gen) return;
+        banner('480p transcode not available: ' + e.message + ' - playing the original', 7000);
+        begin(url);
       });
-    } catch (e) {
-      this.setStatus('Player error: ' + e.message, true);
       return;
     }
-    player.on(mp.Events.ERROR, function (type, detail, info) { if (gen === self.gen) self.onError(type, detail, info); });
-    player.on(mp.Events.LOADING_COMPLETE, function () { if (gen === self.gen) self.onError('ended'); });
-    player.attachMediaElement(this.video);
-    player.load();
-    this.player = player;
-    this.tickTimer = setInterval(function () { self.tick(); }, 400);
-    applyAudio();
+    begin(url);
   };
 
   // A movie or episode: the browser plays the provider's file through the server's range proxy.
@@ -528,7 +568,7 @@
     }
     if (document.body.classList.contains('stats')) {
       var q = v.getVideoPlaybackQuality ? v.getVideoPlaybackQuality() : null;
-      this.stats.textContent = (v.videoWidth ? v.videoWidth + 'x' + v.videoHeight : '--') + '  buffer ' + ahead.toFixed(1) + 's' + (q ? '  dropped ' + q.droppedVideoFrames : '') + '  ' + this.phase;
+      this.stats.textContent = (v.videoWidth ? v.videoWidth + 'x' + v.videoHeight : '--') + '  buffer ' + ahead.toFixed(1) + 's' + (q ? '  dropped ' + q.droppedVideoFrames : '') + (this.txUsed ? '  480p tx' : this.sdUsed ? '  SD' : '') + '  ' + this.phase;
     }
   };
 
@@ -539,6 +579,131 @@
     else if (this.player) { this.phase = 'rebuffer'; this.phaseAt = Date.now(); }
     else if (this.phase === 'vod') { try { var pr = this.video.play(); if (pr && pr.catch) pr.catch(noop); } catch (e) { /* ignore */ } }
   };
+
+
+  // ---------------------------------------------------------------- shared screen
+  // For weak devices: the server combines the visible tiles into ONE video stream and this page only plays that.
+  // The tiles stay on screen (transparent) so selection, names, the sound marker and menus work as usual.
+  var shared = { player: null, gen: 0, sig: '', spec: null, timer: null, retry: 0, failed: false, lastTime: -1, lastAt: 0, video: null };
+  function sharedOn() { return !!S.shared && !shared.failed; }
+
+  function sharedSpec() {
+    var L = layout();
+    var cells = [];
+    var audio = -1;
+    function add(i, x, y, w, h, small) {
+      var c = S.tiles[i];
+      if (!c || c.vod) return;
+      var sd = c.q === 'sd' ? true : (c.q === 'full' || c.q === '480') ? false : (!!S.smallSd && small);
+      if (i === S.sel) audio = cells.length;
+      cells.push({ x: x, y: y, w: w, h: h, p: c.p, sid: c.sid, sd: sd });
+    }
+    var cols = L.cols;
+    var rows = L.rows;
+    if (zoom >= 0 && zoom < L.cells.length) { cols = 1; rows = 1; add(zoom, 1, 1, 1, 1, false); }
+    else L.cells.forEach(function (c, i) { add(i, c[0], c[1], c[2], c[3], L.cells.length > 1 && (c[2] * c[3]) / (L.cols * L.rows) <= 1 / 6); });
+    return cells.length ? { res: Number(S.shared) || 720, cols: cols, rows: rows, cells: cells, audio: audio } : null;
+  }
+
+  function sharedStopPlayer() {
+    shared.gen++;
+    var p = shared.player;
+    shared.player = null;
+    if (p) { try { p.pause(); p.unload(); p.detachMediaElement(); p.destroy(); } catch (e) { /* gone */ } }
+    if (shared.video) { try { shared.video.removeAttribute('src'); shared.video.load(); } catch (e) { /* ignore */ } }
+  }
+
+  function sharedFallback(msg) {
+    shared.failed = true;
+    sharedStopPlayer();
+    banner('Shared screen unavailable: ' + msg + ' - showing the tiles directly', 9000);
+    sharedApply();
+  }
+
+  // switch every tile between "own stream" and "part of the shared picture"
+  function sharedApply() {
+    document.body.classList.toggle('shared', sharedOn());
+    tiles.forEach(function (t) { t.render(); if (t.cfg && t.visible) t.start(); });
+    applyAudio();
+  }
+
+  function sharedBegin(spec, sig) {
+    sharedStopPlayer();
+    shared.sig = sig;
+    shared.spec = spec;
+    var gen = shared.gen;
+    if (!spec) return;
+    var mp = window.mpegts;
+    if (!mp || !mp.getFeatureList || !mp.getFeatureList().mseLivePlayback) { sharedFallback('this browser cannot play live MPEG-TS'); return; }
+    api('/api/compose', { method: 'POST', body: spec }).then(function (r) {
+      if (gen !== shared.gen) return;
+      var useWs = S.transport !== 'http' && !wsBlocked && typeof WebSocket !== 'undefined';
+      var url = useWs ? (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + r.ws : location.origin + r.stream;
+      var player;
+      try {
+        player = mp.createPlayer({ type: 'mpegts', isLive: true, url: url }, { enableWorker: !!S.workers, enableStashBuffer: true, liveBufferLatencyChasing: false, autoCleanupSourceBuffer: true, autoCleanupMaxBackwardDuration: 20, autoCleanupMinBackwardDuration: 10, fixAudioTimestampGap: true });
+      } catch (e) { sharedFallback(e.message); return; }
+      function again(why) { if (gen === shared.gen) sharedRetry(why); }
+      player.on(mp.Events.ERROR, function () { again('Connection lost'); });
+      player.on(mp.Events.LOADING_COMPLETE, function () { again('Stream ended'); });
+      player.attachMediaElement(shared.video);
+      player.load();
+      shared.player = player;
+      shared.lastAt = Date.now();
+      shared.lastTime = -1;
+      applyAudio();
+      var pr = shared.video.play();
+      if (pr && pr.catch) pr.catch(noop);
+    }, function (e) {
+      if (gen !== shared.gen) return;
+      if (e.status && e.status !== 502 && e.status !== 504) { sharedFallback(e.message); return; }
+      sharedRetry(e.message);
+    });
+  }
+
+  function sharedRetry(why) {
+    if (!sharedOn()) return;
+    shared.retry++;
+    if (shared.retry > 6) { sharedFallback(why || 'it keeps failing'); return; }
+    var spec = shared.spec;
+    var sig = shared.sig;
+    sharedStopPlayer();
+    clearTimeout(shared.timer);
+    shared.timer = setTimeout(function () { if (sharedOn() && shared.sig === sig) sharedBegin(spec, sig); }, BACKOFF[clamp(shared.retry - 1, 0, BACKOFF.length - 1)]);
+  }
+
+  // called after anything that changes the picture; restarts the shared stream only when its description changed
+  function sharedSync() {
+    if (sharedOn()) sharedEnsureVideo();
+    if (!sharedOn()) { if (shared.sig || shared.player) { clearTimeout(shared.timer); sharedStopPlayer(); shared.sig = ''; } return; }
+    var spec = sharedSpec();
+    var sig = spec ? JSON.stringify(spec) : '';
+    if (sig === shared.sig) return;
+    shared.sig = sig; // claimed now so repeated calls during the delay below do nothing
+    clearTimeout(shared.timer);
+    shared.timer = setTimeout(function () { shared.retry = 0; sharedBegin(spec, sig); }, 500);
+  }
+
+  // the page only gets a shared <video> once the mode is switched on
+  function sharedEnsureVideo() {
+    if (shared.video) return;
+    shared.video = h('video', { id: 'shared', playsinline: true, muted: true, preload: 'auto' });
+    shared.video.muted = true;
+    shared.video.setAttribute('disablepictureinpicture', '');
+    shared.video.addEventListener('playing', function () { shared.retry = 0; });
+    document.body.insertBefore(shared.video, $('#grid'));
+  }
+
+  function sharedInit() {
+    // a picture that stops moving is restarted
+    setInterval(function () {
+      if (!sharedOn() || !shared.player || document.hidden) return;
+      var t = shared.video.currentTime;
+      if (t !== shared.lastTime) { shared.lastTime = t; shared.lastAt = Date.now(); return; }
+      if (Date.now() - shared.lastAt > 15000) { shared.lastAt = Date.now(); sharedRetry('The picture stopped'); }
+    }, 3000);
+    document.body.classList.toggle('shared', sharedOn());
+  }
 
   // ---------------------------------------------------------------- grid, selection, audio
   function renderGrid() {
@@ -564,6 +729,8 @@
         if (t.el.parentNode) t.el.parentNode.removeChild(t.el);
       }
     });
+    document.body.classList.toggle('single', n < 2 || z >= 0);
+    tiles.forEach(function (t, i) { if (i < n && !(z >= 0 && i !== z)) t.applyQuality(); });
     updateSelection();
     updateLayoutButtons();
   }
@@ -581,6 +748,8 @@
       t.video.muted = !(userActive && on);
       t.el.classList.toggle('audio', !!on);
     });
+    if (shared.video) shared.video.muted = !(userActive && !S.muted && sharedOn());
+    sharedSync();
     var b = $('#btn-audio');
     b.textContent = S.muted ? 'Muted' : 'Sound on';
     b.classList.toggle('on', !S.muted);
@@ -619,6 +788,7 @@
     tiles[idx].setCfg(cfg);
     saveSoon();
     updateHint();
+    sharedSync();
     setTimeout(pollEpg, 1500);
   }
 
@@ -689,7 +859,7 @@
       if (modals.length || tb.contains(document.activeElement)) { toolbarWake(); return; }
       tb.classList.add('hide');
       document.body.classList.add('idle');
-    }, 4500);
+    }, 5000);
   }
 
   function layoutIcon(key) {
@@ -812,6 +982,16 @@
         act(t.video.paused ? 'Play' : 'Pause', function () { if (t.video.paused) { var pr = t.video.play(); if (pr && pr.catch) pr.catch(noop); } else t.video.pause(); });
         act('Back 30 seconds', function () { try { t.video.currentTime = Math.max(0, t.video.currentTime - 30); } catch (e) { /* not seekable */ } });
         act('Forward 30 seconds', function () { try { t.video.currentTime = t.video.currentTime + 30; } catch (e) { /* not seekable */ } });
+      }
+      if (!c.vod) {
+        var qn = { sd: 'SD when available', full: 'As chosen', '480': '480p transcode (server GPU)' }[c.q] || 'Auto (small tiles use SD)';
+        act('Quality: ' + qn + ' - change', function () {
+          var next = { '': 'sd', sd: 'full', full: '480', '480': '' }[c.q || ''];
+          if (next) c.q = next; else delete c.q;
+          saveSoon();
+          if (c.q === '480' || t.txUsed) t.start(); else t.applyQuality();
+          sharedSync();
+        });
       }
       act('Reload stream', function () { t.reload(); });
       if (isAdmin() && !c.vod) act(S.favs[fk] ? 'Remove from favorites' : 'Add to favorites', function () { toggleFav(c); });
@@ -1427,6 +1607,27 @@
     var fitSel = h('select', null, h('option', { value: 'contain', text: 'Fit (black bars, nothing cropped)' }), h('option', { value: 'cover', text: 'Fill (crops edges)' }));
     fitSel.value = S.fit;
     fitSel.addEventListener('change', function () { S.fit = fitSel.value; document.body.classList.toggle('fill', S.fit === 'cover'); saveSoon(); });
+    var shSel = h('select', null, h('option', { value: '', text: 'Off - each tile plays its own stream' }), h('option', { value: '480', text: '480p - lightest' }), h('option', { value: '720', text: '720p - recommended for a TV' }), h('option', { value: '1080', text: '1080p - needs a strong server' }));
+    shSel.value = S.shared || '';
+    shSel.addEventListener('change', function () { S.shared = shSel.value; shared.failed = false; shared.retry = 0; saveSoon(); sharedApply(); sharedSync(); });
+    var shNote = h('div', { class: 'note', text: 'Shared screen: the server combines all tiles into one picture, so a weak TV box decodes a single stream. Uses server CPU/GPU while you watch.' });
+    var shInfo = h('div', { class: 'note' });
+    var shBtns = h('div', { class: 'viewbtns' });
+    if (isAdmin()) {
+      api('/api/compose/info').then(function (i) {
+        shInfo.textContent = 'Server encoder: ' + (i.encoder === 'x264' ? 'CPU (x264)' : i.encoder === 'vaapi' ? 'GPU (VAAPI ' + i.vaapiDevice + ')' : 'GPU (NVENC)') +
+          (i.vaapiPresent ? '' : ' - no GPU device inside the container') + '. Limits: ' + i.max.compose + ' shared screen(s), ' + i.max.tile + ' 480p channel(s). ' + (i.ffmpeg ? '' : 'ffmpeg is missing.');
+      }, noop);
+      [['x264', 'Test CPU encoder'], ['vaapi', 'Test GPU encoder (VAAPI)']].forEach(function (b) {
+        var btn = h('button', { class: 'btn', type: 'button', text: b[1] });
+        btn.addEventListener('click', function () {
+          btn.disabled = true;
+          shInfo.textContent = 'Testing...';
+          api('/api/compose/test', { method: 'POST', body: { encoder: b[0] } }).then(function (r) { shInfo.textContent = b[1].replace('Test ', '') + ': ' + (r.ok ? 'works - ' : 'FAILED - ') + r.message; shInfo.className = 'note' + (r.ok ? '' : ' warn'); }, function (e) { shInfo.textContent = e.message; }).then(function () { btn.disabled = false; });
+        });
+        shBtns.appendChild(btn);
+      });
+    }
     var keys = h('div', { class: 'keys' },
       h('b', { text: 'Arrows' }), h('span', { text: 'move between tiles (Up from the top row = toolbar)' }),
       h('b', { text: 'OK / Enter' }), h('span', { text: 'tile menu (or add a channel to an empty tile)' }),
@@ -1442,8 +1643,11 @@
         field('Keep up to (largest cushion kept while playing)', keepSel),
         memNote,
         field('Video', fitSel),
+        field('Shared screen (for weak devices)', shSel),
+        shNote, shInfo, shBtns,
         field('Stream delivery (applies when a stream reconnects)', trSel),
         check('Use another provider when the chosen one is full', 'failover', function () { tiles.forEach(function (t) { if (t.cfg && t.retry) t.start(); }); }),
+        check('Small tiles prefer the SD version of a channel (less to download and decode)', 'smallSd', function () { tiles.forEach(function (t) { t.applyQuality(); }); }),
         check('Use web workers (lighter on the page; turn off if video will not start)', 'workers'),
         check('Show stats on tiles', 'stats', function () { document.body.classList.toggle('stats', S.stats); }),
         check('Always show channel names', 'labels', function () { document.body.classList.toggle('showlabels', S.labels); }),
@@ -2079,6 +2283,7 @@
   // ---------------------------------------------------------------- init
   function init() {
     buildToolbar();
+    sharedInit();
     for (var i = 0; i < SLOTS; i++) tiles.push(new Tile(i));
     applyBodyPrefs();
     renderGrid();
@@ -2086,7 +2291,7 @@
     updateLayoutButtons();
 
     document.addEventListener('keydown', onKey);
-    ['mousemove', 'mousedown', 'touchstart', 'pointerdown'].forEach(function (ev) { document.addEventListener(ev, toolbarWake, { passive: true }); });
+    ['mousemove', 'mousedown', 'touchstart', 'pointerdown', 'wheel'].forEach(function (ev) { document.addEventListener(ev, toolbarWake, { passive: true }); });
     ['click', 'touchstart'].forEach(function (ev) { document.addEventListener(ev, userGesture, { passive: true }); });
     document.addEventListener('fullscreenchange', onFullscreenChange);
     document.addEventListener('webkitfullscreenchange', onFullscreenChange);
@@ -2146,6 +2351,7 @@
       return;
     }
     S.tiles.forEach(function (c, i) { if (c) { tiles[i].cfg = c; tiles[i].render(); if (i < visibleCount()) tiles[i].start(); } });
+    sharedSync();
     updateHint();
     refreshState().then(function (s) {
       if (s && !s.providers.length) openProviders(true);
@@ -2159,5 +2365,5 @@
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init); else init();
 
   // test hook (harmless in production)
-  window.__mv = { get S() { return S; }, get ME() { return ME; }, applyView: applyView, tiles: tiles, LAYOUTS: LAYOUTS, setLayout: setLayout, select: select, assign: assign, get zoom() { return zoom; }, get modals() { return modals.length; } };
+  window.__mv = { get S() { return S; }, get ME() { return ME; }, applyView: applyView, tiles: tiles, LAYOUTS: LAYOUTS, setLayout: setLayout, select: select, assign: assign, toggleZoom: toggleZoom, sharedApply: sharedApply, get zoom() { return zoom; }, get modals() { return modals.length; } };
 })();

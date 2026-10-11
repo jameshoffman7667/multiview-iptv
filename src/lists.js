@@ -16,6 +16,15 @@ function normName(name) {
   return s.replace(/[^a-z0-9]+/g, '');
 }
 
+// Rough quality rank from the tags in a channel name: 1 = SD / low, 2 = untagged or HD, 3 = FHD, 4 = 4K.
+function qualityOf(name) {
+  const n = String(name).toLowerCase();
+  if (/\b(?:4k|uhd|2160p?)\b/.test(n)) return 4;
+  if (/\b(?:fhd|1080p?)\b/.test(n)) return 3;
+  if (/\b(?:sd|lq|low|480p?|360p?)\b/.test(n)) return 1;
+  return 2;
+}
+
 function sigOf(p) {
   return crypto.createHash('sha1').update(`2|${p.url}|${p.username}`).digest('hex').slice(0, 12);
 }
@@ -121,6 +130,29 @@ class Lists {
     return ch ? ch.n : '';
   }
 
+  // The lowest-quality version of the same channel (same provider first), when one is clearly lower than the chosen one.
+  lowerVariant(providerId, sid) {
+    const p = this.config.get(providerId);
+    const e = p && this.peek(p);
+    const ch = e && e.bySid.get(String(sid));
+    if (!ch) return null;
+    const key = normName(ch.n);
+    if (key.length < 2) return null;
+    const mine = qualityOf(ch.n);
+    let best = null;
+    const provs = [p, ...this.config.enabled().filter((o) => o.id !== providerId)];
+    for (const o of provs) {
+      const oe = this.peek(o);
+      for (const c of (oe && oe.byNorm.get(key)) || []) {
+        if (o.id === providerId && c.i === ch.i) continue;
+        const q = qualityOf(c.n);
+        if (q >= mine) continue;
+        if (!best || q < best.q) best = { providerId: o.id, sid: c.i, name: c.n, q };
+      }
+    }
+    return best;
+  }
+
   // Same channel (by normalised name) at the other enabled providers, from cached lists only.
   alternates(providerId, sid) {
     const p = this.config.get(providerId);
@@ -143,4 +175,4 @@ class Lists {
   }
 }
 
-module.exports = { Lists, normName, KINDS };
+module.exports = { Lists, normName, qualityOf, KINDS };

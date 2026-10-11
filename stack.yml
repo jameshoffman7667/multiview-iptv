@@ -2,7 +2,7 @@
 # Change the tag to upgrade (see CHANGELOG.md). Settings are kept in the iptv-data volume.
 services:
   iptv-multiview:
-    image: mybadreligon/multiview-iptv:0.3.0
+    image: mybadreligon/multiview-iptv:0.4.0
     container_name: iptv-multiview
     restart: unless-stopped
     ports:
@@ -16,10 +16,18 @@ services:
       # already running can start that far behind live. For 5 minute buffers use 256 and make sure the host has the RAM
       # (9 channels x 256 MB).
       # - RING_MB=32
-    # Only for a local capture card (Providers > Add capture card). Uncomment, then restart the stack.
+      # Shared screen and 480p tile transcoding (see README). auto = GPU if /dev/dri is passed in, else CPU.
+      # - COMPOSE_ENCODER=auto        # auto | vaapi | x264 | nvenc
+      # - VAAPI_DEVICE=/dev/dri/renderD128   # use renderD129 to pick the other GPU
+      # - COMPOSE_MAX=2               # shared screens running at once
+      # - TRANSCODE_MAX=2             # 480p tile transcodes running at once
+      # - TRANSCODE_ALLOW_CPU=1       # allow 480p tile transcoding on the CPU (off: GPU only)
+    # Only for a local capture card (Providers > Add capture card) and/or a GPU encoder. Uncomment what you need
+    # (list each device once), then restart the stack.
     # devices:
     #   - /dev/video0:/dev/video0
     #   - /dev/snd:/dev/snd
+    #   - /dev/dri:/dev/dri
     volumes:
       - ${DATA_PATH:-iptv-data}:/data  # set DATA_PATH to a host folder (e.g. /srv/iptv) or leave for the named volume
 
