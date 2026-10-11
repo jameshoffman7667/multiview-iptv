@@ -354,7 +354,7 @@ module.exports = { createApp };
 
 if (require.main === module) {
   const app = createApp();
-  const port = Number(env('PORT', 8080));
+  const port = Number(env('PORT', 1234));
   app.server.listen(port, '0.0.0.0', () => {
     console.log(`IPTV Multiview listening on :${port} (${app.config.providers.length} provider(s))`);
     if (!app.users.enabled && !env('BASIC_AUTH', '')) console.log('Note: no logins yet, so anyone who can reach this port is an admin. Create the first account in the app (Users), or set ADMIN_USER and ADMIN_PASSWORD.');

@@ -15,11 +15,11 @@ Several providers can be added; each one adds its own connections, and the app c
 docker compose up -d --build
 ```
 
-Open `http://<server-ip>:8080` on the PC, and the same address in the Android TV box's browser (a Chrome-based browser works best).
+Open `http://<server-ip>:1234` on the PC, and the same address in the Android TV box's browser (a Chrome-based browser works best).
 
 First run opens the **Providers** window: enter the server URL, username and password from your provider and press **Test**. It reads how many connections your plan allows and fills that in. Add as many providers as you like. Then pick a tile, press Enter (or click it) and choose a channel.
 
-**Dockhand / prebuilt image:** create a stack from `stack.yml` (it uses `mybadreligon/multiview-iptv:0.1.0` from Docker Hub). Add `ADMIN_USER` / `ADMIN_PASSWORD` under environment if the port is reachable beyond your LAN.
+**Dockhand / prebuilt image:** create a stack from `stack.yml` (it uses `mybadreligon/multiview-iptv:0.2.0` from Docker Hub). Add `ADMIN_USER` / `ADMIN_PASSWORD` under environment if the port is reachable beyond your LAN.
 
 Without Docker: `node src/server.js` (Node 20+, no packages to install). Settings are stored in the `/data` volume (`providers.json`, channel list cache).
 
@@ -69,8 +69,9 @@ Tuning: `RING_MB` (default 16) is the relay buffer per channel, about 10-20 s of
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `PORT` | 8080 | listen port |
-| `DATA_DIR` | `/data` in Docker | where `providers.json` and the channel cache live |
+| `PORT` | 1234 | listen port |
+| `DATA_DIR` | `/data` in Docker | where the app keeps its files inside the container (`providers.json`, `users.json`, `views.json`, sessions, channel cache) |
+| `DATA_PATH` | `iptv-data` volume | compose/stack only: what is mounted at `/data`. Set it to a host folder such as `/srv/iptv` (owned by uid 1000) to keep the data there, or leave it for the named volume |
 | `ADMIN_USER`, `ADMIN_PASSWORD` | none | creates the first admin account at start, only if no accounts exist yet |
 | `BASIC_AUTH` | none | optional extra `user:password` gate in front of everything (separate from the user logins above) |
 | `RING_MB` | 16 | relay buffer per channel |

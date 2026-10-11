@@ -2,11 +2,11 @@
 # Change the tag to upgrade (see CHANGELOG.md). Settings are kept in the iptv-data volume.
 services:
   iptv-multiview:
-    image: mybadreligon/multiview-iptv:0.1.0
+    image: mybadreligon/multiview-iptv:0.2.0
     container_name: iptv-multiview
     restart: unless-stopped
     ports:
-      - "8080:8080"
+      - "1234:1234"
     environment:
       - TZ=America/Toronto
       # Creates the first admin account when no accounts exist yet (or create it in the app).
@@ -14,7 +14,7 @@ services:
       # - ADMIN_PASSWORD=change-this-password
       # - RING_MB=16
     volumes:
-      - iptv-data:/data
+      - ${DATA_PATH:-iptv-data}:/data  # set DATA_PATH to a host folder (e.g. /srv/iptv) or leave for the named volume
 
 volumes:
   iptv-data:
