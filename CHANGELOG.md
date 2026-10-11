@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.3.0 - 2026-10-11
+Features.
+- **Channel picker remembers its place.** Provider, tab, category, search, Favorites toggle, how many rows were expanded, scroll position and the last chosen channel are saved per browser and restored next time (also after a reload). New *Reset filters* button.
+- **Programme guide.** New *Guide* tab in the picker: channels by time, now/next highlighted, pick a channel or programme straight from it, search programme titles. Uses the provider's XMLTV file (cached 4 h) or per-channel guide data. Tiles show what is on now. New API: `/api/epg`, `/api/epg-search`.
+- **Movies and series (VOD).** New *Movies* and *Series* tabs with categories and search; seasons/episodes for series. Played through a range-capable proxy (`/vod/...`) so seeking works; counts as one provider connection while playing; viewers can play only titles in a multiview shared with them. Movie/episode tiles can be part of published multiviews.
+- **Longer buffer.** *Start playing after* now goes up to 5 minutes (was 15 s) and a new *Keep up to* sets the largest cushion kept. Server burst cap raised from 30 s to 300 s; a long burst no longer gets a viewer dropped as "too slow". `RING_MB` default raised from 16 to 32 (memory is used only as the buffer fills); set higher for multi-minute buffers.
+- **Local capture card as a channel.** *Providers > Add capture card*: V4L2 video + ALSA audio encoded with ffmpeg to H.264/AAC and fed through the relay (one encode shared by all viewers, no provider connection used). Optional VAAPI/NVENC encoders. The image now contains ffmpeg; pass the devices into the container (see `stack.yml`). New env vars `FFMPEG_PATH`, `VAAPI_DEVICE`.
+- **Android TV / Nvidia Shield app.** `iptv-multiview.apk` is built by GitHub Actions for every release and attached to the GitHub release. A full-screen web view with a TV launcher icon, remote support and a first-run server-address prompt. AC-3/E-AC-3/MP2 audio is not decoded by the Android web view.
+- Fixed: pressing `C` to open the picker typed a "c" into the search box.
+
 ## 0.2.1 - 2026-10-11
 Bug fixes.
 - Fixed: every channel showed "Stream error (Exception)". The player runs in a background worker, which cannot resolve a relative stream address; the page now uses a full address.

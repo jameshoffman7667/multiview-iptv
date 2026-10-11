@@ -2,7 +2,7 @@
 # Change the tag to upgrade (see CHANGELOG.md). Settings are kept in the iptv-data volume.
 services:
   iptv-multiview:
-    image: mybadreligon/multiview-iptv:0.2.1
+    image: mybadreligon/multiview-iptv:0.3.0
     container_name: iptv-multiview
     restart: unless-stopped
     ports:
@@ -12,7 +12,14 @@ services:
       # Creates the first admin account when no accounts exist yet (or create it in the app).
       # - ADMIN_USER=james
       # - ADMIN_PASSWORD=change-this-password
-      # - RING_MB=16
+      # Relay memory per channel in MB. 32 holds about a minute of an HD channel; a viewer who joins a channel that is
+      # already running can start that far behind live. For 5 minute buffers use 256 and make sure the host has the RAM
+      # (9 channels x 256 MB).
+      # - RING_MB=32
+    # Only for a local capture card (Providers > Add capture card). Uncomment, then restart the stack.
+    # devices:
+    #   - /dev/video0:/dev/video0
+    #   - /dev/snd:/dev/snd
     volumes:
       - ${DATA_PATH:-iptv-data}:/data  # set DATA_PATH to a host folder (e.g. /srv/iptv) or leave for the named volume
 

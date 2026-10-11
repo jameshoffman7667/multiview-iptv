@@ -1,0 +1,54 @@
+plugins {
+    id 'com.android.application'
+}
+
+// The release workflow passes the version (-PappVersion=0.3.0 -PappVersionCode=300).
+def appVersion = (project.findProperty('appVersion') ?: '0.0.0').toString()
+def appVersionCode = (project.findProperty('appVersionCode') ?: '1').toString().toInteger()
+
+android {
+    namespace 'app.iptvmultiview.tv'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId 'app.iptvmultiview.tv'
+        minSdk 24
+        targetSdk 34
+        versionCode appVersionCode
+        versionName appVersion
+        buildConfigField 'String', 'APP_VERSION', "\"${appVersion}\""
+    }
+
+    buildFeatures {
+        buildConfig true
+    }
+
+    signingConfigs {
+        // Stable signing key from repository secrets when present, so updates install over older versions.
+        // Without the secrets the debug key is used (an update then needs the old app uninstalled first).
+        if (System.getenv('ANDROID_KEYSTORE_FILE')) {
+            release {
+                storeFile file(System.getenv('ANDROID_KEYSTORE_FILE'))
+                storePassword System.getenv('ANDROID_KEYSTORE_PASSWORD')
+                keyAlias System.getenv('ANDROID_KEY_ALIAS')
+                keyPassword System.getenv('ANDROID_KEY_PASSWORD')
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            signingConfig System.getenv('ANDROID_KEYSTORE_FILE') ? signingConfigs.release : signingConfigs.debug
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    lint {
+        abortOnError false
+    }
+}

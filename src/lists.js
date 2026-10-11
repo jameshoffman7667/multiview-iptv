@@ -17,7 +17,19 @@ function normName(name) {
 }
 
 function sigOf(p) {
-  return crypto.createHash('sha1').update(`${p.url}|${p.username}`).digest('hex').slice(0, 12);
+  return crypto.createHash('sha1').update(`2|${p.url}|${p.username}`).digest('hex').slice(0, 12);
+}
+
+const KINDS = {
+  live: [xtream.liveCategories, xtream.liveStreams],
+  movie: [xtream.vodCategories, xtream.vodStreams],
+  series: [xtream.seriesCategories, xtream.seriesList],
+};
+
+// A capture-card provider has no remote list: its channels are the sources configured for it.
+function localEntry(p) {
+  const channels = (p.sources || []).map((s) => ({ i: s.id, n: s.name, c: 'local', l: '', e: '' }));
+  return { sig: 'local', updated: Date.now(), categories: [{ id: 'local', name: 'Capture cards' }], channels };
 }
 
 class Lists {
@@ -30,9 +42,12 @@ class Lists {
   }
 
   forget(providerId) {
-    this.mem.delete(providerId);
-    try { fs.unlinkSync(path.join(this.dir, `${providerId}.json`)); } catch { /* none */ }
+    for (const k of this.mem.keys()) if (k === providerId || k.startsWith(providerId + ':')) this.mem.delete(k);
+    for (const kind of Object.keys(KINDS)) { try { fs.unlinkSync(this.file(providerId, kind)); } catch { /* none */ } }
   }
+
+  file(id, kind) { return path.join(this.dir, kind === 'live' ? `${id}.json` : `${id}.${kind}.json`); }
+  memKey(id, kind) { return kind === 'live' ? id : `${id}:${kind}`; }
 
   index(entry) {
     entry.bySid = new Map();
@@ -47,44 +62,49 @@ class Lists {
     return entry;
   }
 
-  fromDisk(p) {
+  fromDisk(p, kind) {
     try {
-      const j = JSON.parse(fs.readFileSync(path.join(this.dir, `${p.id}.json`), 'utf8'));
+      const j = JSON.parse(fs.readFileSync(this.file(p.id, kind), 'utf8'));
       if (j.sig !== sigOf(p) || !Array.isArray(j.channels)) return null;
       return this.index(j);
     } catch { return null; }
   }
 
   // Cached entry without any network access (memory, then disk), or null.
-  peek(p) {
-    const m = this.mem.get(p.id);
+  peek(p, kind = 'live') {
+    if (p.type === 'local') { const e = this.index(localEntry(p)); return e; }
+    const key = this.memKey(p.id, kind);
+    const m = this.mem.get(key);
     if (m && m.sig === sigOf(p)) return m;
-    const d = this.fromDisk(p);
-    if (d) this.mem.set(p.id, d);
+    const d = this.fromDisk(p, kind);
+    if (d) this.mem.set(key, d);
     return d;
   }
 
-  async get(p, refresh = false) {
-    const cached = this.peek(p);
+  async get(p, refresh = false, kind = 'live') {
+    if (p.type === 'local') return this.peek(p);
+    const cached = this.peek(p, kind);
     if (cached && !refresh && Date.now() - cached.updated < TTL_MS) return cached;
-    if (this.inflight.has(p.id)) return this.inflight.get(p.id);
+    const key = this.memKey(p.id, kind);
+    if (this.inflight.has(key)) return this.inflight.get(key);
     const job = (async () => {
       try {
-        const [categories, channels] = await Promise.all([xtream.liveCategories(p), xtream.liveStreams(p)]);
+        const [catFn, listFn] = KINDS[kind];
+        const [categories, channels] = await Promise.all([catFn(p), listFn(p)]);
         const entry = this.index({ sig: sigOf(p), updated: Date.now(), categories, channels });
-        this.mem.set(p.id, entry);
-        const tmp = path.join(this.dir, `${p.id}.json.tmp`);
-        fs.writeFileSync(tmp, JSON.stringify({ sig: entry.sig, updated: entry.updated, categories, channels }));
-        fs.renameSync(tmp, path.join(this.dir, `${p.id}.json`));
+        this.mem.set(key, entry);
+        const file = this.file(p.id, kind);
+        fs.writeFileSync(`${file}.tmp`, JSON.stringify({ sig: entry.sig, updated: entry.updated, categories, channels }));
+        fs.renameSync(`${file}.tmp`, file);
         return entry;
       } catch (e) {
         if (cached) return cached; // stale list beats no list
         throw e;
       } finally {
-        this.inflight.delete(p.id);
+        this.inflight.delete(key);
       }
     })();
-    this.inflight.set(p.id, job);
+    this.inflight.set(key, job);
     return job;
   }
 
@@ -123,4 +143,4 @@ class Lists {
   }
 }
 
-module.exports = { Lists, normName };
+module.exports = { Lists, normName, KINDS };

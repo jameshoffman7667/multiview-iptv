@@ -20,6 +20,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+      - name: ffmpeg for the capture-card test
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
       - run: npm test
 
   image:
@@ -58,3 +60,57 @@ jobs:
         run: |
           git tag "v${{ steps.ver.outputs.version }}" 2>/dev/null || exit 0
           git push origin "v${{ steps.ver.outputs.version }}" || true
+
+  # Android TV / Nvidia Shield app. Built after the image is published so a problem here never blocks the Docker release.
+  android:
+    needs: image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: ver
+        run: |
+          VER="$(node -p "require('./package.json').version")"
+          IFS=. read -r MA MI PA <<< "$VER"
+          echo "version=$VER" >> "$GITHUB_OUTPUT"
+          echo "code=$((MA * 10000 + MI * 100 + PA))" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: android-actions/setup-android@v3
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.9
+      - name: Signing key (optional)
+        env:
+          KS: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KS_PASS: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASS: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          if [ -n "$KS" ]; then
+            echo "$KS" | base64 -d > "$RUNNER_TEMP/release.keystore"
+            echo "ANDROID_KEYSTORE_FILE=$RUNNER_TEMP/release.keystore" >> "$GITHUB_ENV"
+            echo "ANDROID_KEYSTORE_PASSWORD=$KS_PASS" >> "$GITHUB_ENV"
+            echo "ANDROID_KEY_ALIAS=$KEY_ALIAS" >> "$GITHUB_ENV"
+            echo "ANDROID_KEY_PASSWORD=$KEY_PASS" >> "$GITHUB_ENV"
+            echo "Using the release signing key from repository secrets"
+          else
+            echo "No ANDROID_KEYSTORE_BASE64 secret: signing with the debug key (updates need the old app uninstalled first)"
+          fi
+      - name: Build the APK
+        working-directory: android
+        run: gradle --no-daemon assembleRelease -PappVersion=${{ steps.ver.outputs.version }} -PappVersionCode=${{ steps.ver.outputs.code }}
+      - name: Attach to the GitHub release
+        run: |
+          VER="${{ steps.ver.outputs.version }}"
+          cp android/app/build/outputs/apk/release/app-release.apk iptv-multiview.apk
+          awk -v v="$VER" '$0 ~ "^## " v " " {f=1; next} /^## / {f=0} f' CHANGELOG.md > notes.md
+          [ -s notes.md ] || echo "IPTV Multiview $VER" > notes.md
+          printf '\nAndroid TV / Nvidia Shield app: `iptv-multiview.apk` (sideload it, see the README).\n' >> notes.md
+          gh release view "v$VER" >/dev/null 2>&1 || gh release create "v$VER" --target "$GITHUB_SHA" --title "v$VER" --notes-file notes.md
+          gh release upload "v$VER" iptv-multiview.apk --clobber

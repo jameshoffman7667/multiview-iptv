@@ -12,7 +12,14 @@ services:
       # - ADMIN_USER=james
       # - ADMIN_PASSWORD=change-this-password
       # Per-stream relay buffer in MB (about 10-20 s of an HD channel at 16):
-      # - RING_MB=16
+      # Relay memory per channel in MB. 32 holds about a minute of an HD channel; a viewer who joins a channel that is
+      # already running can start that far behind live. For 5 minute buffers use 256 and make sure the host has the RAM
+      # (9 channels x 256 MB).
+      # - RING_MB=32
+    # Only for a local capture card (Providers > Add capture card). Uncomment, then restart the stack.
+    # devices:
+    #   - /dev/video0:/dev/video0
+    #   - /dev/snd:/dev/snd
     volumes:
       # Named volume: Docker gives it the right owner automatically.
       # To use a folder instead:  - ./data:/data   (then run: mkdir data && chown 1000:1000 data)

@@ -5,6 +5,8 @@ A self-hosted web app for Xtream Codes IPTV providers. It does two things:
 1. **Relay with a buffer.** The server pulls each channel from your provider once, keeps a rolling buffer, and serves it to your screens. Two tiles (or two devices) watching the same channel use **one** provider connection. A dropped provider connection is retried without dropping your screens.
 2. **Multiview page.** Up to 9 live channels at once, in a 3x3 grid or in a "1 big + 7 small" layout (big tile top-left, 3 on the right, 3 along the bottom, 1 in the bottom-right corner). Works with a mouse, a touch screen, and a TV remote.
 
+Also: a **programme guide** (grid of what is on, pick a channel from it, search programmes), **movies and series** from your provider, **local capture cards** as channels, a **remembering channel picker**, buffers of up to **5 minutes**, and an **Android TV / Nvidia Shield app**.
+
 Several providers can be added; each one adds its own connections, and the app can fall back to another provider when one is full.
 
 **Logins and shared multiviews.** Create separate logins for other people, arrange a multiview once, and publish it. A viewer logs in, clicks the multiview, and watches. They never see your provider details or channel lists, and they can only play channels that are in a multiview shared with them.
@@ -19,9 +21,50 @@ Open `http://<server-ip>:1234` on the PC, and the same address in the Android TV
 
 First run opens the **Providers** window: enter the server URL, username and password from your provider and press **Test**. It reads how many connections your plan allows and fills that in. Add as many providers as you like. Then pick a tile, press Enter (or click it) and choose a channel.
 
-**Dockhand / prebuilt image:** create a stack from `stack.yml` (it uses `mybadreligon/multiview-iptv:0.2.1` from Docker Hub). Add `ADMIN_USER` / `ADMIN_PASSWORD` under environment if the port is reachable beyond your LAN.
+**Dockhand / prebuilt image:** create a stack from `stack.yml` (it uses `mybadreligon/multiview-iptv:0.3.0` from Docker Hub). Add `ADMIN_USER` / `ADMIN_PASSWORD` under environment if the port is reachable beyond your LAN.
 
 Without Docker: `node src/server.js` (Node 20+, no packages to install). Settings are stored in the `/data` volume (`providers.json`, channel list cache).
+
+## Android TV / Nvidia Shield app
+
+Each release has an APK on the GitHub releases page (`iptv-multiview.apk`): a full-screen web view around this same page, with a TV launcher icon. Install it on the Shield by sideloading:
+
+1. On the Shield: Settings > Device Preferences > Security & restrictions > *Unknown sources* > allow **Downloader** (install the free *Downloader* app from the Play Store first).
+2. Open Downloader and enter `https://github.com/jameshoffman7667/multiview-iptv/releases/latest/download/iptv-multiview.apk`, then Install.
+3. Start *IPTV Multiview*. The first time it asks for the address of your server (for example `192.168.1.20:1234`, the machine running the container). It is remembered. To change it later: Settings in the app > *Server address (TV app)*, or press Menu on a remote that has one.
+
+The remote works like a keyboard: arrows move between tiles, OK opens the tile menu, Back closes windows (and exits at the top level). You log in on the TV once and it stays logged in.
+
+Things to know: the app uses the Shield's Chromium web view for decoding, which handles H.264 video and AAC audio but **not AC-3/E-AC-3 or MP2 audio** (those channels would play without sound); a native-player version would be the fix and is not built yet. Updates install over the old app only if the release was signed with the same key; the build uses a stable key when the repository secrets `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS` and `ANDROID_KEY_PASSWORD` exist (see *Building the app* below), otherwise uninstall the old app first. If you use the app on a phone or tablet it also works; there is no touch-specific layout beyond the web page itself.
+
+### Building the app
+GitHub Actions builds it after the Docker image is published (job `android`). To get a stable signing key, create one once and store it as repository secrets:
+
+```bash
+keytool -genkeypair -v -keystore release.keystore -alias iptv -keyalg RSA -keysize 2048 -validity 10000
+base64 -w0 release.keystore      # paste into the secret ANDROID_KEYSTORE_BASE64
+```
+Then add `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS` (`iptv`) and `ANDROID_KEY_PASSWORD`. Keep a copy of the keystore: losing it means users must uninstall to update.
+
+## Programme guide, movies and series
+
+Open the channel picker (click an empty tile, or press C). It has four tabs:
+
+- **Live** - the channel list as before.
+- **Guide** - channels down the left, time across (3 hours; *Earlier / Now / Later* move the window). The programme airing now is highlighted. Click a channel or a programme to put that channel on the tile. Arrow keys move along a row and between rows. Typing in the search box searches **programme titles** for the next 24 hours (needs the provider's guide file; without it the search falls back to channel names). The guide comes from the provider's XMLTV file (downloaded once, cached for 4 hours) or, if there is none, from the provider's per-channel guide. Tiles show *Now: ...* under the channel name (Settings > *Show what's on now*).
+- **Movies** and **Series** - the provider's on-demand library with categories and search. A series opens a list of seasons and episodes. A movie or episode plays in the tile through the server, so seeking works (use the tile's own controls, or the tile menu: *Back/Forward 30 seconds*). It counts as one connection at your provider while it plays; a finished movie releases its slot after a few seconds. The browser plays what it can decode: H.264/AAC in MP4 works; MKV, HEVC or AC-3 files often do not (the tile says so). Watching a movie does not use the live relay's buffer.
+
+The picker **remembers where you were**: provider, tab, category, search words, the Favorites toggle, how many rows you had expanded, the scroll position and the channel you picked last. Reopen it and it is back on that spot, with the last channel highlighted (also after a reload; kept per browser). **Reset filters** clears all of it.
+
+## Local capture card as a channel
+
+A capture card (HDMI-to-USB dongle, TV tuner card with a V4L2 driver) plugged into the machine that runs the container can be a channel. Linux hosts only.
+
+1. Pass the devices into the container (see `stack.yml`): `devices: [/dev/video0:/dev/video0, /dev/snd:/dev/snd]`, then restart the stack.
+2. *Providers > Add capture card*. Pick the video device (the app lists what the container can see), the audio device (e.g. `hw:1,0`), resolution, frame rate and bitrate. You can add several sources. Typing `test` as the video device gives a built-in test pattern, handy for checking the setup without hardware.
+3. Save. The sources appear in the channel picker under the capture card's name and work in multiviews and shared multiviews like any channel.
+
+The server runs `ffmpeg` and encodes the card to H.264 + AAC MPEG-TS, once per source, however many people watch. It uses no provider connection but does use CPU (the *Encoder* option can use an Intel/AMD GPU through VAAPI or an NVIDIA GPU through NVENC when the container has access to them; software x264 works everywhere). HDMI sources with HDCP copy protection cannot be captured. The container user is added to the groups that own the devices at start-up.
 
 ## Logins and sharing a multiview
 
@@ -55,10 +98,10 @@ Mouse: click selects (and moves the sound), double-click zooms, right-click or t
 Lag and stutter come from three places; this app addresses the first two.
 
 - **Provider hiccups.** The relay keeps reading from the provider, retries on drops and keeps your screens connected. Several viewers of one channel cost one connection.
-- **Slow starts and short stalls on your side.** Settings > *Buffer before playing* (default 4 s) makes each tile wait for that much video before it starts, and re-fill after a stall. A joining viewer is sent the last few seconds from the relay's buffer starting at a keyframe, so the cushion is there immediately. A bigger buffer = smoother but more delay behind live. *Off* gives the lowest delay.
+- **Slow starts and short stalls on your side.** Settings > *Start playing after* (default 4 s, up to 5 minutes) makes each tile wait for that much video before it starts, and re-fill after a stall; *Keep up to* is the largest cushion kept while playing (it jumps forward to live only beyond it). A joining viewer is sent up to that much from the relay's buffer starting at a keyframe, so a tile on a channel that is already running starts at once with the cushion in place. A tile on a channel nobody is watching has to collect the cushion in real time, so with 2 minutes it shows *Buffering 40 / 96 s* and the picture starts about 96 seconds behind live. A bigger buffer = smoother but more delay behind live, and it costs memory: roughly 0.5 MB per second per tile in the browser (4 Mbps channel), and on the server up to `RING_MB` per channel. *Off* gives the lowest delay.
 - **Weak playback hardware.** Nine HD streams are heavy for a TV box. If tiles drop frames (press `I` to see it), use the 1 + 5 or 2 x 2 layout, or choose SD/lower-bitrate channel variants for the small tiles. The relay does not transcode.
 
-Tuning: `RING_MB` (default 16) is the relay buffer per channel, about 10-20 s of an HD channel. `STALL_SECONDS` (15) is how long the provider may send nothing before the relay reconnects.
+Tuning: `RING_MB` (default 32) is the relay buffer per channel, about a minute of an HD channel at 4 Mbps (memory is only used as the buffer fills). For buffers of several minutes raise it, e.g. `RING_MB=256`, and check the host has the RAM for the channels you watch at once. `STALL_SECONDS` (15) is how long the provider may send nothing before the relay reconnects.
 
 ## Several providers
 
@@ -74,7 +117,9 @@ Tuning: `RING_MB` (default 16) is the relay buffer per channel, about 10-20 s of
 | `DATA_PATH` | `iptv-data` volume | compose/stack only: what is mounted at `/data`. Set it to a host folder such as `/srv/iptv` (owned by uid 1000) to keep the data there, or leave it for the named volume |
 | `ADMIN_USER`, `ADMIN_PASSWORD` | none | creates the first admin account at start, only if no accounts exist yet |
 | `BASIC_AUTH` | none | optional extra `user:password` gate in front of everything (separate from the user logins above) |
-| `RING_MB` | 16 | relay buffer per channel |
+| `RING_MB` | 32 | relay buffer per channel in MB (about 1 minute of an HD channel). Needs raising for buffers longer than that |
+| `FFMPEG_PATH` | `ffmpeg` | ffmpeg binary used for capture cards |
+| `VAAPI_DEVICE` | `/dev/dri/renderD128` | render device used when a capture source selects the VAAPI encoder |
 | `IDLE_SECONDS` | 8 | keep a channel's provider connection this long after the last viewer leaves (quick switching back). It is released at once if another channel needs the slot |
 | `STALL_SECONDS` | 15 | reconnect if the provider sends nothing for this long |
 | `CLIENT_QUEUE_MB` | 8 | a viewer that falls this far behind is disconnected (the page reconnects it) |
@@ -96,6 +141,6 @@ Your provider credentials stay on the server; the browser only sees channel ids.
 
 ## Tests
 
-`npm test` runs the relay and accounts tests (Node only, a mock Xtream provider, no packages). `test/ui.test.mjs` drives the page in Chromium and needs Playwright (dev only).
+`npm test` runs the relay, accounts, guide, movies and capture tests (Node only, a mock Xtream provider, and ffmpeg for the capture test; no packages). `test/ui.test.mjs` drives the page in Chromium and needs Playwright (dev only).
 
 Bundled: mpegts.js 1.8.2 (Apache-2.0, `public/vendor/`).

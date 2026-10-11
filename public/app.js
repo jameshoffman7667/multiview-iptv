@@ -28,6 +28,7 @@
   function $(sel, root) { return (root || document).querySelector(sel); }
   function clamp(n, a, b) { return Math.max(a, Math.min(b, n)); }
   function noop() {}
+  function fmtSec(x, scale) { return scale < 20 ? x.toFixed(1) : String(Math.round(x)); }
   function api(path, opts) {
     opts = opts || {};
     var init = { method: opts.method || 'GET', headers: {}, credentials: 'same-origin' };
@@ -61,7 +62,7 @@
   var S = loadState();
   var ME = null; // set after /api/me: { admin, user, open, authRequired }
   function loadState() {
-    var d = { layout: '3x3', tiles: [], sel: 0, muted: false, bufSec: 4, transport: 'auto', fit: 'contain', failover: true, workers: true, stats: false, labels: false, favs: {} };
+    var d = { layout: '3x3', tiles: [], sel: 0, muted: false, bufSec: 4, keepSec: 0, transport: 'auto', fit: 'contain', failover: true, workers: true, stats: false, labels: false, epgOn: true, favs: {}, pk: {} };
     var j = {};
     try { j = JSON.parse(localStorage.getItem(LS_KEY)) || {}; } catch (e) { j = {}; }
     Object.keys(d).forEach(function (k) { if (j[k] !== undefined && typeof j[k] === typeof d[k]) d[k] = j[k]; });
@@ -70,11 +71,19 @@
     d.tiles = [];
     for (var i = 0; i < SLOTS; i++) {
       var t = tiles[i];
-      d.tiles.push(t && typeof t.p === 'string' && t.sid != null ? { p: t.p, sid: String(t.sid), name: String(t.name || ''), icon: String(t.icon || '') } : null);
+      d.tiles.push(cleanTile(t));
     }
     d.sel = clamp(Math.floor(d.sel) || 0, 0, SLOTS - 1);
-    d.bufSec = clamp(Number(d.bufSec) || 0, 0, 30);
+    d.bufSec = clamp(Number(d.bufSec) || 0, 0, 300);
+    d.keepSec = clamp(Number(d.keepSec) || 0, 0, 900);
     return d;
+  }
+  // a tile's saved settings; vod/ext mark a movie or episode (played from the provider's file, not as live TV)
+  function cleanTile(t) {
+    if (!t || typeof t.p !== 'string' || t.sid == null) return null;
+    var o = { p: t.p, sid: String(t.sid), name: String(t.name || ''), icon: String(t.icon || '') };
+    if (t.vod === 'movie' || t.vod === 'series') { o.vod = t.vod; o.ext = String(t.ext || 'mp4').replace(/[^a-z0-9]/gi, '').slice(0, 5) || 'mp4'; }
+    return o;
   }
   var saveTimer = null;
   function saveSoon() {
@@ -225,7 +234,10 @@
     this.video.muted = true;
     this.video.setAttribute('disablepictureinpicture', '');
     this.num = h('div', { class: 'num', text: String(idx + 1) });
-    this.label = h('div', { class: 'label' });
+    this.labName = h('span', { class: 'lname' });
+    this.labNow = h('span', { class: 'lnow' });
+    this.label = h('div', { class: 'label' }, this.labName, this.labNow);
+    this.now = null;
     this.speaker = h('div', { class: 'speaker', text: 'sound' });
     this.more = h('button', { class: 'more', type: 'button', tabindex: '-1', title: 'Tile menu', text: '...' });
     this.status = h('div', { class: 'status', hidden: true });
@@ -248,7 +260,8 @@
   Tile.prototype.render = function () {
     var c = this.cfg;
     this.empty.style.display = c ? 'none' : '';
-    this.label.textContent = c ? c.name || ('Channel ' + c.sid) : '';
+    this.labName.textContent = c ? c.name || ('Channel ' + c.sid) : '';
+    this.labNow.textContent = c && !c.vod && this.now && S.epgOn ? 'Now: ' + this.now : '';
     this.video.style.visibility = c ? '' : 'hidden';
     if (!c) this.setStatus('');
   };
@@ -267,6 +280,7 @@
 
   Tile.prototype.setCfg = function (cfg) {
     this.cfg = cfg;
+    this.now = null;
     this.retry = 0;
     this.mediaErrors = 0;
     this.render();
@@ -294,6 +308,7 @@
     this.stop();
     if (!this.cfg || !this.visible) { this.render(); return; }
     var self = this;
+    if (this.cfg.vod) { this.startVod(); return; }
     var mp = window.mpegts;
     if (!mp || !mp.getFeatureList || !mp.getFeatureList().mseLivePlayback) {
       this.setStatus('This browser cannot play live MPEG-TS (no MSE live playback)', true);
@@ -337,7 +352,65 @@
     applyAudio();
   };
 
+  // A movie or episode: the browser plays the provider's file through the server's range proxy.
+  Tile.prototype.startVod = function () {
+    var self = this;
+    var c = this.cfg;
+    var gen = ++this.gen;
+    this.phase = 'vod';
+    this.hasPlayed = false;
+    this.setStatus('Loading...');
+    var url = location.origin + '/vod/' + enc(c.p) + '/' + enc(c.sid + '.' + (c.ext || 'mp4'));
+    var v = this.video;
+    var key = c.p + ':' + c.sid;
+    var resume = this.resumeKey === key ? this.resumeAt : 0;
+    this.vodKey = key;
+    v.controls = true;
+    v.onloadedmetadata = function () { if (gen === self.gen && resume > 1) { try { v.currentTime = resume; } catch (e) { /* not seekable yet */ } } };
+    v.onplaying = function () { if (gen === self.gen) { self.hasPlayed = true; self.retry = 0; self.setStatus(''); } };
+    v.onwaiting = function () { if (gen === self.gen && self.hasPlayed) self.setStatus('Buffering...'); };
+    v.oncanplay = function () { if (gen === self.gen && !self.hasPlayed) self.setStatus(''); };
+    v.onerror = function () {
+      if (gen !== self.gen) return;
+      var code = v.error ? v.error.code : 0;
+      // ask the server what happened (a full provider, a login problem...) - the video element only reports "network error"
+      fetch(url, { headers: { Range: 'bytes=0-0' }, credentials: 'same-origin' }).then(function (r) {
+        if (gen !== self.gen) return;
+        if (r.ok) {
+          if (code === 4) { self.setStatus("This browser can't play this file (" + (c.ext || 'mp4') + "; mkv, HEVC and AC-3 audio are common problems)", true); return; }
+          self.retryVod(gen, 'Playback error');
+          return;
+        }
+        return r.json().catch(function () { return {}; }).then(function (j) {
+          if (gen !== self.gen) return;
+          if (r.status === 401) { sessionCheck(); return; }
+          if (r.status === 503) { self.setStatus('No free provider connection - stop a channel and retry', true); self.retryVod(gen, null, 8000); return; }
+          self.setStatus((j && j.message) || ('Server answered ' + r.status), true);
+        });
+      }).catch(function () { self.retryVod(gen, 'Connection problem'); });
+    };
+    v.src = url;
+    var pr;
+    try { pr = v.play(); } catch (e) { pr = null; }
+    if (pr && pr.catch) pr.catch(noop);
+    applyAudio();
+  };
+
+  Tile.prototype.retryVod = function (gen, msg, delay) {
+    var self = this;
+    this.retry++;
+    if (this.retry > 5) { this.setStatus((msg || 'Playback failed') + ' - use the tile menu to reload', true); return; }
+    delay = delay || BACKOFF[clamp(this.retry - 1, 0, BACKOFF.length - 1)];
+    if (msg) this.setStatus(msg + ' - retrying in ' + Math.round(delay / 1000) + 's', true);
+    clearTimeout(this.retryTimer);
+    this.retryTimer = setTimeout(function () { if (gen === self.gen) self.start(); }, delay);
+  };
+
   Tile.prototype.stop = function () {
+    var v0 = this.video;
+    if (this.phase === 'vod' && v0.currentTime > 1) { this.resumeKey = this.vodKey; this.resumeAt = v0.currentTime; }
+    v0.controls = false;
+    v0.onplaying = v0.onwaiting = v0.oncanplay = v0.onerror = v0.onloadedmetadata = null;
     clearInterval(this.tickTimer);
     clearTimeout(this.retryTimer);
     this.gen++;
@@ -426,11 +499,11 @@
     var ahead = this.ahead();
     var buf = S.bufSec;
     if (this.phase === 'prebuffer') {
-      var need = buf > 0 ? Math.min(buf, 12) * 0.8 : 0;
+      var need = buf > 0 ? buf * 0.8 : 0;
       var waited = now - this.phaseAt;
-      if (ahead > 0.05 && (ahead >= need || waited > (buf * 2 + 4) * 1000)) this.beginPlay();
-      else if (waited > 25000) this.onError('timeout');
-      else this.setStatus(ahead > 0.05 && buf > 0 ? 'Buffering ' + ahead.toFixed(1) + ' / ' + need.toFixed(1) + ' s' : 'Connecting...');
+      if (ahead > 0.05 && (ahead >= need || waited > (buf * 1.5 + 8) * 1000)) this.beginPlay();
+      else if (waited > 25000 && ahead <= 0.05) this.onError('timeout');
+      else this.setStatus(ahead > 0.05 && buf > 0 ? 'Buffering ' + fmtSec(ahead, need) + ' / ' + fmtSec(need, need) + ' s' : 'Connecting...');
     } else if (this.phase === 'playing') {
       if (v.paused && !v.ended && now - this.playingSince > 1000) { try { var pr = v.play(); if (pr && pr.catch) pr.catch(noop); } catch (e) { /* ignore */ } }
       if (buf > 0 && this.hasPlayed && ahead < 0.15 && !v.paused) {
@@ -438,7 +511,7 @@
         this.phase = 'rebuffer';
         this.phaseAt = now;
         this.setStatus('Buffering...');
-      } else if (ahead > buf + 8) {
+      } else if (ahead > Math.max(S.keepSec || 0, buf) + 8) {
         var b = v.buffered;
         if (b.length) v.currentTime = Math.max(b.start(b.length - 1), b.end(b.length - 1) - Math.max(buf, 1)); // drifted behind live: catch up
       } else if (this.hasPlayed && now - this.lastTime > 12000 && !v.paused) {
@@ -447,10 +520,11 @@
       }
       if ((this.retry || this.mediaErrors) && now - this.playingSince > 20000) { this.retry = 0; this.mediaErrors = 0; }
     } else if (this.phase === 'rebuffer') {
-      var need2 = Math.min(Math.max(buf, 1), 3);
+      var need2 = Math.min(Math.max(buf, 1), buf > 15 ? 15 : 3);
       var w2 = now - this.phaseAt;
-      if (ahead >= need2 || (w2 > 8000 && ahead > 0.3)) this.beginPlay();
-      else if (w2 > 30000) this.onError('timeout');
+      if (ahead >= need2 || (w2 > 8000 + need2 * 1000 && ahead > 0.3)) this.beginPlay();
+      else if (w2 > 30000 && ahead <= 0.3) this.onError('timeout');
+      else if (need2 > 3) this.setStatus('Buffering ' + fmtSec(ahead, need2) + ' / ' + fmtSec(need2, need2) + ' s');
     }
     if (document.body.classList.contains('stats')) {
       var q = v.getVideoPlaybackQuality ? v.getVideoPlaybackQuality() : null;
@@ -463,6 +537,7 @@
     this.zoomPaused = p;
     if (p) { try { this.video.pause(); } catch (e) { /* ignore */ } }
     else if (this.player) { this.phase = 'rebuffer'; this.phaseAt = Date.now(); }
+    else if (this.phase === 'vod') { try { var pr = this.video.play(); if (pr && pr.catch) pr.catch(noop); } catch (e) { /* ignore */ } }
   };
 
   // ---------------------------------------------------------------- grid, selection, audio
@@ -544,6 +619,7 @@
     tiles[idx].setCfg(cfg);
     saveSoon();
     updateHint();
+    setTimeout(pollEpg, 1500);
   }
 
   function swapWithMain(idx) {
@@ -683,7 +759,7 @@
       providersLoaded = true;
       var used = 0;
       var max = 0;
-      s.providers.forEach(function (p) { if (p.enabled) { used += p.active; max += p.max; } });
+      s.providers.forEach(function (p) { if (p.enabled && !p.local) { used += p.active; max += p.max; } });
       var b = $('#btn-conn');
       if (!s.providers.length) { b.textContent = 'Add provider'; b.classList.add('warn'); }
       else { b.textContent = 'Providers ' + used + '/' + max; b.classList.toggle('warn', used >= max); }
@@ -698,6 +774,28 @@
     });
   }
 
+  // ---------------------------------------------------------------- what's on now
+  function pollEpg() {
+    if (!S.epgOn || document.hidden || !ME) return;
+    var by = {};
+    tiles.forEach(function (t) { var c = t.cfg; if (c && !c.vod && t.visible) { by[c.p] = by[c.p] || {}; by[c.p][c.sid] = true; } });
+    var now = Math.floor(Date.now() / 1000);
+    Object.keys(by).forEach(function (pid) {
+      api('/api/epg?provider=' + enc(pid) + '&sids=' + enc(Object.keys(by[pid]).join(',')) + '&from=' + (now - 60) + '&to=' + (now + 3600)).then(function (r) {
+        tiles.forEach(function (t) {
+          var c = t.cfg;
+          if (!c || c.vod || c.p !== pid) return;
+          var list = (r.programmes && r.programmes[c.sid]) || [];
+          var cur = null;
+          for (var i = 0; i < list.length; i++) if (list[i][0] <= now && now < list[i][1]) cur = list[i];
+          t.now = cur ? cur[2] : null;
+          t.render();
+        });
+      }).catch(noop);
+    });
+  }
+  setInterval(pollEpg, 90000);
+
   // ---------------------------------------------------------------- tile menu
   function openTileMenu(idx) {
     var t = tiles[idx];
@@ -710,8 +808,13 @@
       act(S.muted ? 'Unmute' : 'Mute', toggleMute);
       if (idx !== 0 && isAdmin()) act('Make main (swap with tile 1)', function () { swapWithMain(idx); });
       act(zoom === idx ? 'Back to grid' : 'Zoom this tile', function () { toggleZoom(idx); });
+      if (c.vod) {
+        act(t.video.paused ? 'Play' : 'Pause', function () { if (t.video.paused) { var pr = t.video.play(); if (pr && pr.catch) pr.catch(noop); } else t.video.pause(); });
+        act('Back 30 seconds', function () { try { t.video.currentTime = Math.max(0, t.video.currentTime - 30); } catch (e) { /* not seekable */ } });
+        act('Forward 30 seconds', function () { try { t.video.currentTime = t.video.currentTime + 30; } catch (e) { /* not seekable */ } });
+      }
       act('Reload stream', function () { t.reload(); });
-      if (isAdmin()) act(S.favs[fk] ? 'Remove from favorites' : 'Add to favorites', function () { toggleFav(c); });
+      if (isAdmin() && !c.vod) act(S.favs[fk] ? 'Remove from favorites' : 'Add to favorites', function () { toggleFav(c); });
       if (isAdmin()) act('Remove channel', function () { assign(idx, null); }, 'danger');
     }
     var m = openModal({
@@ -762,57 +865,159 @@
   }
 
   // ---------------------------------------------------------------- channel picker
+  // Everything the picker shows (provider, tab, category, search, favorites, rows expanded, scroll position and the
+  // channel chosen last) lives in S.pk, so it opens again exactly where it was left.
+  var PK_DEFAULT = { prov: '', tab: 'live', cat: '', q: '', favs: false, limit: 100, scroll: 0, last: '' };
+  function pkState() {
+    var p = S.pk && typeof S.pk === 'object' ? S.pk : {};
+    Object.keys(PK_DEFAULT).forEach(function (k) { if (typeof p[k] !== typeof PK_DEFAULT[k]) p[k] = PK_DEFAULT[k]; });
+    if (['live', 'guide', 'movie', 'series'].indexOf(p.tab) < 0) p.tab = 'live';
+    p.limit = clamp(Math.floor(p.limit) || 100, 20, 5000);
+    S.pk = p;
+    return p;
+  }
+  var vodCache = {};   // provider:kind -> { catNames, list }
+  function clearListCaches() { chanCache = {}; vodCache = {}; }
+  function enc(s) { return encodeURIComponent(s); }
+
+  function loadVod(pid, kind, refresh) {
+    var key = pid + ':' + kind;
+    if (vodCache[key] && !refresh) return Promise.resolve(vodCache[key]);
+    return api('/api/vod?provider=' + enc(pid) + '&kind=' + kind + (refresh ? '&refresh=1' : '')).then(function (r) {
+      var cats = {};
+      var names = [];
+      var seen = {};
+      r.categories.forEach(function (c) { cats[c.id] = c.name; if (c.name && !seen[c.name]) { seen[c.name] = true; names.push(c.name); } });
+      var hasOther = false;
+      var list = r.items.map(function (it) {
+        var cn = cats[it.c];
+        if (!cn) { cn = 'Other'; hasOther = true; }
+        return { i: it.i, n: it.n, ln: it.n.toLowerCase(), cn: cn, l: it.l, x: it.x };
+      });
+      if (hasOther) names.push('Other');
+      vodCache[key] = { catNames: names, list: list };
+      return vodCache[key];
+    });
+  }
+
+  function fmtClock(ts) {
+    try { return new Date(ts * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }); } catch (e) { return ''; }
+  }
+
   function openPicker(slot) {
-    var pst = { prov: '', cat: '', q: '', favs: false, limit: 100, provs: [] };
+    var pk = pkState();
+    var provs = [];
     var provSel = h('select', { 'aria-label': 'Provider' });
     var catSel = h('select', { 'aria-label': 'Category' });
     var search = h('input', { type: 'text', class: 'search', placeholder: 'Search channels', autocomplete: 'off', autocapitalize: 'off', spellcheck: 'false' });
     var favBtn = h('button', { class: 'btn', type: 'button', text: 'Favorites' });
     var refBtn = h('button', { class: 'btn', type: 'button', text: 'Refresh' });
+    var resetBtn = h('button', { class: 'btn', type: 'button', text: 'Reset filters', title: 'Forget the remembered provider, category, search and position' });
+    var tabs = {};
+    var tabBar = h('div', { class: 'tabs', role: 'tablist' });
+    [['live', 'Live'], ['guide', 'Guide'], ['movie', 'Movies'], ['series', 'Series']].forEach(function (t) {
+      tabs[t[0]] = h('button', { class: 'btn tab', type: 'button', role: 'tab', text: t[1], onclick: function () { setTab(t[0]); } });
+      tabBar.appendChild(tabs[t[0]]);
+    });
     var info = h('div', { class: 'note' });
     var listEl = h('div', { class: 'chlist' });
     var loading = 0;
     var errors = {};
     var m;
+    var restore = pk.scroll > 0 || !!pk.last;   // scroll back to the remembered spot once the list is on screen
+    var gstart = 0;                              // guide window start (unix seconds)
+    var gtoken = 0;
+    var gcache = {};                             // provider:sid:gstart -> programmes
+    var searchToken = 0;
 
-    function selectedProviders() { return pst.prov ? pst.provs.filter(function (p) { return p.id === pst.prov; }) : pst.provs.filter(function (p) { return p.enabled; }); }
+    function isVod() { return pk.tab === 'movie' || pk.tab === 'series'; }
+    function usable(p) { return p.type !== 'local'; }
+    function selectedProviders() {
+      var list = pk.prov ? provs.filter(function (p) { return p.id === pk.prov; }) : provs.filter(function (p) { return p.enabled; });
+      return pk.tab === 'live' ? list : list.filter(usable);
+    }
+    function remember() { if (m) pk.scroll = m.body.scrollTop; saveSoon(); }
 
+    function tabCats() {
+      var seen = {};
+      var out = [];
+      selectedProviders().forEach(function (p) {
+        var c = isVod() ? vodCache[p.id + ':' + pk.tab] : chanCache[p.id];
+        if (!c) return;
+        c.catNames.forEach(function (n) { if (!seen[n]) { seen[n] = true; out.push(n); } });
+      });
+      return out;
+    }
     function fillCats() {
       catSel.textContent = '';
       catSel.appendChild(h('option', { value: '', text: 'All categories' }));
-      var seen = {};
-      var any = false;
-      selectedProviders().forEach(function (p) {
-        var c = chanCache[p.id];
-        if (!c) return;
-        c.catNames.forEach(function (n) { if (!seen[n]) { seen[n] = true; any = true; catSel.appendChild(h('option', { value: n, text: n })); } });
+      var names = tabCats();
+      names.forEach(function (n) { catSel.appendChild(h('option', { value: n, text: n })); });
+      // while the lists are still loading keep the remembered category instead of forgetting it
+      if (loading && pk.cat && names.indexOf(pk.cat) < 0) catSel.appendChild(h('option', { value: pk.cat, text: pk.cat }));
+      catSel.disabled = !names.length && !loading;
+      catSel.value = pk.cat;
+      if (catSel.value !== pk.cat) { pk.cat = ''; catSel.value = ''; }
+    }
+
+    function syncControls() {
+      Object.keys(tabs).forEach(function (k) {
+        tabs[k].classList.toggle('on', k === pk.tab);
+        tabs[k].setAttribute('aria-selected', k === pk.tab ? 'true' : 'false');
       });
-      catSel.disabled = !any;
-      catSel.value = pst.cat;
-      if (catSel.value !== pst.cat) { pst.cat = ''; catSel.value = ''; }
+      var vodOk = provs.some(function (p) { return p.enabled && usable(p); });
+      tabs.movie.hidden = !vodOk;
+      tabs.series.hidden = !vodOk;
+      search.placeholder = pk.tab === 'guide' ? 'Search programmes (e.g. Champions League) or channels' : pk.tab === 'movie' ? 'Search movies' : pk.tab === 'series' ? 'Search series' : 'Search channels';
+      favBtn.hidden = isVod();
+      favBtn.classList.toggle('on', pk.favs && !isVod());
+      search.value = pk.q;
+      provSel.value = pk.prov;
+      if (provSel.value !== pk.prov) { pk.prov = ''; provSel.value = ''; }
+    }
+
+    // the movies and series lists belong to one provider
+    function needVodProvider() {
+      if (!isVod() || pk.prov) return;
+      var first = provs.filter(function (p) { return p.enabled && usable(p); })[0];
+      if (first) { pk.prov = first.id; provSel.value = first.id; }
     }
 
     function load(refresh) {
-      var provs = selectedProviders();
-      provs.forEach(function (p) {
-        if (chanCache[p.id] && !refresh) return;
+      needVodProvider();
+      selectedProviders().forEach(function (p) {
+        var have = isVod() ? vodCache[p.id + ':' + pk.tab] : chanCache[p.id];
+        if (have && !refresh) return;
         loading++;
         delete errors[p.id];
-        loadChannels(p.id, refresh).catch(function (e) { errors[p.id] = e.message; }).then(function () { loading--; fillCats(); render(); });
+        (isVod() ? loadVod(p.id, pk.tab, refresh) : loadChannels(p.id, refresh)).catch(function (e) { errors[p.id] = e.message; }).then(function () { loading--; fillCats(); render(); });
       });
       fillCats();
       render();
     }
 
+    function toks() { return pk.q.toLowerCase().split(/\s+/).filter(Boolean); }
+    function okName(ln, t) { for (var i = 0; i < t.length; i++) if (ln.indexOf(t[i]) < 0) return false; return true; }
+
     function matches() {
-      var toks = pst.q.toLowerCase().split(/\s+/).filter(Boolean);
+      var t = toks();
       var out = [];
-      function ok(ln) { for (var i = 0; i < toks.length; i++) if (ln.indexOf(toks[i]) < 0) return false; return true; }
-      if (pst.favs) {
+      if (isVod()) {
+        selectedProviders().forEach(function (p) {
+          var c = vodCache[p.id + ':' + pk.tab];
+          if (!c) return;
+          for (var i = 0; i < c.list.length && out.length < 5000; i++) {
+            var it = c.list[i];
+            if (pk.cat && it.cn !== pk.cat) continue;
+            if (t.length && !okName(it.ln, t)) continue;
+            out.push({ p: p.id, id: it.i, sid: pk.tab + ':' + it.i, name: it.n, icon: it.l, vod: pk.tab, ext: it.x });
+          }
+        });
+      } else if (pk.favs) {
         Object.keys(S.favs).forEach(function (k) {
           var f = S.favs[k];
-          if (pst.prov && f.p !== pst.prov) return;
-          if (ok((f.name || '').toLowerCase())) out.push({ p: f.p, sid: f.sid, name: f.name, icon: f.icon });
+          if (pk.prov && f.p !== pk.prov) return;
+          if (okName((f.name || '').toLowerCase(), t)) out.push({ p: f.p, sid: f.sid, name: f.name, icon: f.icon });
         });
       } else {
         selectedProviders().forEach(function (p) {
@@ -820,45 +1025,235 @@
           if (!c) return;
           for (var i = 0; i < c.list.length && out.length < 3000; i++) {
             var ch = c.list[i];
-            if (pst.cat && ch.cn !== pst.cat) continue;
-            if (toks.length && !ok(ch.ln)) continue;
+            if (pk.cat && ch.cn !== pk.cat) continue;
+            if (t.length && !okName(ch.ln, t)) continue;
             out.push({ p: p.id, sid: ch.i, name: ch.n, icon: ch.l });
           }
         });
       }
-      if (pst.q) out.sort(function (a, b) { return a.name.localeCompare(b.name); });
+      if (pk.q) out.sort(function (a, b) { return a.name.localeCompare(b.name); });
       return out;
     }
 
-    function provName(id) { for (var i = 0; i < pst.provs.length; i++) if (pst.provs[i].id === id) return pst.provs[i].name; return id; }
+    function provName(id) { for (var i = 0; i < provs.length; i++) if (provs[i].id === id) return provs[i].name; return id; }
+    function errText() { return Object.keys(errors).map(function (id) { return provName(id) + ': ' + errors[id]; }).join(' | '); }
+    function imgOrBlank(src) {
+      return src ? h('img', { src: src, alt: '', loading: 'lazy', referrerpolicy: 'no-referrer', onerror: function (e) { var im = e.target; var ph = h('span', { class: 'noimg' }); if (im.parentNode) im.parentNode.replaceChild(ph, im); } }) : h('span', { class: 'noimg' });
+    }
+
+    function afterRender() {
+      if (!restore || loading) return;
+      restore = false;
+      var done = false;
+      if (pk.last) {
+        var els = listEl.querySelectorAll('[data-key]');
+        for (var i = 0; i < els.length; i++) {
+          if (els[i].getAttribute('data-key') === pk.last) {
+            try { els[i].focus({ preventScroll: true }); } catch (e) { els[i].focus(); }
+            els[i].scrollIntoView({ block: 'center' });
+            done = true;
+            break;
+          }
+        }
+      }
+      if (!done && pk.scroll) m.body.scrollTop = pk.scroll;
+    }
 
     function render() {
+      if (pk.tab === 'guide') return renderGuide();
+      listEl.className = 'chlist';
       listEl.textContent = '';
       var res = matches();
-      var errTxt = Object.keys(errors).map(function (id) { return provName(id) + ': ' + errors[id]; }).join(' | ');
-      info.textContent = (loading ? 'Loading channel lists... ' : '') + (errTxt ? errTxt + ' ' : '') + (loading ? '' : res.length + ' channel' + (res.length === 1 ? '' : 's') + (res.length >= 3000 ? '+' : ''));
-      res.slice(0, pst.limit).forEach(function (r) {
-        var fav = !!S.favs[favKey(r)];
-        var pick = h('button', { class: 'pick', type: 'button', onclick: function () { choose(r); } },
-          r.icon ? h('img', { src: r.icon, alt: '', loading: 'lazy', referrerpolicy: 'no-referrer', onerror: function (e) { var im = e.target; var ph = h('span', { class: 'noimg' }); if (im.parentNode) im.parentNode.replaceChild(ph, im); } }) : h('span', { class: 'noimg' }),
+      var nWord = pk.tab === 'movie' ? 'movie' : pk.tab === 'series' ? 'series' : 'channel';
+      info.textContent = (loading ? 'Loading lists... ' : '') + (errText() ? errText() + ' ' : '') + (loading ? '' : res.length + ' ' + nWord + (res.length === 1 || nWord === 'series' ? '' : 's') + (res.length >= 3000 ? '+' : ''));
+      if (isVod() && !selectedProviders().length) info.textContent = 'Choose a provider above to browse its ' + (pk.tab === 'movie' ? 'movies' : 'series') + '.';
+      res.slice(0, pk.limit).forEach(function (r) {
+        var key = r.p + ':' + r.sid;
+        var pick = h('button', { class: 'pick', type: 'button', 'data-key': key, onclick: function () { choose(r); } },
+          imgOrBlank(r.icon),
           h('span', { class: 'nm', text: r.name || ('Channel ' + r.sid) }),
-          pst.provs.length > 1 ? h('span', { class: 'chip', text: provName(r.p) }) : null);
-        var star = h('button', { class: 'star' + (fav ? ' on' : ''), type: 'button', title: 'Favorite', text: fav ? '\u2605' : '\u2606', onclick: function () { toggleFav(r); var on = !!S.favs[favKey(r)]; star.classList.toggle('on', on); star.textContent = on ? '\u2605' : '\u2606'; } });
-        listEl.appendChild(h('div', { class: 'ch' }, pick, star));
+          pk.tab === 'series' ? h('span', { class: 'chip', text: 'episodes' }) : null,
+          provs.length > 1 && !pk.prov ? h('span', { class: 'chip', text: provName(r.p) }) : null);
+        var row;
+        if (isVod()) {
+          row = h('div', { class: 'ch' }, pick);
+        } else {
+          var fav = !!S.favs[favKey(r)];
+          var star = h('button', { class: 'star' + (fav ? ' on' : ''), type: 'button', title: 'Favorite', text: fav ? '★' : '☆', onclick: function () { toggleFav(r); var on = !!S.favs[favKey(r)]; star.classList.toggle('on', on); star.textContent = on ? '★' : '☆'; } });
+          row = h('div', { class: 'ch' }, pick, star);
+        }
+        listEl.appendChild(row);
       });
-      if (res.length > pst.limit) {
-        listEl.appendChild(h('div', { class: 'more-row' }, h('button', { class: 'btn', type: 'button', text: 'Show more (' + (res.length - pst.limit) + ' left)', onclick: function () { pst.limit += 150; render(); } })));
+      if (res.length > pk.limit) {
+        listEl.appendChild(h('div', { class: 'more-row' }, h('button', { class: 'btn', type: 'button', text: 'Show more (' + (res.length - pk.limit) + ' left)', onclick: function () { pk.limit += 150; saveSoon(); render(); } })));
       }
+      afterRender();
     }
 
-    function choose(r) {
-      m.close();
-      assign(slot, { p: r.p, sid: String(r.sid), name: r.name, icon: r.icon || '' });
-      select(slot);
+    // ------------------------------------------------------------ guide
+    var GSPAN = 3 * 3600;
+    function guideStart() { return gstart || (gstart = Math.floor((Date.now() / 1000 - 900) / 1800) * 1800); }
+
+    function renderGuide() {
+      var token = ++gtoken;
+      var q = pk.q.trim();
+      if (q) return renderProgrammeSearch(token);
+      listEl.className = 'guide';
+      listEl.textContent = '';
+      var res = matches().slice(0, Math.min(pk.limit, 300));
+      var all = matches().length;
+      info.textContent = (loading ? 'Loading lists... ' : '') + (errText() ? errText() + ' ' : '') + (loading ? '' : all + ' channels. Pick a channel or a programme to put it on the tile.');
+      var start = guideStart();
+      var nav = h('div', { class: 'gnav' },
+        h('button', { class: 'btn', type: 'button', text: '◀ Earlier', onclick: function () { gstart = start - GSPAN / 2; render(); } }),
+        h('button', { class: 'btn', type: 'button', text: 'Now', onclick: function () { gstart = 0; render(); } }),
+        h('button', { class: 'btn', type: 'button', text: 'Later ▶', onclick: function () { gstart = start + GSPAN / 2; render(); } }));
+      var ruler = h('div', { class: 'gruler' });
+      for (var k = 0; k < 6; k++) ruler.appendChild(h('span', { style: 'left:' + (k * 100 / 6) + '%', text: fmtClock(start + k * 1800) }));
+      listEl.appendChild(h('div', { class: 'grow ghead' }, nav, ruler));
+      var rows = {};
+      res.forEach(function (r) {
+        var line = h('div', { class: 'gline' });
+        var key = r.p + ':' + r.sid;
+        var name = h('button', { class: 'gch', type: 'button', 'data-key': key, title: r.name, onclick: function () { choose(r); } }, imgOrBlank(r.icon), h('span', { text: r.name }));
+        listEl.appendChild(h('div', { class: 'grow' }, name, line));
+        rows[key] = { r: r, line: line };
+      });
+      var now = Date.now() / 1000;
+      if (now >= start && now <= start + GSPAN) {
+        listEl.appendChild(h('div', { class: 'gnow', style: 'left:calc(var(--gname) + (100% - var(--gname)) * ' + ((now - start) / GSPAN).toFixed(4) + ')' }));
+      }
+      if (res.length < all) listEl.appendChild(h('div', { class: 'more-row' }, h('button', { class: 'btn', type: 'button', text: 'Show more channels', onclick: function () { pk.limit += 100; saveSoon(); render(); } })));
+      // fetch guide data in chunks per provider
+      var byProv = {};
+      Object.keys(rows).forEach(function (k) {
+        var r = rows[k].r;
+        (byProv[r.p] = byProv[r.p] || []).push(r.sid);
+      });
+      var pending = 0;
+      var anyData = false;
+      Object.keys(byProv).forEach(function (pid) {
+        var sids = byProv[pid];
+        for (var i = 0; i < sids.length; i += 60) {
+          (function (chunk) {
+            var need = chunk.filter(function (sid) { return !gcache[pid + ':' + sid + ':' + start]; });
+            if (!need.length) { fillGuide(pid, chunk, start, rows, token); anyData = true; return; }
+            pending++;
+            api('/api/epg?provider=' + enc(pid) + '&sids=' + enc(need.join(',')) + '&from=' + start + '&to=' + (start + GSPAN) + '&desc=1').then(function (r) {
+              need.forEach(function (sid) { gcache[pid + ':' + sid + ':' + start] = r.programmes[sid] || []; });
+              if (r.available) anyData = true;
+            }).catch(function () {
+              need.forEach(function (sid) { gcache[pid + ':' + sid + ':' + start] = []; });
+            }).then(function () {
+              pending--;
+              if (token !== gtoken) return;
+              fillGuide(pid, chunk, start, rows, token);
+              if (!pending && !anyData) info.textContent = 'No programme guide data from this provider. Channels are still listed; use Live.';
+            });
+          })(sids.slice(i, i + 60));
+        }
+      });
+      afterRender();
     }
+
+    function fillGuide(pid, sids, start, rows, token) {
+      if (token !== gtoken) return;
+      var now = Date.now() / 1000;
+      sids.forEach(function (sid) {
+        var row = rows[pid + ':' + sid];
+        var progs = gcache[pid + ':' + sid + ':' + start] || [];
+        if (!row) return;
+        row.line.textContent = '';
+        progs.forEach(function (pr) {
+          var l = clamp((pr[0] - start) / GSPAN, 0, 1);
+          var rgt = clamp((pr[1] - start) / GSPAN, 0, 1);
+          if (rgt - l < 0.004) return;
+          var isNow = pr[0] <= now && now < pr[1];
+          row.line.appendChild(h('button', {
+            class: 'prog' + (isNow ? ' now' : ''), type: 'button', 'data-key': pid + ':' + sid,
+            style: 'left:' + (l * 100).toFixed(3) + '%;width:' + ((rgt - l) * 100).toFixed(3) + '%',
+            title: pr[2] + '\n' + fmtClock(pr[0]) + ' - ' + fmtClock(pr[1]) + (pr[3] ? '\n' + pr[3] : ''),
+            onclick: function () { choose(row.r); }
+          }, h('span', { text: pr[2] })));
+        });
+      });
+    }
+
+    function renderProgrammeSearch(token) {
+      var q = pk.q.trim();
+      listEl.className = 'chlist';
+      listEl.textContent = '';
+      info.textContent = 'Searching programmes...';
+      var targets = selectedProviders();
+      var results = [];
+      var left = targets.length;
+      var anyAvail = false;
+      if (!left) { info.textContent = 'No provider to search.'; return; }
+      targets.forEach(function (p) {
+        api('/api/epg-search?provider=' + enc(p.id) + '&q=' + enc(q)).then(function (r) {
+          if (r.available) anyAvail = true;
+          r.results.forEach(function (x) { results.push({ p: p.id, sid: x.sid, name: x.name, icon: x.icon, s: x.s, e: x.e, t: x.t }); });
+        }).catch(function () { /* ignore one provider */ }).then(function () {
+          if (--left || token !== gtoken) return;
+          listEl.textContent = '';
+          if (!anyAvail) {
+            info.textContent = 'These providers have no programme guide file, so programmes cannot be searched. Showing channels whose name matches.';
+            listEl.className = 'chlist';
+            matches().slice(0, 100).forEach(function (r) {
+              listEl.appendChild(h('div', { class: 'ch' }, h('button', { class: 'pick', type: 'button', 'data-key': r.p + ':' + r.sid, onclick: function () { choose(r); } }, imgOrBlank(r.icon), h('span', { class: 'nm', text: r.name }))));
+            });
+            return;
+          }
+          results.sort(function (a, b) { return a.s - b.s; });
+          info.textContent = results.length + ' programme' + (results.length === 1 ? '' : 's') + ' in the next 24 hours';
+          results.slice(0, 150).forEach(function (r) {
+            var live = r.s <= Date.now() / 1000;
+            listEl.appendChild(h('div', { class: 'ch' }, h('button', { class: 'pick', type: 'button', 'data-key': r.p + ':' + r.sid, onclick: function () { choose(r); } },
+              imgOrBlank(r.icon),
+              h('span', { class: 'nm' }, h('b', { text: r.t }), h('small', { text: '  ' + r.name })),
+              h('span', { class: 'chip' + (live ? ' live' : ''), text: (live ? 'now · ' : '') + fmtClock(r.s) + '-' + fmtClock(r.e) }))));
+          });
+        });
+      });
+    }
+
+    // arrows inside the guide: left/right along a row, up/down between rows (by time position)
+    listEl.addEventListener('keydown', function (e) {
+      if (pk.tab !== 'guide' || pk.q.trim()) return;
+      var t = e.target;
+      var row = t.closest ? t.closest('.grow') : null;
+      if (!row || row.classList.contains('ghead')) return;
+      if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
+        var btns = Array.prototype.slice.call(row.querySelectorAll('button'));
+        var i = btns.indexOf(t);
+        var nx = btns[i + (e.key === 'ArrowRight' ? 1 : -1)];
+        e.preventDefault();
+        e.stopPropagation();
+        if (nx) { nx.focus(); nx.scrollIntoView({ block: 'nearest', inline: 'nearest' }); }
+      } else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        var sib = e.key === 'ArrowDown' ? row.nextElementSibling : row.previousElementSibling;
+        e.preventDefault();
+        e.stopPropagation();
+        while (sib && !sib.classList.contains('grow')) sib = e.key === 'ArrowDown' ? sib.nextElementSibling : sib.previousElementSibling;
+        if (!sib) { if (e.key === 'ArrowUp') search.focus(); return; }
+        if (sib.classList.contains('ghead')) { search.focus(); return; }
+        var x = t.getBoundingClientRect();
+        var cx = x.left + x.width / 2;
+        var target = sib.querySelector('.gch');
+        if (!t.classList.contains('gch')) {
+          var cand = sib.querySelectorAll('.prog');
+          for (var j = 0; j < cand.length; j++) {
+            var b = cand[j].getBoundingClientRect();
+            if (b.left <= cx && b.right >= cx) { target = cand[j]; break; }
+          }
+        }
+        if (target) { target.focus(); target.scrollIntoView({ block: 'nearest' }); }
+      }
+    });
 
     // arrow keys inside the list: up/down between rows, left/right between channel and star
     listEl.addEventListener('keydown', function (e) {
+      if (pk.tab === 'guide' && !pk.q.trim()) return;
       var t = e.target;
       var row = t.closest ? t.closest('.ch') : null;
       if (!row) return;
@@ -869,37 +1264,130 @@
         e.stopPropagation();
         if (sib) { var tgt = sib.querySelector(col === 'star' ? '.star' : '.pick') || sib.querySelector('button'); if (tgt) { tgt.focus(); tgt.scrollIntoView({ block: 'nearest' }); } }
         else if (e.key === 'ArrowUp') search.focus();
-      } else if (e.key === 'ArrowRight' && col === 'pick') { e.preventDefault(); e.stopPropagation(); row.querySelector('.star').focus(); }
+      } else if (e.key === 'ArrowRight' && col === 'pick') { var st = row.querySelector('.star'); if (st) { e.preventDefault(); e.stopPropagation(); st.focus(); } }
       else if (e.key === 'ArrowLeft' && col === 'star') { e.preventDefault(); e.stopPropagation(); row.querySelector('.pick').focus(); }
     });
 
+    function choose(r) {
+      pk.last = r.p + ':' + r.sid;
+      remember();
+      if (r.vod === 'series') { openEpisodes(r, slot, function () { m.close(); }); return; }
+      m.close();
+      var cfg = { p: r.p, sid: String(r.sid), name: r.name, icon: r.icon || '' };
+      if (r.vod) { cfg.vod = r.vod; cfg.ext = r.ext || 'mp4'; }
+      assign(slot, cfg);
+      select(slot);
+    }
+
+    function setTab(t) {
+      if (pk.tab === t) return;
+      pk.tab = t;
+      pk.cat = '';
+      pk.limit = 100;
+      pk.scroll = 0;
+      pk.last = '';
+      restore = false;
+      m.body.scrollTop = 0;
+      saveSoon();
+      syncControls();
+      load(false);
+    }
+
     var qTimer = null;
-    search.addEventListener('input', function () { clearTimeout(qTimer); qTimer = setTimeout(function () { pst.q = search.value.trim(); pst.limit = 100; render(); }, 150); });
+    search.addEventListener('input', function () { clearTimeout(qTimer); qTimer = setTimeout(function () { pk.q = search.value.trim(); pk.limit = 100; pk.scroll = 0; saveSoon(); render(); }, pk.tab === 'guide' ? 350 : 150); });
     search.addEventListener('keydown', function (e) {
-      if (e.key === 'Enter') { var first = listEl.querySelector('.pick'); if (first) { e.preventDefault(); first.click(); } }
+      if (e.key === 'Enter') { var first = listEl.querySelector('.pick, .gch'); if (first) { e.preventDefault(); first.click(); } }
     });
-    provSel.addEventListener('change', function () { pst.prov = provSel.value; pst.cat = ''; pst.limit = 100; load(false); });
-    catSel.addEventListener('change', function () { pst.cat = catSel.value; pst.limit = 100; render(); });
-    favBtn.addEventListener('click', function () { pst.favs = !pst.favs; favBtn.classList.toggle('on', pst.favs); pst.limit = 100; render(); });
-    refBtn.addEventListener('click', function () { delete chanCache[pst.prov || '']; pst.provs.forEach(function (p) { if (!pst.prov || p.id === pst.prov) delete chanCache[p.id]; }); load(true); });
+    provSel.addEventListener('change', function () { pk.prov = provSel.value; pk.cat = ''; pk.limit = 100; pk.scroll = 0; pk.last = ''; saveSoon(); load(false); });
+    catSel.addEventListener('change', function () { pk.cat = catSel.value; pk.limit = 100; pk.scroll = 0; saveSoon(); render(); });
+    favBtn.addEventListener('click', function () { pk.favs = !pk.favs; favBtn.classList.toggle('on', pk.favs); pk.limit = 100; pk.scroll = 0; saveSoon(); render(); });
+    refBtn.addEventListener('click', function () {
+      clearListCaches();
+      gcache = {};
+      load(true);
+    });
+    resetBtn.addEventListener('click', function () {
+      pk.q = ''; pk.cat = ''; pk.favs = false; pk.limit = 100; pk.scroll = 0; pk.last = ''; pk.tab = 'live';
+      pk.prov = provs.length === 1 ? provs[0].id : '';
+      restore = false;
+      m.body.scrollTop = 0;
+      saveSoon();
+      syncControls();
+      load(false);
+      search.focus();
+    });
 
     var cur = S.tiles[slot];
     m = openModal({
       title: 'Choose channel for tile ' + (slot + 1),
       wide: true,
-      body: [h('div', { class: 'filters' }, provSel, catSel), h('div', { class: 'pickerbar' }, search, favBtn, refBtn), info, listEl],
+      body: [tabBar, h('div', { class: 'filters' }, provSel, catSel), h('div', { class: 'pickerbar' }, search, favBtn, refBtn, resetBtn), info, listEl],
       foot: [cur ? h('button', { class: 'btn', type: 'button', text: 'Remove channel', onclick: function () { m.close(); assign(slot, null); } }) : null,
         h('button', { class: 'btn', type: 'button', text: 'Close', onclick: function () { m.close(); } })],
-      focus: '.search'
+      focus: '.search',
+      onClose: function () { remember(); }
     });
+    // the remembered channel stops being "the place" once the user has scrolled a screen or more away from it
+    function checkLast() {
+      if (!pk.last) return;
+      var box = m.body.getBoundingClientRect();
+      var els = listEl.querySelectorAll('[data-key]');
+      for (var i = 0; i < els.length; i++) {
+        if (els[i].getAttribute('data-key') !== pk.last) continue;
+        var r = els[i].getBoundingClientRect();
+        if (r.bottom < box.top - box.height || r.top > box.bottom + box.height) pk.last = '';
+        return;
+      }
+    }
+    m.body.addEventListener('scroll', function () { if (restore) return; pk.scroll = m.body.scrollTop; checkLast(); saveSoon(); });
 
-    getProviders().then(function (provs) {
-      pst.provs = provs;
-      provSel.appendChild(h('option', { value: '', text: provs.length > 1 ? 'All providers' : (provs[0] ? provs[0].name : 'No providers') }));
+    getProviders().then(function (list) {
+      provs = list;
+      provSel.appendChild(h('option', { value: provs.length === 1 ? provs[0].id : '', text: provs.length > 1 ? 'All providers' : (provs[0] ? provs[0].name : 'No providers') }));
       if (provs.length > 1) provs.forEach(function (p) { provSel.appendChild(h('option', { value: p.id, text: p.name + (p.enabled ? '' : ' (off)') })); });
-      if (provs.length === 1) pst.prov = provs[0].id;
+      if (provs.length === 1) pk.prov = provs[0].id;
+      if (pk.prov && !provs.some(function (p) { return p.id === pk.prov; })) pk.prov = '';
       if (!provs.length) { info.textContent = 'No providers yet. Add one under Providers.'; return; }
+      syncControls();
       load(false);
+    }).catch(function (e) { info.textContent = e.message; });
+  }
+
+  // episodes of one series: pick a season, then an episode
+  function openEpisodes(series, slot, done) {
+    var info = h('div', { class: 'note', text: 'Loading episodes...' });
+    var seasonSel = h('select', { 'aria-label': 'Season' });
+    var list = h('div', { class: 'chlist' });
+    var data = null;
+    var m = openModal({
+      title: series.name,
+      wide: true,
+      body: [h('div', { class: 'filters' }, seasonSel), info, list],
+      foot: h('button', { class: 'btn', type: 'button', text: 'Back', onclick: function () { m.close(); } })
+    });
+    function showSeason() {
+      list.textContent = '';
+      var s = data.seasons[Number(seasonSel.value)];
+      if (!s) return;
+      s.episodes.forEach(function (ep) {
+        var label = 'E' + (ep.num || '?') + '  ' + ep.title;
+        list.appendChild(h('div', { class: 'ch' }, h('button', { class: 'pick', type: 'button', onclick: function () {
+          m.close();
+          done();
+          assign(slot, { p: series.p, sid: 'series:' + ep.id, name: series.name + ' S' + s.season + 'E' + (ep.num || '?') + ' ' + ep.title, icon: series.icon || '', vod: 'series', ext: ep.ext });
+          select(slot);
+        } }, h('span', { class: 'nm', text: label }), ep.minutes ? h('span', { class: 'chip', text: ep.minutes + ' min' }) : null)));
+      });
+      var first = list.querySelector('.pick');
+      if (first) first.focus();
+    }
+    api('/api/series?provider=' + enc(series.p) + '&id=' + enc(series.id)).then(function (r) {
+      data = r;
+      if (!r.seasons.length) { info.textContent = 'This series has no episodes listed.'; return; }
+      info.textContent = '';
+      r.seasons.forEach(function (s, i) { seasonSel.appendChild(h('option', { value: String(i), text: 'Season ' + s.season + ' (' + s.episodes.length + ' episodes)' })); });
+      seasonSel.addEventListener('change', showSeason);
+      showSeason();
     }).catch(function (e) { info.textContent = e.message; });
   }
 
@@ -912,13 +1400,27 @@
       cb.addEventListener('change', function () { S[key] = cb.checked; saveSoon(); if (after) after(); });
       return h('label', { class: 'check' }, cb, h('span', { text: label }));
     }
+    function secLabel(n) { return n === 0 ? 'Off (lowest delay, may stutter)' : n < 60 ? n + ' seconds' : n % 60 === 0 ? (n / 60) + ' minute' + (n === 60 ? '' : 's') : n + ' seconds'; }
     var bufSel = h('select');
-    [[0, 'Off (lowest delay, may stutter)'], [2, '2 seconds'], [4, '4 seconds (default)'], [8, '8 seconds'], [15, '15 seconds (slow links)']].forEach(function (o) {
-      bufSel.appendChild(h('option', { value: String(o[0]), text: o[1] }));
-    });
+    [0, 2, 4, 8, 15, 30, 60, 120, 300].forEach(function (n) { bufSel.appendChild(h('option', { value: String(n), text: secLabel(n) + (n === 4 ? ' (default)' : '') })); });
     bufSel.value = String(S.bufSec);
-    if (bufSel.value !== String(S.bufSec)) { bufSel.appendChild(h('option', { value: String(S.bufSec), text: S.bufSec + ' seconds' })); bufSel.value = String(S.bufSec); }
-    bufSel.addEventListener('change', function () { S.bufSec = Number(bufSel.value); saveSoon(); });
+    if (bufSel.value !== String(S.bufSec)) { bufSel.appendChild(h('option', { value: String(S.bufSec), text: secLabel(S.bufSec) })); bufSel.value = String(S.bufSec); }
+    var keepSel = h('select');
+    keepSel.appendChild(h('option', { value: '0', text: 'Same as above (default)' }));
+    [30, 60, 120, 300, 600].forEach(function (n) { keepSel.appendChild(h('option', { value: String(n), text: secLabel(n) })); });
+    keepSel.value = String(S.keepSec);
+    if (keepSel.value !== String(S.keepSec)) keepSel.value = '0';
+    var memNote = h('div', { class: 'note' });
+    function memWarn() {
+      var keep = Math.max(S.keepSec || 0, S.bufSec);
+      var tilesN = visibleCount();
+      var mb = Math.round(keep * 0.5 * tilesN);   // about 4 Mbps per channel
+      memNote.textContent = keep >= 30 ? 'A cushion of ' + secLabel(keep) + ' on ' + tilesN + ' tiles can use roughly ' + mb + ' MB of browser memory (4 Mbps channels) and the server keeps the same amount per channel (RING_MB). Each tile also waits that long before its picture starts, unless the server already has the video (another viewer is watching it).' : '';
+      memNote.className = 'note' + (mb > 800 ? ' warn' : '');
+    }
+    bufSel.addEventListener('change', function () { S.bufSec = Number(bufSel.value); saveSoon(); memWarn(); });
+    keepSel.addEventListener('change', function () { S.keepSec = Number(keepSel.value); saveSoon(); memWarn(); });
+    memWarn();
     var trSel = h('select', null, h('option', { value: 'auto', text: 'WebSocket (recommended: 9 streams at once)' }), h('option', { value: 'http', text: 'Plain HTTP (browsers allow only about 6 streams)' }));
     trSel.value = S.transport === 'http' ? 'http' : 'auto';
     trSel.addEventListener('change', function () { S.transport = trSel.value; wsBlocked = false; wsFails = 0; saveSoon(); });
@@ -936,18 +1438,22 @@
     var m = openModal({
       title: 'Settings',
       body: [
-        field('Buffer before playing (smoother, adds delay)', bufSel),
+        field('Start playing after (video collected before a tile starts; smoother, adds delay)', bufSel),
+        field('Keep up to (largest cushion kept while playing)', keepSel),
+        memNote,
         field('Video', fitSel),
         field('Stream delivery (applies when a stream reconnects)', trSel),
         check('Use another provider when the chosen one is full', 'failover', function () { tiles.forEach(function (t) { if (t.cfg && t.retry) t.start(); }); }),
         check('Use web workers (lighter on the page; turn off if video will not start)', 'workers'),
         check('Show stats on tiles', 'stats', function () { document.body.classList.toggle('stats', S.stats); }),
         check('Always show channel names', 'labels', function () { document.body.classList.toggle('showlabels', S.labels); }),
+        check("Show what's on now under channel names (programme guide)", 'epgOn', function () { tiles.forEach(function (t) { t.render(); }); pollEpg(); }),
         h('div', { class: 'note', text: 'Buffer and failover apply the next time a stream (re)connects.' }),
         keys
       ],
       foot: [
         !isAdmin() ? null : h('button', { class: 'btn', type: 'button', text: 'Clear all tiles', onclick: function () { m.close(); S.tiles = S.tiles.map(function () { return null; }); tiles.forEach(function (t) { t.setCfg(null); }); saveSoon(); updateHint(); } }),
+        window.MVApp ? h('button', { class: 'btn', type: 'button', text: 'Server address (TV app)...', onclick: function () { m.close(); window.MVApp.changeServer(); } }) : null,
         h('button', { class: 'btn', type: 'button', text: 'Restart all streams', onclick: function () { m.close(); tiles.forEach(function (t) { t.reload(); }); } }),
         h('button', { class: 'btn', type: 'button', text: 'Close', onclick: function () { m.close(); } })
       ]
@@ -957,7 +1463,7 @@
   // ---------------------------------------------------------------- providers
   function openProviders(intro) {
     var m = openModal({ title: 'Providers', body: h('div', null, h('div', { class: 'note', text: 'Loading...' })), foot: null });
-    function done() { providersCache = null; chanCache = {}; refreshState(); }
+    function done() { providersCache = null; clearListCaches(); refreshState(); }
 
     function list() {
       Promise.all([api('/api/providers'), api('/api/state')]).then(function (r) {
@@ -972,9 +1478,9 @@
           r[1].providers.forEach(function (s) { if (s.id === p.id) st = s; });
           var active = st ? st.active : 0;
           body.push(h('div', { class: 'prov' },
-            h('div', { class: 'name' }, h('b', { text: p.name + (p.enabled ? '' : '  (off)') }), h('small', { text: host(p.url) + '  ·  ' + active + ' of ' + p.maxConnections + ' connection' + (p.maxConnections === 1 ? '' : 's') + ' in use' }),
+            h('div', { class: 'name' }, h('b', { text: p.name + (p.enabled ? '' : '  (off)') }), h('small', { text: (p.type === 'local' ? 'Capture card · ' + p.sources.length + ' source' + (p.sources.length === 1 ? '' : 's') : host(p.url)) + '  ·  ' + active + ' of ' + p.maxConnections + ' connection' + (p.maxConnections === 1 ? '' : 's') + ' in use' }),
               h('div', { class: 'bar' }, h('i', { class: active >= p.maxConnections ? 'full' : '', style: 'width:' + Math.min(100, Math.round(100 * active / Math.max(1, p.maxConnections))) + '%' }))),
-            h('button', { class: 'btn', type: 'button', text: 'Edit', onclick: function () { form(p, provs); } })));
+            h('button', { class: 'btn', type: 'button', text: 'Edit', onclick: function () { if (p.type === 'local') formLocal(p, provs); else form(p, provs); } })));
         });
         var streams = r[1].streams;
         if (streams.length) {
@@ -985,6 +1491,7 @@
         }
         m.setBody(body, [
           h('button', { class: 'btn', type: 'button', text: 'Add provider', onclick: function () { form(null, provs); } }),
+          h('button', { class: 'btn', type: 'button', text: 'Add capture card', title: 'A video capture device plugged into the server', onclick: function () { formLocal(null, provs); } }),
           h('button', { class: 'btn', type: 'button', text: 'Close', onclick: function () { m.close(); } })
         ]);
         var first = $('.btn', m.box);
@@ -1041,6 +1548,91 @@
         } })
       ]);
       f.name.focus();
+    }
+    // A capture card (or other V4L2 video device) on the machine running the server, shown as channels.
+    function formLocal(p, provs) {
+      var name = h('input', { type: 'text', value: p ? p.name : 'Capture card', autocomplete: 'off' });
+      var on = h('input', { type: 'checkbox' });
+      on.checked = p ? p.enabled : true;
+      var msg = h('div');
+      var devNote = h('div', { class: 'note', text: 'Looking for devices...' });
+      var vlist = h('datalist', { id: 'dl-video' });
+      var alist = h('datalist', { id: 'dl-audio' });
+      var srcBox = h('div');
+      var rows = [];
+      function show(kind, text) { msg.textContent = ''; if (text) msg.appendChild(h('div', { class: 'msg ' + kind, text: text })); }
+      function sel(options, value) {
+        var el = h('select');
+        options.forEach(function (o) { el.appendChild(h('option', { value: String(o[0]), text: o[1] })); });
+        el.value = String(value);
+        if (el.value !== String(value)) { el.appendChild(h('option', { value: String(value), text: String(value) })); el.value = String(value); }
+        return el;
+      }
+      function addSource(src) {
+        src = src || { name: '', video: '', audio: '', size: '1280x720', fps: 30, bitrate: 4000, encoder: 'x264', inputFormat: '' };
+        var f = {
+          id: src.id,
+          name: h('input', { type: 'text', value: src.name, placeholder: 'e.g. Console HDMI', autocomplete: 'off' }),
+          video: h('input', { type: 'text', value: src.video, placeholder: '/dev/video0', list: 'dl-video', autocomplete: 'off', autocapitalize: 'off', spellcheck: 'false' }),
+          audio: h('input', { type: 'text', value: src.audio, placeholder: 'hw:1,0 (leave empty for no sound)', list: 'dl-audio', autocomplete: 'off', autocapitalize: 'off', spellcheck: 'false' }),
+          size: sel([['1920x1080', '1920x1080'], ['1280x720', '1280x720'], ['854x480', '854x480'], ['640x480', '640x480']], src.size),
+          fps: sel([[25, '25 fps'], [30, '30 fps'], [50, '50 fps'], [60, '60 fps']], src.fps),
+          bitrate: h('input', { type: 'number', value: String(src.bitrate), min: '500', max: '20000', step: '500' }),
+          encoder: sel([['x264', 'CPU (x264) - works everywhere'], ['vaapi', 'Intel/AMD GPU (VAAPI)'], ['nvenc', 'NVIDIA GPU (NVENC)']], src.encoder),
+          fmt: sel([['', 'Automatic'], ['mjpeg', 'MJPEG'], ['yuyv422', 'YUYV (uncompressed)'], ['h264', 'H.264 (camera encodes)'], ['nv12', 'NV12']], src.inputFormat || '')
+        };
+        var box = h('div', { class: 'prov srcbox' },
+          h('div', { class: 'field' }, h('label', { text: 'Channel name' }), f.name),
+          h('div', { class: 'row2' }, h('div', { class: 'field' }, h('label', { text: 'Video device' }), f.video), h('div', { class: 'field' }, h('label', { text: 'Audio device' }), f.audio)),
+          h('div', { class: 'row2' }, h('div', { class: 'field' }, h('label', { text: 'Resolution' }), f.size), h('div', { class: 'field' }, h('label', { text: 'Frame rate' }), f.fps)),
+          h('div', { class: 'row2' }, h('div', { class: 'field' }, h('label', { text: 'Video bitrate (kbps)' }), f.bitrate), h('div', { class: 'field' }, h('label', { text: 'Encoder' }), f.encoder)),
+          h('div', { class: 'field' }, h('label', { text: 'Device output format' }), f.fmt),
+          h('button', { class: 'btn danger', type: 'button', text: 'Remove this source', onclick: function () { rows.splice(rows.indexOf(f), 1); box.remove(); } }));
+        f.box = box;
+        rows.push(f);
+        srcBox.appendChild(box);
+      }
+      function rec() {
+        return {
+          id: p ? p.id : undefined, type: 'local', name: name.value.trim(), enabled: on.checked,
+          sources: rows.map(function (f) { return { id: f.id, name: f.name.value.trim(), video: f.video.value.trim(), audio: f.audio.value.trim(), size: f.size.value, fps: Number(f.fps.value), bitrate: Number(f.bitrate.value) || 4000, encoder: f.encoder.value, inputFormat: f.fmt.value }; })
+        };
+      }
+      function save(next) {
+        api('/api/providers', { method: 'PUT', body: { providers: next } }).then(function () { done(); list(); }).catch(function (e) { show('bad', e.message); });
+      }
+      (p && p.sources.length ? p.sources : [null]).forEach(function (s0) { addSource(s0); });
+      api('/api/devices').then(function (d) {
+        d.video.forEach(function (v) { vlist.appendChild(h('option', { value: v.path, label: v.name })); });
+        vlist.appendChild(h('option', { value: 'test', label: 'Test pattern (no hardware needed)' }));
+        d.audio.forEach(function (a) { alist.appendChild(h('option', { value: a.id, label: a.name })); });
+        alist.appendChild(h('option', { value: 'test', label: 'Test tone' }));
+        devNote.textContent = (d.ffmpeg ? '' : 'ffmpeg is not installed in this container. ') +
+          (d.video.length ? 'Video devices seen by the container: ' + d.video.map(function (v) { return v.path + (v.name ? ' (' + v.name + ')' : ''); }).join(', ') + '.' : 'No video devices are visible inside the container. Add  devices: [/dev/video0, /dev/snd]  to the stack, then restart it. (You can still try the test pattern: type "test" as the video device.)') +
+          (d.audio.length ? ' Audio: ' + d.audio.map(function (a) { return a.id + ' (' + a.name + ')'; }).join(', ') + '.' : '');
+      }).catch(function (e) { devNote.textContent = e.message; });
+      m.setBody([
+        h('div', { class: 'field' }, h('label', { text: 'Name of this group' }), name),
+        devNote, vlist, alist, srcBox,
+        h('button', { class: 'btn', type: 'button', text: 'Add another source', onclick: function () { addSource(null); } }),
+        h('label', { class: 'check' }, on, h('span', { text: 'Enabled' })),
+        h('div', { class: 'note', text: 'The server encodes each source to H.264/AAC and shares it like any channel. It uses no provider connection. HDMI sources protected by HDCP cannot be captured.' }),
+        msg
+      ], [
+        p ? h('button', { class: 'btn', type: 'button', text: 'Remove', onclick: function () { save(provs.filter(function (x) { return x.id !== p.id; })); } }) : null,
+        h('button', { class: 'btn', type: 'button', text: 'Test', onclick: function () {
+          show('', 'Checking...');
+          api('/api/providers/test', { method: 'POST', body: { provider: rec() } }).then(function (r) { show(r.ok ? 'ok' : 'bad', r.ok ? 'Looks fine: ' + r.status : r.error); }).catch(function (e) { show('bad', e.message); });
+        } }),
+        h('button', { class: 'btn', type: 'button', text: 'Cancel', onclick: list }),
+        h('button', { class: 'btn on', type: 'button', text: 'Save', onclick: function () {
+          var r = rec();
+          var next = provs.map(function (x) { return x.id === (p && p.id) ? r : x; });
+          if (!p) next.push(r);
+          save(next);
+        } })
+      ]);
+      name.focus();
     }
     list();
   }
@@ -1110,7 +1702,7 @@
       case 'f': case 'F': toggleFullscreen(); break;
       case 's': case 'S': if (tile.cfg && isAdmin()) swapWithMain(S.sel); break;
       case 'z': case 'Z': if (tile.cfg) toggleZoom(S.sel); break;
-      case 'c': case 'C': if (isAdmin()) openPicker(S.sel); break;
+      case 'c': case 'C': if (isAdmin()) { e.preventDefault(); openPicker(S.sel); } break;
       case 'r': case 'R': tile.reload(); break;
       case 'i': case 'I': S.stats = !S.stats; document.body.classList.toggle('stats', S.stats); saveSoon(); break;
       case 'Delete': if (tile.cfg && isAdmin()) assign(S.sel, null); break;
@@ -1202,7 +1794,7 @@
     zoom = -1;
     var changed = [];
     for (var i = 0; i < SLOTS; i++) {
-      var c = v.tiles[i] || null;
+      var c = cleanTile(v.tiles[i]);
       if (!sameCfg(S.tiles[i], c)) {
         changed.push({ i: i, was: tiles[i].visible });
         tiles[i].stop();
@@ -1336,7 +1928,7 @@
     var out = [];
     for (var i = 0; i < SLOTS; i++) {
       var t = i < visibleCount() ? S.tiles[i] : null;
-      out.push(t ? { p: t.p, sid: String(t.sid), name: t.name || '', icon: t.icon || '' } : null);
+      out.push(cleanTile(t));
     }
     return out;
   }
@@ -1347,7 +1939,7 @@
     zoom = -1;
     for (var i = 0; i < SLOTS; i++) {
       var c = v.tiles[i] || null;
-      S.tiles[i] = c ? { p: c.p, sid: String(c.sid), name: c.name || '', icon: c.icon || '' } : null;
+      S.tiles[i] = cleanTile(c);
       tiles[i].stop();
       tiles[i].cfg = S.tiles[i];
       tiles[i].render();
@@ -1550,6 +2142,7 @@
         if (pick) applyView(pick); else openViews();
       }).catch(function (e) { banner('Cannot load multiviews: ' + e.message); });
       viewPoll = setInterval(pollViews, 15000);
+      setTimeout(pollEpg, 2500);
       return;
     }
     S.tiles.forEach(function (c, i) { if (c) { tiles[i].cfg = c; tiles[i].render(); if (i < visibleCount()) tiles[i].start(); } });
@@ -1559,6 +2152,7 @@
       updateHint();
     });
     pollTimer = setInterval(refreshState, 5000);
+    setTimeout(pollEpg, 2500);
     if (tiles[S.sel] && !modals.length) tiles[S.sel].el.focus();
   }
 

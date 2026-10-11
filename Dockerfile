@@ -1,6 +1,7 @@
 FROM node:22-alpine
 ENV NODE_ENV=production PORT=1234 DATA_DIR=/data
-RUN apk add --no-cache su-exec
+# ffmpeg is only used for local capture cards (Providers > Add capture card)
+RUN apk add --no-cache su-exec ffmpeg
 WORKDIR /app
 COPY package.json ./
 COPY src ./src

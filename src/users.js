@@ -169,9 +169,12 @@ class Views {
     const tiles = [];
     for (let i = 0; i < SLOTS; i++) {
       const t = src[i];
-      tiles.push(t && typeof t.p === 'string' && t.p && t.sid != null && String(t.sid)
-        ? { p: t.p, sid: String(t.sid), name: String(t.name || '').slice(0, 120), icon: String(t.icon || '').slice(0, 500) }
-        : null);
+      let tile = null;
+      if (t && typeof t.p === 'string' && t.p && t.sid != null && String(t.sid)) {
+        tile = { p: t.p, sid: String(t.sid), name: String(t.name || '').slice(0, 120), icon: String(t.icon || '').slice(0, 500) };
+        if (t.vod === 'movie' || t.vod === 'series') { tile.vod = t.vod; tile.ext = String(t.ext || 'mp4').replace(/[^a-z0-9]/gi, '').slice(0, 5) || 'mp4'; }
+      }
+      tiles.push(tile);
     }
     const users = body.users !== undefined ? body.users : (old && old.users) || [];
     if (!Array.isArray(users)) throw httpError(400, 'users must be a list');

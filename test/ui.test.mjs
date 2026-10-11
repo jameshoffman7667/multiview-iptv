@@ -135,8 +135,7 @@ describe('browser', () => {
   test('picker: search across providers, choose, persists across reload, stream URL carries buffer', async () => {
     const { ctx, page, errors } = await openPage();
     await page.evaluate(() => window.__mv.setLayout('1+7'));
-    await page.click('.tile[data-idx="0"]');
-    await page.keyboard.press('Enter');
+    await page.click('.tile[data-idx="0"]');   // an empty tile opens the picker
     await page.waitForSelector('.modal h2');
     assert.match(await page.textContent('.modal h2'), /Choose channel for tile 1/);
     await page.waitForFunction(() => document.querySelectorAll('.ch .pick').length === 5);
@@ -362,6 +361,132 @@ describe('browser', () => {
     const r = await rects(page);
     assert.equal(r.length, 4);
     for (const t of r) assert.ok(t.w > 150 && t.h > 100);
+    assert.deepEqual(errors, []);
+    await ctx.close();
+  });
+
+  test('guide: grid with programmes, pick from it, "now" shows under the channel name, programme search', async () => {
+    const { ctx, page, errors } = await openPage({ viewport: { width: 1600, height: 1000 } });
+    await page.evaluate(() => window.__mv.setLayout('1'));
+    await page.click('.tile[data-idx="0"]');   // an empty tile opens the picker
+    await page.waitForSelector('.modal .tabs');
+    await page.selectOption('select[aria-label="Provider"]', 'p1');
+    await page.click('.tab:has-text("Guide")');
+    await page.waitForSelector('.guide .grow .prog');
+    const row1 = await page.$$eval('.guide .grow:nth-child(2) .prog', (e) => e.map((x) => x.textContent));
+    assert.ok(row1.includes('Now Show 1-1 & Friends'), row1.join('|'));
+    assert.equal(await page.locator('.guide .gruler span').count(), 6);
+    // right arrow moves along the row, down moves to the next channel at the same time
+    await page.focus('.guide .grow:nth-child(2) .gch');
+    await page.keyboard.press('ArrowRight');
+    assert.equal(await page.evaluate(() => document.activeElement.className.includes('prog')), true);
+    await page.keyboard.press('ArrowDown');
+    const act = await page.evaluate(() => ({ key: document.activeElement.getAttribute('data-key'), cls: document.activeElement.className }));
+    assert.equal(act.key, 'p1:2');
+    // choose a programme: the channel goes onto the tile
+    await page.click('.guide .grow:nth-child(2) .prog.now');
+    await page.waitForFunction(() => window.__mv.S.tiles[0] && window.__mv.S.tiles[0].sid === '1');
+    await page.waitForFunction(() => /Now: Now Show 1-1/.test(document.querySelector('.tile[data-idx="0"] .label').textContent), null, { timeout: 6000 });
+    // programme search
+    await page.keyboard.press('c');
+    await page.waitForSelector('.modal .tabs');
+    assert.equal(await page.evaluate(() => document.querySelector('.tab.on').textContent), 'Guide', 'the picker reopens on the Guide tab');
+    await page.fill('.search', 'now show 2');
+    await page.waitForFunction(() => document.querySelectorAll('.chlist .ch .pick').length >= 1);
+    assert.match(await page.textContent('.chlist .ch .nm'), /Now Show 2-1/);
+    assert.deepEqual(errors, []);
+    await ctx.close();
+  });
+
+  test('movies and series: lists, categories, a movie goes to a tile as a file, episodes by season', async () => {
+    const { ctx, page, errors } = await openPage();
+    await page.evaluate(() => window.__mv.setLayout('1'));
+    await page.click('.tile[data-idx="0"]');   // an empty tile opens the picker
+    await page.waitForSelector('.modal .tabs');
+    await page.click('.tab:has-text("Movies")');
+    await page.waitForFunction(() => document.querySelectorAll('.chlist .pick').length === 2);
+    assert.equal(await page.inputValue('select[aria-label="Provider"]'), 'p1', 'movies need one provider: the first is chosen');
+    assert.deepEqual(await page.$$eval('select[aria-label="Category"] option', (o) => o.map((x) => x.textContent)), ['All categories', 'Action', 'Comedy']);
+    await page.selectOption('select[aria-label="Category"]', 'Action');
+    assert.equal(await page.locator('.chlist .pick').count(), 1);
+    await page.click('.chlist .pick');
+    await page.waitForFunction(() => window.__mv.S.tiles[0] && window.__mv.S.tiles[0].vod === 'movie');
+    const cfg = await page.evaluate(() => window.__mv.S.tiles[0]);
+    assert.deepEqual(cfg, { p: 'p1', sid: 'movie:501', name: 'Big Movie', icon: '', vod: 'movie', ext: 'mp4' });
+    const src = await page.evaluate(() => document.querySelector('.tile[data-idx="0"] video').getAttribute('src'));
+    assert.ok(src.endsWith('/vod/p1/movie%3A501.mp4'), src);
+    assert.equal(await page.evaluate(() => window.__players.length), 0, 'a movie does not use the live player');
+    assert.equal(await page.evaluate(() => document.querySelector('.tile[data-idx="0"] video').controls), true);
+    // series -> episodes
+    await page.keyboard.press('c');
+    await page.waitForSelector('.modal .tabs');
+    await page.click('.tab:has-text("Series")');
+    await page.waitForFunction(() => document.querySelectorAll('.chlist .pick').length === 1);
+    await page.click('.chlist .pick');
+    await page.waitForFunction(() => document.querySelectorAll('.modal').length === 2 && document.querySelectorAll('.modal-back:last-of-type .pick').length === 2);
+    assert.deepEqual(await page.$$eval('.modal-back:last-of-type select option', (o) => o.map((x) => x.textContent)), ['Season 1 (2 episodes)', 'Season 2 (1 episodes)']);
+    await page.selectOption('.modal-back:last-of-type select', '1');
+    await page.waitForFunction(() => document.querySelectorAll('.modal-back:last-of-type .pick').length === 1);
+    await page.click('.modal-back:last-of-type .pick');
+    await page.waitForFunction(() => window.__mv.S.tiles[0] && window.__mv.S.tiles[0].vod === 'series');
+    const ep = await page.evaluate(() => window.__mv.S.tiles[0]);
+    assert.equal(ep.sid, 'series:9003');
+    assert.equal(ep.ext, 'mkv');
+    assert.equal(ep.name, 'Long Show S2E1 Return');
+    assert.equal(await page.evaluate(() => window.__mv.modals), 0);
+    assert.deepEqual(errors, []);
+    await ctx.close();
+  });
+
+  test('long buffer: settings offer minutes, the stream asks for that much, a memory note appears', async () => {
+    const { ctx, page, errors } = await openPage({ state: { layout: '1', tiles: [{ p: 'p1', sid: '1', name: 'ESPN' }], bufSec: 4 } });
+    await page.keyboard.press('Escape');
+    await page.evaluate(() => document.getElementById('btn-settings').click());
+    await page.waitForSelector('.modal h2');
+    const opts = await page.$$eval('.modal select:nth-of-type(1) option', (o) => o.map((x) => x.value));
+    assert.ok(opts.includes('300') && opts.includes('120') && opts.includes('60'), opts.join(','));
+    await page.selectOption('.modal .field:nth-child(1) select', '120');
+    assert.match(await page.textContent('.modal .note'), /2 minutes/);
+    await page.keyboard.press('Escape');
+    await page.evaluate(() => window.__mv.tiles[0].reload());
+    await page.waitForFunction(() => window.__players.length === 2);
+    assert.match(await page.evaluate(() => window.__players[1].ds.url), /\?buf=120$/);
+    // a 2 minute start waits for ~96 s of video and keeps asking while data arrives
+    await page.evaluate(() => { document.querySelector('video').__ahead = 40; });
+    await page.waitForTimeout(900);
+    assert.match(await page.textContent('.tile .status'), /Buffering 40 \/ 96 s/);
+    assert.equal(await page.evaluate(() => window.__calls.filter((c) => c[0] === 'play').length), 0);
+    await page.evaluate(() => { document.querySelector('video').__ahead = 97; });
+    await page.waitForFunction(() => window.__calls.some((c) => c[0] === 'play'), null, { timeout: 3000 });
+    assert.deepEqual(errors, []);
+    await ctx.close();
+  });
+
+  test('capture card: add one in the providers window, it becomes a provider with a source', async () => {
+    const { ctx, page, errors } = await openPage();
+    await page.evaluate(() => document.getElementById('btn-conn').click());
+    await page.waitForSelector('.modal .foot .btn:has-text("Add capture card")');
+    await page.click('.modal .foot .btn:has-text("Add capture card")');
+    await page.waitForSelector('.srcbox');
+    await page.waitForFunction(() => /No video devices|Video devices seen/.test(document.querySelector('.modal .note').textContent));
+    const inputs = await page.$$('.srcbox input[type=text]');
+    await inputs[0].fill('Test card');
+    await inputs[1].fill('test');
+    await inputs[2].fill('test');
+    await page.click('.modal .foot .btn:has-text("Test")');
+    await page.waitForSelector('.msg.ok, .msg.bad');
+    await page.click('.modal .foot .btn.on');
+    await page.waitForFunction(() => /Capture card/.test(document.body.textContent));
+    const provs = await page.evaluate(() => fetch('/api/providers').then((r) => r.json()));
+    const cap = provs.providers.find((p) => p.type === 'local');
+    assert.ok(cap);
+    assert.deepEqual(cap.sources.map((x) => [x.name, x.video, x.audio]), [['Test card', 'test', 'test']]);
+    // clean up so other tests see the original providers
+    const restore = [
+      { id: 'p1', name: 'Alpha', url: p1.url, username: 'u1', password: 'pw1', maxConnections: 2 },
+      { id: 'p2', name: 'Beta', url: p2.url, username: 'u2', password: 'pw2', maxConnections: 1 },
+    ];
+    await page.evaluate((list) => fetch('/api/providers', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ providers: list }) }), restore);
     assert.deepEqual(errors, []);
     await ctx.close();
   });
@@ -620,8 +745,7 @@ describe('real player, many streams, picker categories', () => {
     const page = await ctx.newPage();
     await page.goto(base);
     await page.waitForFunction(() => window.__mv && window.__mv.ME);
-    await page.click('.tile[data-idx="0"]');
-    await page.keyboard.press('Enter');
+    await page.click('.tile[data-idx="0"]');   // an empty tile opens the picker
     await page.waitForSelector('.chlist .ch');
     const opts = await page.$$eval('select[aria-label="Category"] option', (o) => o.map((x) => x.textContent));
     assert.equal(await page.$eval('select[aria-label="Category"]', (s) => s.disabled), false);
@@ -639,12 +763,96 @@ describe('real player, many streams, picker categories', () => {
     const page2 = await ctx2.newPage();
     await page2.goto(base);
     await page2.waitForFunction(() => window.__mv && window.__mv.ME);
-    await page2.click('.tile[data-idx="0"]');
-    await page2.keyboard.press('Enter');
+    await page2.click('.tile[data-idx="0"]');   // an empty tile opens the picker
     await page2.waitForSelector('.chlist .ch');
     const opts2 = await page2.$$eval('select[aria-label="Category"] option', (o) => o.map((x) => x.textContent));
     assert.deepEqual(opts2, ['All categories', 'Other', 'UK', 'US']);
     p1.noCategories = false;
     await ctx2.close();
+  });
+
+});
+
+describe('browser: picker remembers its place', () => {
+  let browser; let app; let base; let dir; let big;
+  before(async () => {
+    const channels = [];
+    for (let i = 1; i <= 600; i++) channels.push({ id: 1000 + i, name: `Chan ${String(i).padStart(3, '0')}`, cat: i <= 300 ? '10' : '20' });
+    big = await new MockProvider({ user: 'u', pass: 'p', max: 2, kbps: 500, channels }).listen();
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mv-pk-'));
+    fs.writeFileSync(path.join(dir, 'providers.json'), JSON.stringify({ providers: [{ id: 'big', name: 'Big', url: big.url, username: 'u', password: 'p', maxConnections: 2 }] }));
+    app = createApp({ dataDir: dir, basicAuth: '', relay: { idleMs: 500 } });
+    await new Promise((r) => app.server.listen(0, '127.0.0.1', r));
+    base = `http://127.0.0.1:${app.server.address().port}`;
+    await app.lists.get(app.config.get('big'));
+    browser = await chromium.launch(process.env.CHROME ? { executablePath: process.env.CHROME } : {});
+  });
+  after(async () => { await browser.close(); app.close(); await big.close(); fs.rmSync(dir, { recursive: true, force: true }); });
+
+  async function page1() {
+    const ctx = await browser.newContext({ viewport: { width: 1400, height: 900 } });
+    await ctx.route('**/vendor/mpegts.js', (route) => route.fulfill({ contentType: 'text/javascript', body: FAKE_MPEGTS }));
+    await ctx.addInitScript(MEDIA_STUBS);
+    const page = await ctx.newPage();
+    await page.goto(base);
+    await page.waitForFunction(() => window.__mv && window.__mv.ME);
+    return { ctx, page };
+  }
+
+  test('category, search, rows expanded and the chosen channel are restored (also after a reload)', async () => {
+    const { ctx, page } = await page1();
+    await page.click('.tile[data-idx="0"]');   // an empty tile opens the picker
+    await page.waitForSelector('.chlist .ch');
+    await page.selectOption('select[aria-label="Category"]', 'UK');
+    for (let i = 0; i < 2; i++) {
+      await page.click('.more-row .btn');
+    }
+    const picks = page.locator('.chlist .pick');
+    assert.equal(await picks.count(), 300, 'UK has 300 channels: 100 + 2 x 150 shown');
+    const target = page.locator('.chlist .pick', { hasText: 'Chan 520' });
+    await target.scrollIntoViewIfNeeded();
+    await target.click();
+    await page.waitForFunction(() => window.__mv.S.tiles[0] && window.__mv.S.tiles[0].name === 'Chan 520');
+    assert.equal(await page.evaluate(() => window.__mv.modals), 0);
+
+    for (const reload of [false, true]) {
+      if (reload) {
+        await page.waitForTimeout(400);
+        await page.reload();
+        await page.waitForFunction(() => window.__mv && window.__mv.ME);
+      }
+      await page.click('.tile[data-idx="1"]');   // an empty tile opens the picker
+      await page.waitForSelector('.chlist .ch .pick');
+      assert.equal(await page.inputValue('select[aria-label="Category"]'), 'UK', 'category remembered');
+      await page.waitForFunction(() => document.activeElement && document.activeElement.getAttribute('data-key') === 'big:1520');
+      assert.equal(await page.locator('.chlist .pick').count(), 300, 'expanded rows remembered');
+      const inView = await page.evaluate(() => { const r = document.activeElement.getBoundingClientRect(); const b = document.querySelector('.modal .body').getBoundingClientRect(); return r.top >= b.top - 1 && r.bottom <= b.bottom + 1; });
+      assert.equal(inView, true, 'the last channel is scrolled into view');
+      await page.keyboard.press('Escape');
+    }
+  });
+
+  test('closing without choosing keeps filters and scroll; Reset filters clears them', async () => {
+    const { ctx, page } = await page1();
+    await page.click('.tile[data-idx="0"]');   // an empty tile opens the picker
+    await page.waitForSelector('.chlist .ch');
+    await page.fill('.search', 'Chan 07');
+    await page.waitForFunction(() => document.querySelectorAll('.chlist .pick').length === 16);
+    await page.click('.modal .btn:has-text("Favorites")');
+    await page.waitForTimeout(400);
+    await page.keyboard.press('Escape');
+    await page.keyboard.press('c');
+    await page.waitForSelector('.modal .search');
+    assert.equal(await page.inputValue('.search'), 'Chan 07');
+    assert.equal(await page.evaluate(() => document.querySelector('.modal .btn.on:not(.tab)') !== null), true, 'favorites toggle is remembered');
+    await page.click('.modal .btn:has-text("Reset filters")');
+    assert.equal(await page.inputValue('.search'), '');
+    await page.waitForFunction(() => document.querySelectorAll('.chlist .pick').length === 100);
+    await page.keyboard.press('Escape');
+    const pk = await page.evaluate(() => window.__mv.S.pk);
+    assert.equal(pk.q, '');
+    assert.equal(pk.favs, false);
+    assert.equal(pk.last, '');
+    await ctx.close();
   });
 });

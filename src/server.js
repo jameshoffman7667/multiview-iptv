@@ -6,6 +6,10 @@ const zlib = require('zlib');
 const crypto = require('crypto');
 const { Config, httpError } = require('./config');
 const { Lists } = require('./lists');
+const { Epg } = require('./epg');
+const capture = require('./capture');
+const { Readable } = require('stream');
+const { pipeline } = require('stream/promises');
 const { Relay, Client } = require('./relay');
 const xtream = require('./xtream');
 const { Users, Views } = require('./users');
@@ -20,6 +24,8 @@ function createApp(options = {}) {
   const basicAuth = options.basicAuth !== undefined ? options.basicAuth : env('BASIC_AUTH', '');
   const config = new Config(dataDir);
   const lists = new Lists(config, dataDir);
+  const epg = new Epg(config, lists);
+  const seriesCache = new Map(); // "provider:id" -> { at, info }
   const users = new Users(dataDir);
   const views = new Views(dataDir);
   const adminUser = options.adminUser !== undefined ? options.adminUser : env('ADMIN_USER', '');
@@ -30,7 +36,7 @@ function createApp(options = {}) {
   const streamsByUser = new Map(); // username -> Set<res>
   const failures = new Map();      // ip -> { n, until }
   const relay = new Relay(config, lists, {
-    ringBytes: Number(env('RING_MB', 16)) * MB,
+    ringBytes: Number(env('RING_MB', 32)) * MB,
     idleMs: Number(env('IDLE_SECONDS', 8)) * 1000,
     stallMs: Number(env('STALL_SECONDS', 15)) * 1000,
     ...(options.relay || {}),
@@ -174,7 +180,7 @@ function createApp(options = {}) {
   async function handleStream(req, res, url, m, me) {
     const providerId = decodeURIComponent(m[1]);
     const sid = decodeURIComponent(m[2]);
-    const burst = Math.max(0, Math.min(30, Number(url.searchParams.get('buf')) || 0));
+    const burst = Math.max(0, Math.min(300, Number(url.searchParams.get('buf')) || 0));
     const failover = url.searchParams.get('failover') !== '0';
     try {
       await runStream(me, providerId, sid, res, {
@@ -197,6 +203,48 @@ function createApp(options = {}) {
     }
   }
 
+  // ---- movies and episodes: a range-capable pass-through. Each one holds a provider connection slot while it plays.
+  const vodResponses = new Set(); // { providerId, res }
+  function killVod(providerId) { for (const v of [...vodResponses]) if (v.providerId === providerId) v.res.destroy(); }
+  const VOD_TYPES = { mp4: 'video/mp4', m4v: 'video/mp4', mkv: 'video/x-matroska', webm: 'video/webm', ts: 'video/mp2t', avi: 'video/x-msvideo', mov: 'video/quicktime' };
+
+  async function handleVod(req, res, url, m, me) {
+    if (!me) throw httpError(401, 'Login required', 'login_required');
+    const providerId = decodeURIComponent(m[1]);
+    const fm = /^(movie|series):([A-Za-z0-9_-]{1,40})\.([a-z0-9]{1,5})$/.exec(decodeURIComponent(m[2]));
+    if (!fm) throw httpError(404, 'Not found');
+    const sid = `${fm[1]}:${fm[2]}`;
+    if (me.role !== 'admin' && !views.allows(me, providerId, sid)) throw httpError(403, 'That title is not in a multiview shared with you', 'not_allowed');
+    const prov = config.get(providerId);
+    if (!prov || !prov.enabled || prov.type === 'local') throw httpError(404, 'Unknown or disabled provider');
+    const release = relay.acquireVod(prov, sid); // throws a 503 when the provider is full
+    const ac = new AbortController();
+    const rec = { providerId, res };
+    vodResponses.add(rec);
+    let mine = null;
+    if (me.username) { mine = streamsByUser.get(me.username); if (!mine) { mine = new Set(); streamsByUser.set(me.username, mine); } mine.add(res); }
+    res.on('close', () => {
+      ac.abort();
+      release();
+      vodResponses.delete(rec);
+      if (mine) { mine.delete(res); if (!mine.size) streamsByUser.delete(me.username); }
+    });
+    const headers = { 'User-Agent': xtream.ua(prov), Accept: '*/*' };
+    if (req.headers.range) headers.Range = req.headers.range;
+    let up;
+    try {
+      up = await fetch(xtream.vodUrl(prov, fm[1], fm[2], fm[3]), { headers, signal: ac.signal, redirect: 'follow' });
+    } catch (e) {
+      if (res.destroyed) return;
+      throw httpError(502, `Could not reach ${prov.name}: ${(e.cause && e.cause.code) || e.message}`);
+    }
+    if (!up.ok) throw httpError(up.status === 404 ? 404 : 502, `${prov.name} answered HTTP ${up.status} for this title`);
+    const out = { 'Content-Type': VOD_TYPES[fm[3]] || 'video/mp4', 'Cache-Control': 'no-store', 'Accept-Ranges': 'bytes' };
+    for (const k of ['content-length', 'content-range']) if (up.headers.get(k)) out[k] = up.headers.get(k);
+    res.writeHead(up.status, out);
+    await pipeline(Readable.fromWeb(up.body), res).catch(() => {});
+  }
+
   async function handleWs(req, socket) {
     const url = new URL(req.url, 'http://localhost');
     const m = /^\/ws\/stream\/([^/]+)\/([^/]+?)(?:\.ts)?$/.exec(url.pathname);
@@ -212,7 +260,7 @@ function createApp(options = {}) {
     const sink = new WsSink(socket);
     try {
       await runStream(me, providerId, sid, sink, {
-        burst: Math.max(0, Math.min(30, Number(url.searchParams.get('buf')) || 0)),
+        burst: Math.max(0, Math.min(300, Number(url.searchParams.get('buf')) || 0)),
         failover: url.searchParams.get('failover') !== '0',
         begin() {},
       });
@@ -325,6 +373,20 @@ function createApp(options = {}) {
       streamErrors.delete(k);
       return sendJson(req, res, 200, v && Date.now() - v.at < 30000 ? { error: v.error, message: v.message } : {});
     }
+    if (req.method === 'GET' && p === '/api/epg') {
+      if (!me) throw httpError(401, 'Login required', 'login_required');
+      const prov = config.get(url.searchParams.get('provider') || '');
+      if (!prov || prov.type === 'local') return sendJson(req, res, 200, { programmes: {}, available: false });
+      let sids = String(url.searchParams.get('sids') || '').split(',').map((x) => x.trim()).filter((x) => /^[A-Za-z0-9_-]{1,40}$/.test(x)).slice(0, 200);
+      if (me.role !== 'admin') sids = sids.filter((x) => views.allows(me, prov.id, x));
+      const now = Math.floor(Date.now() / 1000);
+      const from = Number(url.searchParams.get('from')) || now - 1800;
+      const to = Math.min(Number(url.searchParams.get('to')) || from + 3 * 3600, from + 36 * 3600);
+      const progs = await epg.forChannels(prov, sids, from, to);
+      if (url.searchParams.get('desc') !== '1') for (const k of Object.keys(progs)) progs[k] = progs[k].map((x) => [x[0], x[1], x[2]]);
+      const entry = epg.data.get(prov.id);
+      return sendJson(req, res, 200, { from, to, available: !!(entry && entry.ok) || Object.values(progs).some((l) => l.length), programmes: progs });
+    }
     needAdmin(me);
     if (req.method === 'GET' && p === '/api/state') {
       return sendJson(req, res, 200, relay.state());
@@ -335,8 +397,8 @@ function createApp(options = {}) {
     if (req.method === 'PUT' && p === '/api/providers') {
       const body = await readJson(req);
       const { removed, changed } = config.replace(body.providers);
-      for (const id of removed) { relay.closeProvider(id, 'provider removed'); lists.forget(id); views.forgetProvider(id); }
-      for (const id of changed) { relay.closeProvider(id, 'provider changed'); lists.forget(id); }
+      for (const id of removed) { relay.closeProvider(id, 'provider removed'); killVod(id); lists.forget(id); epg.forget(id); views.forgetProvider(id); }
+      for (const id of changed) { relay.closeProvider(id, 'provider changed'); killVod(id); lists.forget(id); epg.forget(id); }
       lists.preload();
       return sendJson(req, res, 200, { providers: config.providers.map((x) => config.view(x)) });
     }
@@ -344,11 +406,43 @@ function createApp(options = {}) {
       const body = await readJson(req);
       try {
         const prov = config.forTest(body.provider || {});
+        if (prov.type === 'local') {
+          const d = capture.listDevices();
+          if (!d.ffmpeg) return sendJson(req, res, 200, { ok: false, error: 'ffmpeg is not installed in this container' });
+          const missing = prov.sources.filter((x) => x.video !== 'test' && !d.video.some((v) => v.path === x.video)).map((x) => x.video);
+          if (missing.length) return sendJson(req, res, 200, { ok: false, error: `Not visible inside the container: ${missing.join(', ')} (add it under "devices:" in the stack)` });
+          return sendJson(req, res, 200, { ok: true, status: `${prov.sources.length} source(s), ${d.ffmpeg.split(' ').slice(0, 3).join(' ')}`, maxConnections: 0, activeConnections: 0, expires: null });
+        }
         const info = await xtream.userInfo(prov);
         return sendJson(req, res, 200, { ok: true, ...info });
       } catch (e) {
         return sendJson(req, res, 200, { ok: false, error: e.message });
       }
+    }
+    if (req.method === 'GET' && p === '/api/devices') return sendJson(req, res, 200, capture.listDevices());
+    if (req.method === 'GET' && (p === '/api/vod' || p === '/api/series')) {
+      const prov = config.get(url.searchParams.get('provider') || '');
+      if (!prov || prov.type === 'local') throw httpError(404, 'Unknown provider');
+      if (p === '/api/vod') {
+        const kind = url.searchParams.get('kind') === 'series' ? 'series' : 'movie';
+        const e = await lists.get(prov, url.searchParams.get('refresh') === '1', kind);
+        return sendJson(req, res, 200, { provider: prov.id, kind, updated: e.updated, categories: e.categories, items: e.channels });
+      }
+      const id = url.searchParams.get('id') || '';
+      if (!/^[A-Za-z0-9_-]{1,40}$/.test(id)) throw httpError(400, 'Bad series id');
+      const k = `${prov.id}:${id}`;
+      let hit = seriesCache.get(k);
+      if (!hit || Date.now() - hit.at > 30 * 60 * 1000) {
+        hit = { at: Date.now(), info: await xtream.seriesInfo(prov, id) };
+        seriesCache.set(k, hit);
+        if (seriesCache.size > 300) seriesCache.delete(seriesCache.keys().next().value);
+      }
+      return sendJson(req, res, 200, hit.info);
+    }
+    if (req.method === 'GET' && p === '/api/epg-search') {
+      const prov = config.get(url.searchParams.get('provider') || '');
+      if (!prov || prov.type === 'local') throw httpError(404, 'Unknown provider');
+      return sendJson(req, res, 200, await epg.search(prov, url.searchParams.get('q') || ''));
     }
     if (req.method === 'GET' && p === '/api/channels') {
       const prov = config.get(url.searchParams.get('provider') || '');
@@ -391,6 +485,8 @@ function createApp(options = {}) {
       const me = whoIs(req);
       const sm = /^\/stream\/([^/]+)\/([^/]+?)(?:\.ts)?$/.exec(url.pathname);
       if (sm && req.method === 'GET') return await handleStream(req, res, url, sm, me);
+      const vm = /^\/vod\/([^/]+)\/([^/]+)$/.exec(url.pathname);
+      if (vm && req.method === 'GET') return await handleVod(req, res, url, vm, me);
       if (url.pathname.startsWith('/api/')) {
         if (req.method !== 'GET' && req.method !== 'HEAD') {
           if (!sameOrigin(req)) throw httpError(403, 'Cross-site request refused', 'forbidden');
@@ -421,7 +517,7 @@ function createApp(options = {}) {
     server.closeAllConnections();
   }
 
-  return { server, config, lists, relay, users, views, close };
+  return { server, config, lists, relay, users, views, epg, close };
 }
 
 module.exports = { createApp };

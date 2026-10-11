@@ -145,3 +145,34 @@ body.viewer .tile .empty b, body.viewer .tile .empty span { display: none; }
 .view-open:hover { background: #242833; }
 .view-open:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(77,163,255,.45); }
 .viewbtns { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+
+/* ---------- picker tabs, programme guide, what's-on-now ---------- */
+.tabs { display: flex; gap: 6px; margin-bottom: 8px; flex-wrap: wrap; }
+.tab { padding: 6px 14px; }
+.tab.on { background: #1d4f86; border-color: var(--accent); }
+.note.warn { color: var(--warn); }
+.tile .label .lname, .tile .label .lnow { display: block; overflow: hidden; text-overflow: ellipsis; }
+.tile .label .lnow { font-size: 11px; opacity: .85; }
+.tile .label .lnow:empty { display: none; }
+.tile video[controls] { z-index: 3; }
+.ch .chip.live { background: #1d4f86; color: #fff; }
+.ch .nm small { color: var(--dim); }
+.prov.srcbox { display: block; margin: 8px 0; padding: 8px 10px; }
+.guide { --gname: 170px; position: relative; display: flex; flex-direction: column; gap: 3px; }
+.grow { display: flex; align-items: stretch; gap: 4px; min-height: 40px; }
+.grow.ghead { min-height: 0; align-items: center; }
+.gnav { flex: none; width: var(--gname); display: flex; gap: 4px; }
+.gnav .btn { padding: 4px 6px; font-size: 12px; flex: 1; }
+.gruler { position: relative; flex: 1; height: 22px; font-size: 11px; color: var(--dim); }
+.gruler span { position: absolute; top: 3px; white-space: nowrap; }
+.gch { flex: none; width: var(--gname); display: flex; align-items: center; gap: 6px; text-align: left; padding: 4px 6px; border: 1px solid transparent; border-radius: 6px; background: var(--panel2); overflow: hidden; }
+.gch img, .gch .noimg { width: 24px; height: 24px; flex: none; object-fit: contain; background: #0d0f13; border-radius: 3px; }
+.gch span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+.gline { position: relative; flex: 1; min-width: 0; background: #0d0f13; border-radius: 6px; overflow: hidden; }
+.prog { position: absolute; top: 1px; bottom: 1px; padding: 2px 6px; border: 1px solid #2a2f3b; border-radius: 5px; background: var(--panel2); text-align: left; overflow: hidden; font-size: 12px; box-sizing: border-box; }
+.prog span { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.prog.now { background: #17324f; border-color: #2c5f95; }
+.prog:hover { background: #242833; }
+.gch:focus, .prog:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(77,163,255,.5); position: relative; z-index: 2; }
+.gnow { position: absolute; top: 28px; bottom: 0; width: 2px; background: var(--bad); opacity: .8; pointer-events: none; z-index: 1; }
+@media (max-width: 700px) { .guide { --gname: 110px; } }

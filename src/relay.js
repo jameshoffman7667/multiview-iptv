@@ -3,6 +3,7 @@ const { PKT, SYNC, findAlignment, TsInfo, findBurstStart } = require('./ts');
 const { Ring } = require('./ring');
 const xtream = require('./xtream');
 const { httpError } = require('./config');
+const capture = require('./capture');
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const log = (...a) => console.log(new Date().toISOString().slice(11, 19), ...a);
@@ -82,26 +83,43 @@ class Upstream {
     }
   }
 
+  // Capture-card provider: run ffmpeg and use its stdout as the upstream.
+  openLocal(signal) {
+    const src = (this.provider.sources || []).find((x) => x.id === this.sid);
+    if (!src) { const e = httpError(404, 'No such capture source'); e.fatal = true; throw e; }
+    const cap = capture.start(src);
+    signal.addEventListener('abort', cap.kill, { once: true });
+    return cap;
+  }
+
   async pump(signal) {
-    const res = await fetch(xtream.streamUrl(this.provider, this.sid), {
-      signal,
-      redirect: 'follow',
-      headers: { 'User-Agent': xtream.ua(this.provider), Accept: '*/*' },
-    });
-    if (!res.ok) {
-      const e = httpError(502, `HTTP ${res.status}`);
-      e.status = res.status;
-      e.limit = res.status === 403 || res.status === 429 || res.status === 509;
-      // a refusal right after we released a connection is usually the provider not having noticed yet
-      const settling = e.limit && this.mgr.recentlyClosed(this.provider.id);
-      e.fatal = !settling && this.state === 'connecting' && ((res.status >= 400 && res.status < 500) || res.status === 509);
-      throw e;
-    }
-    const ct = String(res.headers.get('content-type') || '').toLowerCase();
-    if (ct.includes('mpegurl') || ct.includes('text/html')) {
-      const e = httpError(502, 'provider returned a playlist/page instead of an MPEG-TS stream');
-      e.fatal = true;
-      throw e;
+    let body;
+    let cap = null;
+    if (this.provider.type === 'local') {
+      cap = this.openLocal(signal);
+      body = cap.body;
+    } else {
+      const res = await fetch(xtream.streamUrl(this.provider, this.sid), {
+        signal,
+        redirect: 'follow',
+        headers: { 'User-Agent': xtream.ua(this.provider), Accept: '*/*' },
+      });
+      if (!res.ok) {
+        const e = httpError(502, `HTTP ${res.status}`);
+        e.status = res.status;
+        e.limit = res.status === 403 || res.status === 429 || res.status === 509;
+        // a refusal right after we released a connection is usually the provider not having noticed yet
+        const settling = e.limit && this.mgr.recentlyClosed(this.provider.id);
+        e.fatal = !settling && this.state === 'connecting' && ((res.status >= 400 && res.status < 500) || res.status === 509);
+        throw e;
+      }
+      const ct = String(res.headers.get('content-type') || '').toLowerCase();
+      if (ct.includes('mpegurl') || ct.includes('text/html')) {
+        const e = httpError(502, 'provider returned a playlist/page instead of an MPEG-TS stream');
+        e.fatal = true;
+        throw e;
+      }
+      body = res.body;
     }
     this.carry = Buffer.alloc(0);
     this.aligned = false;
@@ -114,15 +132,22 @@ class Upstream {
       if (Date.now() - this.lastData > this.mgr.opts.stallMs) { this.stalled = true; this.abort.abort(); }
     }, 2000);
     try {
-      for await (const chunk of res.body) {
+      for await (const chunk of body) {
         this.lastData = Date.now();
         this.onChunk(Buffer.from(chunk.buffer, chunk.byteOffset, chunk.byteLength));
         if (this.attempt && Date.now() - connectedAt > 10000) this.attempt = 0;
       }
     } finally {
       clearInterval(watchdog);
+      if (cap) cap.kill();
     }
     if (this.bytes === 0 && this.state === 'connecting') {
+      if (cap) {
+        const spawnErr = await Promise.race([cap.error, cap.exited.then(() => null), sleep(2500).then(() => null)]);
+        const e = httpError(502, spawnErr && spawnErr.code === 'ENOENT' ? 'ffmpeg is not installed in this container' : `ffmpeg stopped: ${cap.stderrTail() || 'no output (is the device in use or unplugged?)'}`);
+        e.fatal = true;
+        throw e;
+      }
       // some panels answer 200 and hang up at once when the account is out of connections
       const e = httpError(502, 'provider closed the connection without data (connection limit?)');
       e.fatal = !this.mgr.recentlyClosed(this.provider.id);
@@ -188,7 +213,7 @@ class Upstream {
     this.pending = Math.max(0, this.pending - 1);
     clearTimeout(this.idleTimer);
     const b = this.burst(burstSeconds);
-    if (b && b.length) client.send(b);
+    if (b && b.length) { client.grace(b.length); client.send(b); }
     this.clients.add(client);
   }
 
@@ -242,10 +267,46 @@ class Relay {
       maxRetries: 4,
       readyTimeoutMs: 25000,
       cooldownMs: 10000,
+      vodLingerMs: 15000,
     }, opts);
     this.map = new Map();
     this.cool = new Map(); // providerId -> time until we avoid it after a limit-like refusal
     this.closedAt = new Map(); // providerId -> when we last released a connection
+    this.vod = new Map(); // "providerId|key" -> { provider, n, timer }: movies/episodes being played (each holds a provider slot)
+  }
+
+  vodCount(providerId) {
+    let n = 0;
+    for (const v of this.vod.values()) if (v.provider.id === providerId) n++;
+    return n;
+  }
+
+  // Hold a provider connection slot for a movie or episode. Returns a release function.
+  // The slot is kept for a few seconds after the last request so a player's range requests do not lose it.
+  acquireVod(provider, key) {
+    const k = `${provider.id}|${key}`;
+    let v = this.vod.get(k);
+    if (!v) {
+      if (!this.makeRoom(provider)) {
+        const e = httpError(503, `No free connection at ${provider.name} (${this.activeCount(provider.id)}/${provider.maxConnections} in use)`, 'provider_limit');
+        e.limit = true;
+        throw e;
+      }
+      v = { provider, n: 0, timer: null };
+      this.vod.set(k, v);
+    }
+    clearTimeout(v.timer);
+    v.n++;
+    let done = false;
+    return () => {
+      if (done) return;
+      done = true;
+      v.n--;
+      if (v.n <= 0) {
+        v.timer = setTimeout(() => { if (v.n <= 0 && this.vod.get(k) === v) { this.vod.delete(k); this.markClosed(provider.id); } }, this.opts.vodLingerMs);
+        if (v.timer.unref) v.timer.unref();
+      }
+    };
   }
 
   markClosed(providerId) { this.closedAt.set(providerId, Date.now()); }
@@ -254,7 +315,7 @@ class Relay {
   activeCount(providerId) {
     let n = 0;
     for (const u of this.map.values()) if (u.provider.id === providerId && u.active) n++;
-    return n;
+    return n + this.vodCount(providerId);
   }
 
   // Free a slot for this provider if possible (evicting streams nobody is watching).
@@ -262,6 +323,14 @@ class Relay {
     if ((this.cool.get(provider.id) || 0) > Date.now()) return false;
     const max = Math.max(1, provider.maxConnections);
     if (this.activeCount(provider.id) < max) return true;
+    // a movie whose last request finished a moment ago only lingers to bridge range requests: it can be replaced
+    for (const [k, v] of [...this.vod]) {
+      if (v.provider.id === provider.id && v.n <= 0) {
+        clearTimeout(v.timer);
+        this.vod.delete(k);
+        if (this.activeCount(provider.id) < max) return true;
+      }
+    }
     const idle = [...this.map.values()].filter((u) => u.provider.id === provider.id && u.idle);
     for (const u of idle) {
       u.close('evicted for a new stream');
@@ -344,13 +413,19 @@ class Relay {
       seconds: Math.round((Date.now() - u.startedAt) / 1000),
       error: u.state === 'reconnecting' ? u.lastError : '',
     }));
+    for (const [k, v] of this.vod) {
+      if (v.n <= 0) continue;
+      const key = k.slice(k.indexOf('|') + 1);
+      streams.push({ key: k, providerId: v.provider.id, provider: v.provider.name, sid: key, name: key.replace(/^(movie|series):/, '$1 '), viewers: v.n, state: 'live', kbps: 0, seconds: 0, error: '', vod: true });
+    }
     const providers = this.config.providers.map((p) => ({
-      id: p.id, name: p.name, enabled: p.enabled, max: p.maxConnections, active: this.activeCount(p.id),
+      id: p.id, name: p.name, enabled: p.enabled, max: p.maxConnections, active: this.activeCount(p.id), local: p.type === 'local',
     }));
     return { providers, streams };
   }
 
   closeProvider(providerId, reason) {
+    for (const [k, v] of [...this.vod]) if (v.provider.id === providerId) { clearTimeout(v.timer); this.vod.delete(k); }
     for (const u of [...this.map.values()]) if (u.provider.id === providerId) u.close(reason);
   }
 
@@ -367,9 +442,16 @@ class Client {
     this.dead = false;
   }
 
+  // A long burst (minutes of video) is written in one go; do not count it against the slow-viewer limit while it drains.
+  grace(bytes) {
+    this.extra = (this.extra || 0) + bytes;
+    const t = setTimeout(() => { this.extra -= bytes; }, 60000);
+    if (t.unref) t.unref();
+  }
+
   send(chunk) {
     if (this.dead || this.res.destroyed) return;
-    if (this.res.writableLength > this.maxQueue) {
+    if (this.res.writableLength > this.maxQueue + (this.extra || 0)) {
       this.dead = true;
       log('viewer too slow; dropping it');
       this.res.destroy();

@@ -55,7 +55,103 @@ async function liveStreams(p) {
     n: String(s.name || ''),
     c: String(s.category_id == null ? '' : s.category_id),
     l: typeof s.stream_icon === 'string' ? s.stream_icon : '',
+    e: String(s.epg_channel_id || ''),
   }));
+}
+
+async function vodCategories(p) {
+  const j = await call(p, 'get_vod_categories', 60000);
+  if (!Array.isArray(j)) throw httpError(502, `${p.name}: unexpected movie category list`);
+  return j.map((c) => ({ id: String(c.category_id), name: String(c.category_name || '') }));
+}
+
+async function vodStreams(p) {
+  const j = await call(p, 'get_vod_streams', 180000);
+  if (!Array.isArray(j)) throw httpError(502, `${p.name}: unexpected movie list`);
+  return j.map((s) => ({
+    i: String(s.stream_id),
+    n: String(s.name || ''),
+    c: String(s.category_id == null ? '' : s.category_id),
+    l: typeof s.stream_icon === 'string' ? s.stream_icon : '',
+    x: String(s.container_extension || 'mp4').replace(/[^a-z0-9]/gi, '').slice(0, 5) || 'mp4',
+  }));
+}
+
+async function seriesCategories(p) {
+  const j = await call(p, 'get_series_categories', 60000);
+  if (!Array.isArray(j)) throw httpError(502, `${p.name}: unexpected series category list`);
+  return j.map((c) => ({ id: String(c.category_id), name: String(c.category_name || '') }));
+}
+
+async function seriesList(p) {
+  const j = await call(p, 'get_series', 180000);
+  if (!Array.isArray(j)) throw httpError(502, `${p.name}: unexpected series list`);
+  return j.map((s) => ({
+    i: String(s.series_id),
+    n: String(s.name || ''),
+    c: String(s.category_id == null ? '' : s.category_id),
+    l: typeof s.cover === 'string' ? s.cover : '',
+    x: '',
+  }));
+}
+
+// { seasons: [{ season, episodes: [{ id, num, title, ext, minutes }] }] }
+async function seriesInfo(p, seriesId) {
+  const u = apiUrl(p, 'get_series_info');
+  u.searchParams.set('series_id', String(seriesId));
+  const res = await fetch(u, { headers: { 'User-Agent': ua(p), Accept: 'application/json' }, signal: AbortSignal.timeout(30000) }).catch((e) => {
+    throw httpError(502, `Could not reach ${p.name}: ${(e.cause && e.cause.code) || e.message}`);
+  });
+  if (!res.ok) throw httpError(502, `${p.name} answered HTTP ${res.status}`);
+  const j = await res.json().catch(() => null);
+  const eps = j && j.episodes;
+  const seasons = [];
+  const groups = Array.isArray(eps) ? eps.map((list, i) => [String(i + 1), list]) : Object.entries(eps || {});
+  for (const [num, list] of groups) {
+    if (!Array.isArray(list)) continue;
+    seasons.push({
+      season: Number(num) || 0,
+      episodes: list.map((e) => ({
+        id: String(e.id),
+        num: Number(e.episode_num) || 0,
+        title: String(e.title || `Episode ${e.episode_num || ''}`).slice(0, 200),
+        ext: String(e.container_extension || 'mp4').replace(/[^a-z0-9]/gi, '').slice(0, 5) || 'mp4',
+        minutes: e.info && Number(e.info.duration_secs) ? Math.round(Number(e.info.duration_secs) / 60) : 0,
+      })).sort((a, b) => a.num - b.num),
+    });
+  }
+  seasons.sort((a, b) => a.season - b.season);
+  return { name: String((j && j.info && j.info.name) || ''), seasons };
+}
+
+function vodUrl(p, kind, id, ext) {
+  const enc = encodeURIComponent;
+  return `${p.url}/${kind === 'series' ? 'series' : 'movie'}/${enc(p.username)}/${enc(p.password)}/${enc(id)}.${String(ext || 'mp4').replace(/[^a-z0-9]/gi, '') || 'mp4'}`;
+}
+
+async function shortEpg(p, sid, limit = 8) {
+  const u = apiUrl(p, 'get_short_epg');
+  u.searchParams.set('stream_id', String(sid));
+  u.searchParams.set('limit', String(limit));
+  const res = await fetch(u, { headers: { 'User-Agent': ua(p), Accept: 'application/json' }, signal: AbortSignal.timeout(15000) });
+  if (!res.ok) return [];
+  const j = await res.json().catch(() => null);
+  const list = j && Array.isArray(j.epg_listings) ? j.epg_listings : [];
+  const dec = (v) => { try { return Buffer.from(String(v || ''), 'base64').toString('utf8'); } catch { return ''; } };
+  const looksB64 = (v) => /^[A-Za-z0-9+/=]{4,}$/.test(String(v || '')) && String(v).length % 4 === 0;
+  return list.map((e) => ({
+    s: Number(e.start_timestamp) || 0,
+    e: Number(e.stop_timestamp) || 0,
+    t: String(looksB64(e.title) ? dec(e.title) : (e.title || '')).slice(0, 200),
+    d: String(looksB64(e.description) ? dec(e.description) : (e.description || '')).slice(0, 400),
+  })).filter((x) => x.s && x.e && x.t);
+}
+
+function xmltvUrl(p) {
+  const u = new URL(`${p.url}/xmltv.php`);
+  u.searchParams.set('username', p.username);
+  u.searchParams.set('password', p.password);
+  return u;
 }
 
 function streamUrl(p, sid) {
@@ -64,4 +160,4 @@ function streamUrl(p, sid) {
   return `${p.url}${tail}/${enc(p.username)}/${enc(p.password)}/${enc(sid)}.ts`;
 }
 
-module.exports = { userInfo, liveCategories, liveStreams, streamUrl, ua, DEFAULT_UA };
+module.exports = { userInfo, liveCategories, liveStreams, vodCategories, vodStreams, seriesCategories, seriesList, seriesInfo, vodUrl, shortEpg, xmltvUrl, streamUrl, ua, DEFAULT_UA };
