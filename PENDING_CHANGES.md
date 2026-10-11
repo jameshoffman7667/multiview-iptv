@@ -5,4 +5,4 @@ Requests logged here are not built yet. Say "build" to fold them into a new vers
 
 Current released version: 0.1.0
 
-(nothing pending)
+1. Change the default port from 8080 to 1234 (app default, Dockerfile, docker-compose.yml, stack.yml, README).
