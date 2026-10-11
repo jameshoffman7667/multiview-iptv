@@ -3,7 +3,8 @@ ENV NODE_ENV=production PORT=1234 DATA_DIR=/data
 # ffmpeg: local capture cards, the shared screen and 480p tile transcoding.
 # The VA drivers let ffmpeg encode on an Intel (intel-media-driver, Quick Sync) or AMD (mesa-va-gallium) GPU when
 # /dev/dri is passed into the container; without a GPU everything falls back to the CPU encoder.
-RUN apk add --no-cache su-exec ffmpeg libva-utils intel-media-driver mesa-va-gallium
+RUN apk add --no-cache su-exec ffmpeg \
+ && for pkg in libva-utils mesa-va-gallium intel-media-driver; do apk add --no-cache "$pkg" || echo "note: $pkg is not available for this CPU type"; done
 WORKDIR /app
 COPY package.json ./
 COPY src ./src
