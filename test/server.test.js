@@ -524,3 +524,131 @@ describe('accounts and shared multiviews', () => {
     fs.rmSync(d2, { recursive: true, force: true });
   });
 });
+
+describe('websocket streams', () => {
+  const net = require('node:net');
+  const crypto = require('node:crypto');
+  let p1;
+  let app;
+  let port;
+  let dir;
+
+  before(async () => {
+    p1 = await new MockProvider({ user: 'u1', pass: 'pw1', max: 3, kbps: 1000 }).listen();
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mv-ws-'));
+    app = createApp({ dataDir: dir, basicAuth: '', relay: { idleMs: 300 } });
+    await new Promise((r) => app.server.listen(0, '127.0.0.1', r));
+    port = app.server.address().port;
+    app.config.replace([{ id: 'p1', name: 'One', url: p1.url, username: 'u1', password: 'pw1', maxConnections: 3 }]);
+  });
+  after(async () => {
+    app.close();
+    await p1.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  // tiny WebSocket client: resolves with { status, frames: [{op, payload}], closeCode, closeReason }
+  function wsGet(pathname, { headers = {}, ms = 800, maxFrames = Infinity } = {}) {
+    return new Promise((resolve) => {
+      const key = crypto.randomBytes(16).toString('base64');
+      const sock = net.connect(port, '127.0.0.1');
+      const h = Object.assign({ Host: `127.0.0.1:${port}`, Upgrade: 'websocket', Connection: 'Upgrade', 'Sec-WebSocket-Key': key, 'Sec-WebSocket-Version': '13', Origin: `http://127.0.0.1:${port}` }, headers);
+      sock.write(`GET ${pathname} HTTP/1.1\r\n${Object.entries(h).map(([k, v]) => `${k}: ${v}`).join('\r\n')}\r\n\r\n`);
+      let buf = Buffer.alloc(0);
+      let status = 0;
+      let accept = '';
+      let body = Buffer.alloc(0);
+      const frames = [];
+      let done = false;
+      const finish = () => {
+        if (done) return;
+        done = true;
+        sock.destroy();
+        const close = frames.find((f) => f.op === 8);
+        resolve({ status, accept, key, frames, closeCode: close && close.payload.length >= 2 ? close.payload.readUInt16BE(0) : null, closeReason: close ? close.payload.subarray(2).toString() : '' });
+      };
+      setTimeout(finish, ms);
+      sock.on('close', finish);
+      sock.on('error', finish);
+      sock.on('data', (d) => {
+        buf = Buffer.concat([buf, d]);
+        if (!status) {
+          const i = buf.indexOf('\r\n\r\n');
+          if (i < 0) return;
+          const head = buf.subarray(0, i).toString();
+          status = Number(/^HTTP\/1\.1 (\d+)/.exec(head)[1]);
+          accept = (/sec-websocket-accept: (.+)/i.exec(head) || [])[1] || '';
+          buf = buf.subarray(i + 4);
+        }
+        for (;;) {
+          if (buf.length < 2) break;
+          let len = buf[1] & 0x7f;
+          let off = 2;
+          if (len === 126) { if (buf.length < 4) break; len = buf.readUInt16BE(2); off = 4; }
+          else if (len === 127) { if (buf.length < 10) break; len = buf.readUInt32BE(6); off = 10; }
+          if (buf.length < off + len) break;
+          frames.push({ op: buf[0] & 0x0f, payload: Buffer.from(buf.subarray(off, off + len)) });
+          buf = buf.subarray(off + len);
+          if (frames.length >= maxFrames) return finish();
+        }
+      });
+    });
+  }
+
+  test('handshake is correct and frames are whole 188-byte TS packets', async () => {
+    const r = await wsGet('/ws/stream/p1/1.ts?buf=0', { ms: 900 });
+    assert.equal(r.status, 101);
+    assert.equal(r.accept, crypto.createHash('sha1').update(r.key + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11').digest('base64'));
+    const bin = r.frames.filter((f) => f.op === 2);
+    assert.ok(bin.length >= 3, `got ${bin.length} binary frames`);
+    checkPackets(Buffer.concat(bin.map((f) => f.payload)));
+  });
+
+  test('websocket and http viewers share one provider connection; 9 sockets are fine', async () => {
+    await sleep(500);
+    p1.peak = p1.active;
+    const [a, b] = await Promise.all([wsGet('/ws/stream/p1/2.ts?buf=0', { ms: 1200 }), request(`http://127.0.0.1:${port}`, '/stream/p1/2.ts?buf=0', { ms: 1200 })]);
+    assert.equal(a.status, 101);
+    assert.equal(b.status, 200);
+    assert.equal(p1.peak, 1, `provider saw ${p1.peak} connections`);
+    const many = await Promise.all(Array.from({ length: 9 }, () => wsGet('/ws/stream/p1/3.ts?buf=0', { ms: 1200 })));
+    assert.ok(many.every((m) => m.status === 101 && m.frames.some((f) => f.op === 2)), 'all nine sockets got video');
+  });
+
+  test('unknown channels and the provider limit are reported through the stream-error endpoint', async () => {
+    const r = await wsGet('/ws/stream/p1/404.ts', { ms: 1500 });
+    assert.equal(r.status, 101);
+    assert.equal(r.closeCode, 1011);
+    const e = json(await request(`http://127.0.0.1:${port}`, '/api/stream-error?p=p1&sid=404'));
+    assert.ok(e.error, 'reason recorded');
+    assert.deepEqual(json(await request(`http://127.0.0.1:${port}`, '/api/stream-error?p=p1&sid=404')), {}, 'read once');
+  });
+
+  test('foreign origins, non-websocket requests and bad paths are refused', async () => {
+    assert.equal((await wsGet('/ws/stream/p1/1.ts', { headers: { Origin: 'http://evil.example' } })).status, 403);
+    assert.equal((await wsGet('/ws/other')).status, 404);
+    const r = await request(`http://127.0.0.1:${port}`, '/ws/stream/p1/1.ts');
+    assert.ok(r.status === 400 || r.status === 404 || r.status === 200 || r.status === 426 || r.status === 405 || r.status === 403 || r.status === 401);
+  });
+
+  test('with logins: no cookie is refused, viewers only get channels shared with them', async () => {
+    app.users.create({ username: 'boss', password: 'hunter22', role: 'admin' });
+    app.users.create({ username: 'vi', password: 'viewer22', role: 'viewer' });
+    app.views.create({ name: 'V', layout: '1', tiles: [{ p: 'p1', sid: '1', name: 'ESPN' }] });
+    const login = async (u, p) => (await request(`http://127.0.0.1:${port}`, '/api/login', { method: 'POST', body: { username: u, password: p } })).headers['set-cookie'][0].split(';')[0];
+    const boss = await login('boss', 'hunter22');
+    const vi = await login('vi', 'viewer22');
+    assert.equal((await wsGet('/ws/stream/p1/1.ts')).status, 401);
+    const ok = await wsGet('/ws/stream/p1/1.ts?buf=0', { headers: { Cookie: vi }, ms: 800 });
+    assert.equal(ok.status, 101);
+    assert.ok(ok.frames.some((f) => f.op === 2));
+    const no = await wsGet('/ws/stream/p1/2.ts?buf=0', { headers: { Cookie: vi }, ms: 800 });
+    assert.equal(no.status, 101);
+    assert.equal(no.closeCode, 1011);
+    assert.equal(no.closeReason, 'not_allowed');
+    const why = json(await request(`http://127.0.0.1:${port}`, '/api/stream-error?p=p1&sid=2', { headers: { Cookie: vi } }));
+    assert.equal(why.error, 'not_allowed');
+    const adm = await wsGet('/ws/stream/p1/2.ts?buf=0', { headers: { Cookie: boss }, ms: 800 });
+    assert.ok(adm.frames.some((f) => f.op === 2), 'admins can play any channel');
+  });
+});

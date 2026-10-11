@@ -9,6 +9,7 @@ const { Lists } = require('./lists');
 const { Relay, Client } = require('./relay');
 const xtream = require('./xtream');
 const { Users, Views } = require('./users');
+const { isUpgrade: isWsUpgrade, handshake: wsHandshake, WsSink } = require('./ws');
 
 const MB = 1024 * 1024;
 const env = (k, d) => (process.env[k] !== undefined && process.env[k] !== '' ? process.env[k] : d);
@@ -110,31 +111,50 @@ function createApp(options = {}) {
     });
   }
 
-  async function handleStream(req, res, url, m, me) {
-    const providerId = decodeURIComponent(m[1]);
-    const sid = decodeURIComponent(m[2]);
-    if (!me) return sendJson(req, res, 401, { error: 'login_required', message: 'Login required' });
+  // ---- streams (shared by plain HTTP and WebSocket delivery)
+  const streamErrors = new Map(); // "user|provider|sid" -> { error, message, at }: lets the page learn why a WebSocket stream closed
+  const errKey = (me, p, sid) => `${me && me.username ? me.username : ''}|${p}|${sid}`;
+  function noteStreamError(me, p, sid, d) {
+    streamErrors.set(errKey(me, p, sid), { error: d.error, message: d.message, at: Date.now() });
+    if (streamErrors.size > 500) for (const [k, v] of streamErrors) if (Date.now() - v.at > 60000) streamErrors.delete(k);
+  }
+
+  function streamDenied(me, providerId, sid) {
+    if (!me) return { status: 401, error: 'login_required', message: 'Login required' };
     if (me.role !== 'admin' && !views.allows(me, providerId, sid)) {
-      return sendJson(req, res, 403, { error: 'not_allowed', message: 'That channel is not in a multiview shared with you' });
+      return { status: 403, error: 'not_allowed', message: 'That channel is not in a multiview shared with you' };
     }
+    if (me.username && me.maxStreams > 0) {
+      const mine = streamsByUser.get(me.username);
+      if (mine && mine.size >= me.maxStreams) return { status: 429, error: 'user_limit', message: `Your account allows ${me.maxStreams} streams at once` };
+    }
+    return null;
+  }
+
+  function relayDenied(e) {
+    let status = e.status || 502;
+    if (e.limit) status = 503;
+    else if (status === 401 || status === 403) status = 502; // provider-side refusals are not ours to relay
+    return { status, error: e.limit ? 'provider_limit' : (e.code || 'stream_failed'), message: e.message };
+  }
+
+  // Attach `sink` (an HTTP response or a WebSocket) to the shared upstream. Throws { deny } when refused.
+  async function runStream(me, providerId, sid, sink, { burst, failover, begin }) {
+    const denied = streamDenied(me, providerId, sid);
+    if (denied) { const e = new Error(denied.message); e.deny = denied; throw e; }
     let mine = null;
     if (me.username) {
       mine = streamsByUser.get(me.username);
       if (!mine) { mine = new Set(); streamsByUser.set(me.username, mine); }
-      if (me.maxStreams > 0 && mine.size >= me.maxStreams) {
-        return sendJson(req, res, 429, { error: 'user_limit', message: `Your account allows ${me.maxStreams} streams at once` });
-      }
-      mine.add(res);
+      mine.add(sink);
     }
-    const burst = Math.max(0, Math.min(30, Number(url.searchParams.get('buf')) || 0));
-    const failover = url.searchParams.get('failover') !== '0';
-    const client = new Client(res, maxQueue);
+    const client = new Client(sink, maxQueue);
     let up = null;
     let attached = false;
     let gone = false;
-    res.on('close', () => {
+    sink.on('close', () => {
       gone = true;
-      if (mine) { mine.delete(res); if (!mine.size) streamsByUser.delete(me.username); }
+      if (mine) { mine.delete(sink); if (!mine.size) streamsByUser.delete(me.username); }
       if (up) { if (attached) up.detach(client); else up.unpend(); }
     });
     try {
@@ -142,22 +162,65 @@ function createApp(options = {}) {
     } catch (e) {
       up = null;
       if (gone) return;
-      let status = e.status || 502;
-      if (e.limit) status = 503;
-      else if (status === 401 || status === 403) status = 502; // provider-side refusals are not ours to relay
-      return sendJson(req, res, status, { error: e.limit ? 'provider_limit' : (e.code || 'stream_failed'), message: e.message });
+      e.deny = relayDenied(e);
+      throw e;
     }
     if (gone) { up.unpend(); return; }
-    if (res.socket) res.socket.setNoDelay(true);
-    res.writeHead(200, {
-      'Content-Type': 'video/mp2t',
-      'Cache-Control': 'no-store',
-      'Connection': 'keep-alive',
-      'X-Accel-Buffering': 'no',
-      'X-Relay-Provider': up.provider.id,
-    });
+    begin(up);
     attached = true;
     up.attach(client, burst);
+  }
+
+  async function handleStream(req, res, url, m, me) {
+    const providerId = decodeURIComponent(m[1]);
+    const sid = decodeURIComponent(m[2]);
+    const burst = Math.max(0, Math.min(30, Number(url.searchParams.get('buf')) || 0));
+    const failover = url.searchParams.get('failover') !== '0';
+    try {
+      await runStream(me, providerId, sid, res, {
+        burst,
+        failover,
+        begin(up) {
+          if (res.socket) res.socket.setNoDelay(true);
+          res.writeHead(200, {
+            'Content-Type': 'video/mp2t',
+            'Cache-Control': 'no-store',
+            'Connection': 'keep-alive',
+            'X-Accel-Buffering': 'no',
+            'X-Relay-Provider': up.provider.id,
+          });
+        },
+      });
+    } catch (e) {
+      if (!e.deny) throw e;
+      sendJson(req, res, e.deny.status, { error: e.deny.error, message: e.deny.message });
+    }
+  }
+
+  async function handleWs(req, socket) {
+    const url = new URL(req.url, 'http://localhost');
+    const m = /^\/ws\/stream\/([^/]+)\/([^/]+?)(?:\.ts)?$/.exec(url.pathname);
+    const refuse = (status, text) => { socket.end(`HTTP/1.1 ${status} ${text}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`); };
+    if (!m || !isWsUpgrade(req)) return refuse(404, 'Not Found');
+    if (!authorised(req)) return refuse(401, 'Unauthorized');
+    if (!sameOrigin(req)) return refuse(403, 'Forbidden');
+    const me = whoIs(req);
+    if (!me) return refuse(401, 'Unauthorized');
+    const providerId = decodeURIComponent(m[1]);
+    const sid = decodeURIComponent(m[2]);
+    wsHandshake(req, socket);
+    const sink = new WsSink(socket);
+    try {
+      await runStream(me, providerId, sid, sink, {
+        burst: Math.max(0, Math.min(30, Number(url.searchParams.get('buf')) || 0)),
+        failover: url.searchParams.get('failover') !== '0',
+        begin() {},
+      });
+    } catch (e) {
+      if (!e.deny) { console.error(e); return sink.close(1011, 'error'); }
+      noteStreamError(me, providerId, sid, e.deny);
+      sink.close(1011, e.deny.error);
+    }
   }
 
   async function handleAuthApi(req, res, url, me) {
@@ -255,6 +318,13 @@ function createApp(options = {}) {
     if (handled) return;
     if (/^\/api\/users(\/|$)/.test(p)) return handleUsersApi(req, res, url, me);
     if (/^\/api\/views(\/|$)/.test(p)) return handleViewsApi(req, res, url, me);
+    if (req.method === 'GET' && p === '/api/stream-error') {
+      if (!me) throw httpError(401, 'Login required', 'login_required');
+      const k = errKey(me, url.searchParams.get('p') || '', url.searchParams.get('sid') || '');
+      const v = streamErrors.get(k);
+      streamErrors.delete(k);
+      return sendJson(req, res, 200, v && Date.now() - v.at < 30000 ? { error: v.error, message: v.message } : {});
+    }
     needAdmin(me);
     if (req.method === 'GET' && p === '/api/state') {
       return sendJson(req, res, 200, relay.state());
@@ -338,6 +408,10 @@ function createApp(options = {}) {
       if (!e.status) console.error(e);
     }
   });
+  server.on('upgrade', (req, socket) => {
+    socket.on('error', () => {});
+    handleWs(req, socket).catch((e) => { console.error(e); socket.destroy(); });
+  });
   server.keepAliveTimeout = 30000;
 
   function close() {
@@ -353,7 +427,19 @@ function createApp(options = {}) {
 module.exports = { createApp };
 
 if (require.main === module) {
-  const app = createApp();
+  let app;
+  try {
+    app = createApp();
+  } catch (e) {
+    if (e && (e.code === 'EACCES' || e.code === 'EPERM' || e.code === 'EROFS')) {
+      const dir = env('DATA_DIR', path.join(__dirname, '..', 'data'));
+      console.error(`\nCannot write to the data folder ${dir} (${e.code}).\n` +
+        `The app runs as user ${typeof process.getuid === 'function' ? process.getuid() : '?'}. Make the folder writable for that user,\n` +
+        `for example:  chown -R 1000:1000 <host folder mounted at /data>\n`);
+      process.exit(1);
+    }
+    throw e;
+  }
   const port = Number(env('PORT', 1234));
   app.server.listen(port, '0.0.0.0', () => {
     console.log(`IPTV Multiview listening on :${port} (${app.config.providers.length} provider(s))`);

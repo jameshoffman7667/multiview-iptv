@@ -19,7 +19,7 @@ Open `http://<server-ip>:1234` on the PC, and the same address in the Android TV
 
 First run opens the **Providers** window: enter the server URL, username and password from your provider and press **Test**. It reads how many connections your plan allows and fills that in. Add as many providers as you like. Then pick a tile, press Enter (or click it) and choose a channel.
 
-**Dockhand / prebuilt image:** create a stack from `stack.yml` (it uses `mybadreligon/multiview-iptv:0.2.0` from Docker Hub). Add `ADMIN_USER` / `ADMIN_PASSWORD` under environment if the port is reachable beyond your LAN.
+**Dockhand / prebuilt image:** create a stack from `stack.yml` (it uses `mybadreligon/multiview-iptv:0.2.1` from Docker Hub). Add `ADMIN_USER` / `ADMIN_PASSWORD` under environment if the port is reachable beyond your LAN.
 
 Without Docker: `node src/server.js` (Node 20+, no packages to install). Settings are stored in the `/data` volume (`providers.json`, channel list cache).
 
@@ -86,6 +86,8 @@ Your provider credentials stay on the server; the browser only sees channel ids.
 
 ## Troubleshooting
 
+- **Many streams / buttons stop responding:** browsers allow only about 6 plain-HTTP connections to one address, so the page streams over WebSockets (up to 9 at once). Behind a reverse proxy, allow WebSocket upgrades on `/ws/` (nginx: `proxy_http_version 1.1; proxy_set_header Upgrade $http_upgrade; proxy_set_header Connection "upgrade";` and a long `proxy_read_timeout`). If WebSockets are blocked, the page falls back to plain HTTP automatically (Settings > Stream delivery), limited to about 6 streams.
+- **Container restarts with "permission denied" on /data:** the image fixes ownership at start-up; if the folder is on a network share that refuses `chown`, make it writable for user 1000.
 - **"No free provider connection"**: every connection your plan allows is in use. Close a tile, add another provider, or raise *Max connections* if your plan really allows more.
 - **Black tile / "can't play this channel's format"**: the browser cannot decode that channel. Browsers generally handle H.264 + AAC; HEVC, AC-3/E-AC-3 and MP2 audio depend on the browser and device. Try another variant of the channel.
 - **Login rejected on Test**: check URL, username and password; some providers want the URL without a trailing path.

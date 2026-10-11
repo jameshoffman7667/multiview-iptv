@@ -61,7 +61,7 @@
   var S = loadState();
   var ME = null; // set after /api/me: { admin, user, open, authRequired }
   function loadState() {
-    var d = { layout: '3x3', tiles: [], sel: 0, muted: false, bufSec: 4, fit: 'contain', failover: true, workers: true, stats: false, labels: false, favs: {} };
+    var d = { layout: '3x3', tiles: [], sel: 0, muted: false, bufSec: 4, transport: 'auto', fit: 'contain', failover: true, workers: true, stats: false, labels: false, favs: {} };
     var j = {};
     try { j = JSON.parse(localStorage.getItem(LS_KEY)) || {}; } catch (e) { j = {}; }
     Object.keys(d).forEach(function (k) { if (j[k] !== undefined && typeof j[k] === typeof d[k]) d[k] = j[k]; });
@@ -204,6 +204,9 @@
 
   // ---------------------------------------------------------------- tiles
   var BACKOFF = [1000, 2000, 4000, 8000, 15000];
+  var wsBlocked = false;   // set when WebSockets repeatedly fail before any video (e.g. a proxy that blocks them)
+  var wsFails = 0;
+  var wsWorked = false;
 
   function Tile(idx) {
     this.idx = idx;
@@ -237,7 +240,7 @@
     this.el.addEventListener('contextmenu', function (e) { e.preventDefault(); select(self.idx); openTileMenu(self.idx); });
     this.el.addEventListener('focus', function () { if (S.sel !== self.idx) select(self.idx, true); });
     this.more.addEventListener('click', function (e) { e.stopPropagation(); select(self.idx); openTileMenu(self.idx); });
-    this.video.addEventListener('playing', function () { self.hasPlayed = true; });
+    this.video.addEventListener('playing', function () { self.hasPlayed = true; if (self.viaWs) { wsWorked = true; wsFails = 0; } });
     this.video.addEventListener('timeupdate', function () { self.lastTime = Date.now(); });
     this.render();
   }
@@ -304,7 +307,12 @@
     this.hasPlayed = false;
     this.lastTime = Date.now();
     this.setStatus('Connecting...');
-    var url = '/stream/' + encodeURIComponent(c.p) + '/' + encodeURIComponent(c.sid) + '.ts?buf=' + S.bufSec + (S.failover ? '' : '&failover=0');
+    // Absolute address (a worker cannot resolve a relative one). WebSockets avoid the browser's limit of ~6 plain-HTTP
+    // connections per address, which a 3x3 grid would hit; plain HTTP stays as a fallback.
+    var useWs = S.transport !== 'http' && !wsBlocked && typeof WebSocket !== 'undefined';
+    this.viaWs = useWs;
+    var path = encodeURIComponent(c.p) + '/' + encodeURIComponent(c.sid) + '.ts?buf=' + S.bufSec + (S.failover ? '' : '&failover=0');
+    var url = useWs ? (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws/stream/' + path : location.origin + '/stream/' + path;
     var player;
     try {
       player = mp.createPlayer({ type: 'mpegts', isLive: true, url: url }, {
@@ -342,7 +350,35 @@
     try { this.video.removeAttribute('src'); this.video.load(); } catch (e) { /* ignore */ }
   };
 
+  // A WebSocket that closes before any video gives the page no reason; ask the server why.
   Tile.prototype.onError = function (type, detail, info) {
+    if (this.viaWs && !this.hasPlayed && type !== 'MediaError' && !(info && (info._diag || info.code >= 100))) {
+      var self = this;
+      var c = this.cfg;
+      var gen = this.gen;
+      this.stop();
+      this.setStatus('Connecting...');
+      api('/api/stream-error?p=' + encodeURIComponent(c.p) + '&sid=' + encodeURIComponent(c.sid)).then(function (r) {
+        if (self.gen !== gen + 1) return;
+        if (r && r.error) {
+          var code = r.error === 'provider_limit' ? 503 : r.error === 'user_limit' ? 429 : r.error === 'not_allowed' ? 403 : r.error === 'login_required' ? 401 : r.error === 'bad_channel' ? 404 : 502;
+          self.onError('NetworkError', 'HttpStatusCodeInvalid', { code: code, _diag: true });
+          return;
+        }
+        if (!wsWorked && ++wsFails >= 2) {
+          wsBlocked = true;
+          banner('WebSocket streaming is blocked here; switched to plain HTTP (about 6 streams at once)', 6000);
+          self.retry = 0;
+          self.start();
+          return;
+        }
+        self.onError(type, detail, { code: info && info.code, _diag: true });
+      }).catch(function (e) {
+        if (e && e.status === 401) { sessionCheck(); return; }
+        self.onError(type, detail, { code: info && info.code, _diag: true });
+      });
+      return;
+    }
     var code = info && info.code;
     var msg;
     var delay;
@@ -699,8 +735,23 @@
     return api('/api/channels?provider=' + encodeURIComponent(pid) + (refresh ? '&refresh=1' : '')).then(function (r) {
       var cats = {};
       r.categories.forEach(function (c) { cats[c.id] = c.name; });
-      var list = r.channels.map(function (ch) { return { i: ch.i, n: ch.n, ln: ch.n.toLowerCase(), c: ch.c, l: ch.l }; });
-      chanCache[pid] = { cats: r.categories, catName: cats, list: list };
+      // Category per channel by name. If the provider's own list is empty or does not match, fall back to the
+      // "US| " style prefix in the channel name, so there are always categories to filter by.
+      var extra = {};
+      var list = r.channels.map(function (ch) {
+        var cn = cats[ch.c];
+        if (!cn) {
+          var mm = /^\s*([^|:]{2,14}?)\s*[|:]/.exec(ch.n);
+          cn = mm ? mm[1].toUpperCase() : 'Other';
+          extra[cn] = true;
+        }
+        return { i: ch.i, n: ch.n, ln: ch.n.toLowerCase(), c: ch.c, cn: cn, l: ch.l };
+      });
+      var names = [];
+      var seen = {};
+      r.categories.forEach(function (c) { if (c.name && !seen[c.name]) { seen[c.name] = true; names.push(c.name); } });
+      Object.keys(extra).sort().forEach(function (n) { if (!seen[n]) { seen[n] = true; names.push(n); } });
+      chanCache[pid] = { cats: r.categories, catName: cats, catNames: names, list: list };
       return chanCache[pid];
     });
   }
@@ -729,10 +780,16 @@
     function fillCats() {
       catSel.textContent = '';
       catSel.appendChild(h('option', { value: '', text: 'All categories' }));
-      var c = pst.prov && chanCache[pst.prov];
-      if (c) c.cats.forEach(function (x) { catSel.appendChild(h('option', { value: x.id, text: x.name })); });
-      catSel.disabled = !(pst.prov && c);
+      var seen = {};
+      var any = false;
+      selectedProviders().forEach(function (p) {
+        var c = chanCache[p.id];
+        if (!c) return;
+        c.catNames.forEach(function (n) { if (!seen[n]) { seen[n] = true; any = true; catSel.appendChild(h('option', { value: n, text: n })); } });
+      });
+      catSel.disabled = !any;
       catSel.value = pst.cat;
+      if (catSel.value !== pst.cat) { pst.cat = ''; catSel.value = ''; }
     }
 
     function load(refresh) {
@@ -763,7 +820,7 @@
           if (!c) return;
           for (var i = 0; i < c.list.length && out.length < 3000; i++) {
             var ch = c.list[i];
-            if (pst.cat && ch.c !== pst.cat) continue;
+            if (pst.cat && ch.cn !== pst.cat) continue;
             if (toks.length && !ok(ch.ln)) continue;
             out.push({ p: p.id, sid: ch.i, name: ch.n, icon: ch.l });
           }
@@ -840,6 +897,7 @@
       pst.provs = provs;
       provSel.appendChild(h('option', { value: '', text: provs.length > 1 ? 'All providers' : (provs[0] ? provs[0].name : 'No providers') }));
       if (provs.length > 1) provs.forEach(function (p) { provSel.appendChild(h('option', { value: p.id, text: p.name + (p.enabled ? '' : ' (off)') })); });
+      if (provs.length === 1) pst.prov = provs[0].id;
       if (!provs.length) { info.textContent = 'No providers yet. Add one under Providers.'; return; }
       load(false);
     }).catch(function (e) { info.textContent = e.message; });
@@ -861,6 +919,9 @@
     bufSel.value = String(S.bufSec);
     if (bufSel.value !== String(S.bufSec)) { bufSel.appendChild(h('option', { value: String(S.bufSec), text: S.bufSec + ' seconds' })); bufSel.value = String(S.bufSec); }
     bufSel.addEventListener('change', function () { S.bufSec = Number(bufSel.value); saveSoon(); });
+    var trSel = h('select', null, h('option', { value: 'auto', text: 'WebSocket (recommended: 9 streams at once)' }), h('option', { value: 'http', text: 'Plain HTTP (browsers allow only about 6 streams)' }));
+    trSel.value = S.transport === 'http' ? 'http' : 'auto';
+    trSel.addEventListener('change', function () { S.transport = trSel.value; wsBlocked = false; wsFails = 0; saveSoon(); });
     var fitSel = h('select', null, h('option', { value: 'contain', text: 'Fit (black bars, nothing cropped)' }), h('option', { value: 'cover', text: 'Fill (crops edges)' }));
     fitSel.value = S.fit;
     fitSel.addEventListener('change', function () { S.fit = fitSel.value; document.body.classList.toggle('fill', S.fit === 'cover'); saveSoon(); });
@@ -877,6 +938,7 @@
       body: [
         field('Buffer before playing (smoother, adds delay)', bufSel),
         field('Video', fitSel),
+        field('Stream delivery (applies when a stream reconnects)', trSel),
         check('Use another provider when the chosen one is full', 'failover', function () { tiles.forEach(function (t) { if (t.cfg && t.retry) t.start(); }); }),
         check('Use web workers (lighter on the page; turn off if video will not start)', 'workers'),
         check('Show stats on tiles', 'stats', function () { document.body.classList.toggle('stats', S.stats); }),

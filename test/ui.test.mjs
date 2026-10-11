@@ -153,12 +153,12 @@ describe('browser', () => {
     let tile0 = await page.evaluate(() => window.__mv.S.tiles[0]);
     assert.equal(tile0.p, 'p2');
     assert.equal(tile0.sid, '77');
-    assert.equal(await page.evaluate(() => window.__players[0].ds.url), '/stream/p2/77.ts?buf=4');
+    assert.equal(await page.evaluate(() => window.__players[0].ds.url), `ws://${new URL(page.url()).host}/ws/stream/p2/77.ts?buf=4`);
     assert.equal(await page.evaluate(() => window.__players[0].ds.isLive), true);
     await page.waitForTimeout(400);
     await page.reload();
     await page.waitForFunction(() => window.__players && window.__players.length === 1);
-    assert.equal(await page.evaluate(() => window.__players[0].ds.url), '/stream/p2/77.ts?buf=4');
+    assert.equal(await page.evaluate(() => window.__players[0].ds.url), `ws://${new URL(page.url()).host}/ws/stream/p2/77.ts?buf=4`);
     assert.equal(await page.textContent('.tile[data-idx="0"] .label'), 'CNN HD');
     // favourites filter
     await page.keyboard.press('c');
@@ -291,7 +291,7 @@ describe('browser', () => {
     await page.uncheck('.modal .check input >> nth=0');
     await page.click('.modal .btn:has-text("Restart all streams")');
     await page.waitForFunction(() => window.__players.length >= 2);
-    assert.equal(await page.evaluate(() => window.__players[window.__players.length - 1].ds.url), '/stream/p1/1.ts?buf=8&failover=0');
+    assert.equal(await page.evaluate(() => window.__players[window.__players.length - 1].ds.url), `ws://${new URL(page.url()).host}/ws/stream/p1/1.ts?buf=8&failover=0`);
     assert.deepEqual(errors, []);
     await ctx.close();
   });
@@ -503,7 +503,7 @@ describe('logins and shared multiviews (browser)', () => {
     assert.equal(state.admin, false);
     assert.equal(state.layout, '2x2');
     assert.equal(state.urls.length, 2);
-    assert.ok(state.urls[0].startsWith('/stream/p1/1.ts'));
+    assert.match(state.urls[0], /^ws:\/\/[^/]+\/ws\/stream\/p1\/1\.ts/);
     // viewer chrome: no layout buttons, no providers, cannot add channels
     assert.equal(await v.page.isVisible('#layouts'), false);
     assert.equal(await v.page.isVisible('#btn-conn'), false);
@@ -554,5 +554,97 @@ describe('logins and shared multiviews (browser)', () => {
     await again.page.keyboard.press('Enter');
     await again.page.waitForSelector('text=No multiviews have been shared with you yet');
     await again.ctx.close();
+  });
+});
+
+describe('real player, many streams, picker categories', () => {
+  let browser;
+  let app;
+  let base;
+  let dir;
+  let p1;
+
+  before(async () => {
+    const files = {};
+    if (CLIP) for (let i = 1; i <= 9; i++) files[i] = { path: CLIP, seconds: 40 };
+    p1 = new MockProvider({ user: 'u1', pass: 'pw1', max: 12, kbps: 1000, channels: [
+      { id: 1, name: 'US| ESPN HD', cat: '10' }, { id: 2, name: 'US| CNN FHD', cat: '10' }, { id: 3, name: 'UK| BBC One', cat: '20' }, { id: 4, name: 'Weather', cat: '99' },
+    ] });
+    p1.files = CLIP ? files : undefined;
+    await p1.listen();
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mv-ui3-'));
+    fs.writeFileSync(path.join(dir, 'providers.json'), JSON.stringify({ providers: [{ id: 'a', name: 'A', url: p1.url, username: 'u1', password: 'pw1', maxConnections: 12 }] }));
+    app = createApp({ dataDir: dir, basicAuth: '', relay: { idleMs: 300 } });
+    await new Promise((r) => app.server.listen(0, '127.0.0.1', r));
+    base = `http://127.0.0.1:${app.server.address().port}`;
+    await app.lists.get(app.config.get('a'));
+    browser = await chromium.launch(process.env.CHROME ? { executablePath: process.env.CHROME } : {});
+  });
+  after(async () => {
+    await browser.close();
+    app.close();
+    await p1.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  test('nine real mpegts.js players over WebSocket (workers on): provider sees nine, page requests stay instant', { skip: !CLIP && 'needs CLIP_TS' }, async () => {
+    const ctx = await browser.newContext();
+    const page = await ctx.newPage();
+    await page.goto(base);
+    await page.waitForFunction(() => window.__mv && window.__mv.ME);
+    const res = await page.evaluate(async () => {
+      const failures = [];
+      window.__ps = [];
+      for (let i = 1; i <= 9; i++) {
+        const v = document.createElement('video'); v.muted = true; document.body.appendChild(v);
+        const pl = window.mpegts.createPlayer({ type: 'mpegts', isLive: true, url: `ws://${location.host}/ws/stream/a/${i}.ts?buf=2` }, { enableWorker: true });
+        pl.on(window.mpegts.Events.ERROR, (t, d, info) => { if (!/Codec|MSE|Media/i.test(String(d))) failures.push(`${i}: ${t}/${d} ${info && info.msg}`); });
+        pl.attachMediaElement(v); pl.load(); window.__ps.push(pl);
+      }
+      await new Promise((r) => setTimeout(r, 2500));
+      const t0 = performance.now();
+      const r = await fetch('/api/me');
+      return { status: r.status, ms: Math.round(performance.now() - t0), failures };
+    });
+    assert.equal(res.status, 200);
+    assert.ok(res.ms < 500, `API answered in ${res.ms} ms with nine streams open`);
+    assert.deepEqual(res.failures, []);
+    assert.equal(p1.opened.filter((x) => /^[1-9]$/.test(x)).length >= 9, true, 'provider saw all nine channels');
+    await ctx.close();
+  });
+
+  test('single provider: category dropdown is on and filters; provider without categories falls back to name prefixes', async () => {
+    const ctx = await browser.newContext({ viewport: { width: 1400, height: 900 } });
+    await ctx.route('**/vendor/mpegts.js', (route) => route.fulfill({ contentType: 'text/javascript', body: FAKE_MPEGTS }));
+    await ctx.addInitScript(MEDIA_STUBS);
+    const page = await ctx.newPage();
+    await page.goto(base);
+    await page.waitForFunction(() => window.__mv && window.__mv.ME);
+    await page.click('.tile[data-idx="0"]');
+    await page.keyboard.press('Enter');
+    await page.waitForSelector('.chlist .ch');
+    const opts = await page.$$eval('select[aria-label="Category"] option', (o) => o.map((x) => x.textContent));
+    assert.equal(await page.$eval('select[aria-label="Category"]', (s) => s.disabled), false);
+    assert.deepEqual(opts, ['All categories', 'US', 'UK', 'Other']);
+    await page.selectOption('select[aria-label="Category"]', 'UK');
+    assert.equal(await page.locator('.chlist .ch').count(), 1);
+    await ctx.close();
+
+    // no categories from the provider: names come from "US|" style prefixes
+    p1.noCategories = true;
+    app.lists.forget('a');
+    const ctx2 = await browser.newContext({ viewport: { width: 1400, height: 900 } });
+    await ctx2.route('**/vendor/mpegts.js', (route) => route.fulfill({ contentType: 'text/javascript', body: FAKE_MPEGTS }));
+    await ctx2.addInitScript(MEDIA_STUBS);
+    const page2 = await ctx2.newPage();
+    await page2.goto(base);
+    await page2.waitForFunction(() => window.__mv && window.__mv.ME);
+    await page2.click('.tile[data-idx="0"]');
+    await page2.keyboard.press('Enter');
+    await page2.waitForSelector('.chlist .ch');
+    const opts2 = await page2.$$eval('select[aria-label="Category"] option', (o) => o.map((x) => x.textContent));
+    assert.deepEqual(opts2, ['All categories', 'Other', 'UK', 'US']);
+    p1.noCategories = false;
+    await ctx2.close();
   });
 });

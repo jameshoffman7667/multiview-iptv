@@ -37,6 +37,7 @@ class MockProvider {
     this.pass = opts.pass || 'p';
     this.max = opts.max || 2;
     this.limitMode = opts.limitMode || 'http403'; // http403 | empty | none
+    this.noCategories = !!opts.noCategories;
     this.kbps = opts.kbps || 2000;
     this.channels = opts.channels || [
       { id: 1, name: 'US| ESPN HD', cat: '10' },
@@ -79,7 +80,7 @@ class MockProvider {
     const send = (o) => { res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(o)); };
     if (!ok) return send({ user_info: { auth: 0 } });
     if (!action) return send({ user_info: { auth: 1, status: 'Active', max_connections: String(this.max), active_cons: String(this.active), exp_date: '1893456000' }, server_info: {} });
-    if (action === 'get_live_categories') return send([{ category_id: '10', category_name: 'US' }, { category_id: '20', category_name: 'UK' }]);
+    if (action === 'get_live_categories') return send(this.noCategories ? [] : [{ category_id: '10', category_name: 'US' }, { category_id: '20', category_name: 'UK' }]);
     if (action === 'get_live_streams') return send(this.channels.map((c) => ({ stream_id: c.id, name: c.name, category_id: c.cat, stream_icon: '', stream_type: 'live' })));
     send([]);
   }
