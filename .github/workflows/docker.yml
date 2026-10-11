@@ -4,6 +4,11 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      android_only:
+        description: "Only build and attach the Android app (skips the tests and the Docker image)"
+        type: boolean
+        default: false
 
 concurrency:
   group: image-${{ github.ref }}
@@ -14,6 +19,7 @@ env:
 
 jobs:
   test:
+    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.android_only) }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -26,6 +32,7 @@ jobs:
 
   image:
     needs: test
+    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.android_only) }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -64,6 +71,7 @@ jobs:
   # Android TV / Nvidia Shield app. Built after the image is published so a problem here never blocks the Docker release.
   android:
     needs: image
+    if: ${{ always() && (needs.image.result == 'success' || needs.image.result == 'skipped') }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -81,7 +89,8 @@ jobs:
         with:
           distribution: temurin
           java-version: 17
-      - uses: android-actions/setup-android@v3
+      - name: Accept Android SDK licences (the runner image already has the SDK)
+        run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: 8.9
