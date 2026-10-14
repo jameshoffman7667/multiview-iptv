@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.4.1 - 2026-10-13
+Fixes for the Shared screen (0.4.0). Plain tiles are unchanged.
+- **One bad input can no longer fail the composite.** Before ffmpeg is started every channel is checked with ffprobe for decodable video (about 8 s at most). A channel with no video, or one that has not delivered data yet, gets a black tile and the other tiles play. Black channels stay connected (still one provider connection each), are re-checked every few seconds, and the composite restarts by itself (at most every 15 s) when one starts delivering video. Fixes `Stream specifier ':v:0' in filtergraph description ... matches no streams`.
+- **A slow input is no longer dropped for good.** The old fixed 6 MiB limit ended an input permanently ("input N too slow"). Each input now has its own queue sized to about 20 s of that channel (at least 12 MiB); when ffmpeg falls further behind, that tile skips ahead to the latest keyframe and goes on, and the log says so.
+- **Picture matches the page.** The composite is drawn in the same shape as the tile area on the page (new optional `aspect` and `fit` in `POST /api/compose`; default 16:9 / contain as before) and the page shows it stretched to exactly that area, so tiles sit in their own frames instead of offset. Per-input `setpts`/`asetpts` were removed (they could skew the sound tile's picture against its audio).
+- **Page.** A readable message stays on screen while the shared screen retries ("... trying again in 5 s (attempt 2 of 5)") and after it gives up ("Shared screen unavailable: <reason>"), including the server's short reason. Retries back off 2, 5, 10, 20, 30 s and then stop. Layout changes are debounced 1.2 s (and window resizes re-shape the picture) before a request is sent. 400/401/403/404 and "needs a GPU / disabled" are not retried.
+- **A new request replaces the old one.** A second shared-screen request from the same account and device closes that viewer's previous composite instead of competing with it for `COMPOSE_MAX` (`COMPOSE_MAX=1` now works while the layout is being built). Refused requests are logged.
+- **Logging.** Every composite event names the screen number, provider, channel id and channel name. ffmpeg start (pid, resolution, encoder, inputs, which are black and why), exit code, and the last 2000 characters of ffmpeg's stderr on failure are logged; the browser gets a short reason only. `GET /api/compose/info` lists per-input state (`live`, `black`, why, skip-aheads).
+- **Settings.** `COMPOSE_MAX` / `TRANSCODE_MAX` must be whole numbers; text or negative values are reported and replaced by the default (before, text made the limit unlimited). `0` disables the feature (a clear 503 message); documented in the README.
+- Tests: input without video, input that delivers late, slow-input recovery, second request replaces the first, page message and backoff, picture geometry (pixel check).
+
+**Upgrading from 0.4.0:** just pull the new image; no stack change is needed.
+
 ## 0.4.0 - 2026-10-11
 Features.
 - **Overlays hide when idle.** After 5 seconds without mouse, keyboard or remote input, the top menu, the channel names and the sound bubble disappear; any input brings them back.

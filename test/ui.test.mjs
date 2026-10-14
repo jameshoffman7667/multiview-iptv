@@ -569,6 +569,37 @@ describe('browser', () => {
     assert.deepEqual(errors.filter((e) => !/503|Service Unavailable/.test(e)), []);
     await ctx.close();
   });
+
+  test('shared screen: a compose_failed 502 shows a readable message, retries with backoff, then stops and keeps the message', async () => {
+    const ctx = await browser.newContext({ viewport: { width: 1920, height: 1080 } });
+    await ctx.route('**/vendor/mpegts.js', (route) => route.fulfill({ contentType: 'text/javascript', body: FAKE_MPEGTS }));
+    await ctx.addInitScript(MEDIA_STUBS);
+    await ctx.addInitScript('window.__mvSharedBackoff = [300, 300]; window.__mvSharedDebounce = 100;');
+    await ctx.addInitScript(`if (!localStorage.getItem('mv.state.v1')) localStorage.setItem('mv.state.v1', ${JSON.stringify(JSON.stringify({ layout: '2x2', shared: '480', sel: 0, tiles: [{ p: 'p1', sid: '1', name: 'ESPN' }, { p: 'p1', sid: '2', name: 'CNN' }, null, null] }))});`);
+    let posts = 0;
+    let lastBody = null;
+    await ctx.route('**/api/compose', (route) => {
+      if (route.request().method() !== 'POST') return route.continue();
+      posts++;
+      lastBody = route.request().postDataJSON();
+      route.fulfill({ status: 502, contentType: 'application/json', body: JSON.stringify({ error: 'compose_failed', message: 'Composer failed: input 2 has no usable video' }) });
+    });
+    const page = await ctx.newPage();
+    await page.goto(base);
+    await page.waitForFunction(() => window.__mv && window.__mv.tiles.length === 9 && window.__mv.ME);
+    await page.waitForSelector('#sharedmsg:not([hidden])', { timeout: 5000 });
+    assert.match(await page.textContent('#sharedmsg'), /input 2 has no usable video/);
+    assert.ok(lastBody.aspect > 1 && lastBody.aspect < 2.4 && lastBody.fit === 'contain', 'the request says what shape the picture has');
+    await page.waitForFunction(() => /unavailable/.test(document.querySelector('#sharedmsg').textContent), null, { timeout: 8000 });
+    const done = posts;
+    assert.equal(done, 3, 'first try plus two retries');
+    await page.waitForTimeout(1500);
+    assert.equal(posts, done, 'no more requests after the backoff is used up');
+    assert.equal(await page.isVisible('#sharedmsg'), true, 'the message stays');
+    assert.match(await page.textContent('#sharedmsg'), /input 2 has no usable video/);
+    assert.equal(await page.evaluate(() => document.body.classList.contains('shared')), false, 'tiles play on their own again');
+    await ctx.close();
+  });
 });
 
 describe('real mpegts.js against the relay', { skip: !CLIP }, () => {

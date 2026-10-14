@@ -4,6 +4,6 @@ Requests logged here are not built yet. Say "build" to fold them into a new vers
 (version number goes up, CHANGELOG.md is updated, this list is cleared), and "push" to upload to GitHub.
 With every push, say whether the compose/stack file must change or whether pulling the new image is enough.
 
-Current released version: 0.4.0
+Current released version: 0.4.0 (0.4.1 is built locally, not pushed yet)
 
 (nothing pending)

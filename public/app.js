@@ -584,7 +584,7 @@
   // ---------------------------------------------------------------- shared screen
   // For weak devices: the server combines the visible tiles into ONE video stream and this page only plays that.
   // The tiles stay on screen (transparent) so selection, names, the sound marker and menus work as usual.
-  var shared = { player: null, gen: 0, sig: '', spec: null, timer: null, retry: 0, failed: false, lastTime: -1, lastAt: 0, video: null };
+  var shared = { msg: null, player: null, gen: 0, sig: '', spec: null, timer: null, retry: 0, failed: false, lastTime: -1, lastAt: 0, video: null };
   function sharedOn() { return !!S.shared && !shared.failed; }
 
   function sharedSpec() {
@@ -602,7 +602,10 @@
     var rows = L.rows;
     if (zoom >= 0 && zoom < L.cells.length) { cols = 1; rows = 1; add(zoom, 1, 1, 1, 1, false); }
     else L.cells.forEach(function (c, i) { add(i, c[0], c[1], c[2], c[3], L.cells.length > 1 && (c[2] * c[3]) / (L.cols * L.rows) <= 1 / 6); });
-    return cells.length ? { res: Number(S.shared) || 720, cols: cols, rows: rows, cells: cells, audio: audio } : null;
+    // The picture is drawn in the same shape as the area the tiles occupy, so tile N sits exactly where its picture is.
+    var g = $('#grid');
+    var aspect = g && g.clientWidth > 0 && g.clientHeight > 0 ? Math.round((g.clientWidth / g.clientHeight) * 50) / 50 : 16 / 9;
+    return cells.length ? { res: Number(S.shared) || 720, cols: cols, rows: rows, cells: cells, audio: audio, aspect: aspect, fit: S.fit === 'cover' ? 'cover' : 'contain' } : null;
   }
 
   function sharedStopPlayer() {
@@ -616,9 +619,23 @@
   function sharedFallback(msg) {
     shared.failed = true;
     sharedStopPlayer();
-    banner('Shared screen unavailable: ' + msg + ' - showing the tiles directly', 9000);
+    clearTimeout(shared.timer);
+    sharedMessage('Shared screen unavailable: ' + msg + ' - showing the tiles directly. Choose the setting again in Settings to retry.');
     sharedApply();
   }
+
+  // A message that stays on screen until the picture plays or the mode is switched off.
+  function sharedMessage(text) {
+    if (!text) { if (shared.msg) shared.msg.hidden = true; return; }
+    if (!shared.msg) {
+      shared.msg = h('div', { id: 'sharedmsg', class: 'sharedmsg', role: 'status' });
+      document.body.appendChild(shared.msg);
+    }
+    shared.msg.textContent = text;
+    shared.msg.hidden = false;
+  }
+  function sharedBackoff() { return window.__mvSharedBackoff || [2000, 5000, 10000, 20000, 30000]; }
+  function sharedDebounce() { return window.__mvSharedDebounce || 1200; }
 
   // switch every tile between "own stream" and "part of the shared picture"
   function sharedApply() {
@@ -656,7 +673,7 @@
       if (pr && pr.catch) pr.catch(noop);
     }, function (e) {
       if (gen !== shared.gen) return;
-      if (e.status && e.status !== 502 && e.status !== 504) { sharedFallback(e.message); return; }
+      if (e.status && [400, 401, 403, 404].indexOf(e.status) >= 0 || e.code === 'needs_gpu' || e.code === 'compose_disabled') { sharedFallback(e.message); return; }
       sharedRetry(e.message);
     });
   }
@@ -664,24 +681,27 @@
   function sharedRetry(why) {
     if (!sharedOn()) return;
     shared.retry++;
-    if (shared.retry > 6) { sharedFallback(why || 'it keeps failing'); return; }
+    var delays = sharedBackoff();
+    if (shared.retry > delays.length) { sharedFallback((why || 'it keeps failing') + ' (gave up after ' + delays.length + ' tries)'); return; }
     var spec = shared.spec;
     var sig = shared.sig;
+    var wait = delays[shared.retry - 1];
     sharedStopPlayer();
     clearTimeout(shared.timer);
-    shared.timer = setTimeout(function () { if (sharedOn() && shared.sig === sig) sharedBegin(spec, sig); }, BACKOFF[clamp(shared.retry - 1, 0, BACKOFF.length - 1)]);
+    sharedMessage('Shared screen: ' + (why || 'interrupted') + ' - trying again in ' + Math.round(wait / 1000) + ' s (attempt ' + shared.retry + ' of ' + delays.length + ')');
+    shared.timer = setTimeout(function () { if (sharedOn() && shared.sig === sig) sharedBegin(spec, sig); }, wait);
   }
 
   // called after anything that changes the picture; restarts the shared stream only when its description changed
   function sharedSync() {
     if (sharedOn()) sharedEnsureVideo();
-    if (!sharedOn()) { if (shared.sig || shared.player) { clearTimeout(shared.timer); sharedStopPlayer(); shared.sig = ''; } return; }
+    if (!sharedOn()) { if (shared.sig || shared.player) { clearTimeout(shared.timer); sharedStopPlayer(); shared.sig = ''; } if (!S.shared) sharedMessage(''); return; }
     var spec = sharedSpec();
     var sig = spec ? JSON.stringify(spec) : '';
     if (sig === shared.sig) return;
     shared.sig = sig; // claimed now so repeated calls during the delay below do nothing
     clearTimeout(shared.timer);
-    shared.timer = setTimeout(function () { shared.retry = 0; sharedBegin(spec, sig); }, 500);
+    shared.timer = setTimeout(function () { shared.retry = 0; sharedBegin(spec, sig); }, sharedDebounce());
   }
 
   // the page only gets a shared <video> once the mode is switched on
@@ -690,7 +710,7 @@
     shared.video = h('video', { id: 'shared', playsinline: true, muted: true, preload: 'auto' });
     shared.video.muted = true;
     shared.video.setAttribute('disablepictureinpicture', '');
-    shared.video.addEventListener('playing', function () { shared.retry = 0; });
+    shared.video.addEventListener('playing', function () { shared.retry = 0; sharedMessage(''); });
     document.body.insertBefore(shared.video, $('#grid'));
   }
 
@@ -703,6 +723,7 @@
       if (Date.now() - shared.lastAt > 15000) { shared.lastAt = Date.now(); sharedRetry('The picture stopped'); }
     }, 3000);
     document.body.classList.toggle('shared', sharedOn());
+    window.addEventListener('resize', function () { sharedSync(); });
   }
 
   // ---------------------------------------------------------------- grid, selection, audio
@@ -1609,7 +1630,7 @@
     fitSel.addEventListener('change', function () { S.fit = fitSel.value; document.body.classList.toggle('fill', S.fit === 'cover'); saveSoon(); });
     var shSel = h('select', null, h('option', { value: '', text: 'Off - each tile plays its own stream' }), h('option', { value: '480', text: '480p - lightest' }), h('option', { value: '720', text: '720p - recommended for a TV' }), h('option', { value: '1080', text: '1080p - needs a strong server' }));
     shSel.value = S.shared || '';
-    shSel.addEventListener('change', function () { S.shared = shSel.value; shared.failed = false; shared.retry = 0; saveSoon(); sharedApply(); sharedSync(); });
+    shSel.addEventListener('change', function () { S.shared = shSel.value; shared.failed = false; shared.retry = 0; shared.sig = ''; sharedMessage(''); saveSoon(); sharedApply(); sharedSync(); });
     var shNote = h('div', { class: 'note', text: 'Shared screen: the server combines all tiles into one picture, so a weak TV box decodes a single stream. Uses server CPU/GPU while you watch.' });
     var shInfo = h('div', { class: 'note' });
     var shBtns = h('div', { class: 'viewbtns' });
@@ -2365,5 +2386,5 @@
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init); else init();
 
   // test hook (harmless in production)
-  window.__mv = { get S() { return S; }, get ME() { return ME; }, applyView: applyView, tiles: tiles, LAYOUTS: LAYOUTS, setLayout: setLayout, select: select, assign: assign, toggleZoom: toggleZoom, sharedApply: sharedApply, get zoom() { return zoom; }, get modals() { return modals.length; } };
+  window.__mv = { get S() { return S; }, get ME() { return ME; }, applyView: applyView, tiles: tiles, LAYOUTS: LAYOUTS, setLayout: setLayout, select: select, assign: assign, toggleZoom: toggleZoom, sharedApply: sharedApply, get shared() { return shared; }, get zoom() { return zoom; }, get modals() { return modals.length; } };
 })();

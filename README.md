@@ -21,7 +21,7 @@ Open `http://<server-ip>:1234` on the PC, and the same address in the Android TV
 
 First run opens the **Providers** window: enter the server URL, username and password from your provider and press **Test**. It reads how many connections your plan allows and fills that in. Add as many providers as you like. Then pick a tile, press Enter (or click it) and choose a channel.
 
-**Dockhand / prebuilt image:** create a stack from `stack.yml` (it uses `mybadreligon/multiview-iptv:0.4.0` from Docker Hub). Add `ADMIN_USER` / `ADMIN_PASSWORD` under environment if the port is reachable beyond your LAN.
+**Dockhand / prebuilt image:** create a stack from `stack.yml` (it uses `mybadreligon/multiview-iptv:0.4.1` from Docker Hub). Add `ADMIN_USER` / `ADMIN_PASSWORD` under environment if the port is reachable beyond your LAN.
 
 Without Docker: `node src/server.js` (Node 20+, no packages to install). Settings are stored in the `/data` volume (`providers.json`, channel list cache).
 
@@ -71,7 +71,7 @@ The server runs `ffmpeg` and encodes the card to H.264 + AAC MPEG-TS, once per s
 - **Small tiles prefer SD** (Settings, on by default): a tile that is a sixth of the screen or less asks for the provider's SD / low-quality version of the channel (matched by name, `ESPN SD` for `ESPN FHD`) when one exists, at any enabled provider; otherwise it plays the channel you chose. Tile menu > *Quality* overrides it per tile (Auto / SD / As chosen / 480p transcode). The stats overlay (`I`) shows `SD`.
 - **Shared screen** (Settings > Shared screen: 480p / 720p / 1080p): the server combines the visible tiles into ONE H.264 stream and the page just plays it, for boxes that struggle with many streams (Fire TV Stick, Google TV). The server encodes only while someone watches. Selecting another tile moves the sound to it (the picture restarts for a moment). Zooming a tile sends only that channel. Movies and series are not part of the picture and keep playing on their own. Decoding and scaling of the inputs happens on the server CPU; the encode can use the GPU.
 - **480p tile transcode** (tile menu > Quality): the server re-encodes that one channel at 480p. It needs a GPU encoder (or `TRANSCODE_ALLOW_CPU=1`); if it is declined the original plays.
-- **GPU encoding.** Pass `/dev/dri` into the container (`devices:` in `stack.yml`; with Proxmox the GPU must first be passed through to the VM/LXC that runs Docker). Settings > Shared screen has *Test CPU encoder* and *Test GPU encoder* buttons. Intel Quick Sync (UHD 630) is usually the better choice than an older AMD card (Polaris encodes H.264 only, which is all that is needed). Limits are set with `COMPOSE_MAX` and `TRANSCODE_MAX`.
+- **GPU encoding.** Pass `/dev/dri` into the container (`devices:` in `stack.yml`; with Proxmox the GPU must first be passed through to the VM/LXC that runs Docker). Settings > Shared screen has *Test CPU encoder* and *Test GPU encoder* buttons. Intel Quick Sync (UHD 630) is usually the better choice than an older AMD card (Polaris encodes H.264 only, which is all that is needed). Limits are set with `COMPOSE_MAX` and `TRANSCODE_MAX` (`0` turns the feature off). A channel without video, or one that is slow to start, shows a black tile in the shared screen and joins it as soon as it delivers video; the page shows the reason on screen if the shared screen cannot start.
 
 ## Logins and sharing a multiview
 
@@ -128,7 +128,7 @@ Tuning: `RING_MB` (default 32) is the relay buffer per channel, about a minute o
 | `FFMPEG_PATH` | `ffmpeg` | ffmpeg binary used for capture cards |
 | `VAAPI_DEVICE` | `/dev/dri/renderD128` | render device used when a capture source selects the VAAPI encoder |
 | `COMPOSE_ENCODER` | `auto` | encoder for the shared screen and 480p transcodes: `auto` (GPU when `/dev/dri` is present, else CPU), `vaapi`, `x264`, `nvenc` |
-| `COMPOSE_MAX`, `TRANSCODE_MAX` | 2, 2 | shared screens / 480p channel transcodes allowed at once |
+| `COMPOSE_MAX`, `TRANSCODE_MAX` | 2, 2 | shared screens / 480p channel transcodes allowed at once. Whole numbers only; **`0` switches the feature off** (`TRANSCODE_MAX=0` disables the 480p tile transcode, `COMPOSE_MAX=0` the shared screen). Anything that is not a whole number (text, negative, 1.5) is reported in the log and the default is used. |
 | `TRANSCODE_ALLOW_CPU` | off | set to `1` to let 480p tile transcoding use the CPU (otherwise it needs a GPU encoder) |
 | `COMPOSE_IDLE_SECONDS` | 8 | stop a shared screen / transcode this long after its last viewer leaves |
 | `IDLE_SECONDS` | 8 | keep a channel's provider connection this long after the last viewer leaves (quick switching back). It is released at once if another channel needs the slot |

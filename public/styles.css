@@ -183,8 +183,10 @@ body.viewer .tile .empty b, body.viewer .tile .empty span { display: none; }
 @media (max-width: 700px) { .guide { --gname: 110px; } }
 
 /* ---------- shared screen: the server's combined picture plays behind transparent tiles ---------- */
-#shared { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: #000; object-fit: contain; display: none; }
-body.fill #shared { object-fit: cover; }
+#shared { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: #000; object-fit: fill; display: none; }
 body.shared #shared { display: block; }
 body.shared .grid { background: transparent; gap: 0; }
 body.shared .tile { background: transparent; }
+
+.sharedmsg { position: fixed; bottom: 14px; left: 50%; transform: translateX(-50%); z-index: 30; max-width: 90%; padding: 8px 14px; border-radius: 8px; background: #3a1d1d; border: 1px solid var(--bad); color: #ffd6d6; font-size: 13px; text-align: center; }
+.sharedmsg[hidden] { display: none; }

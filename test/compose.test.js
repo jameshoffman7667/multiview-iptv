@@ -9,7 +9,8 @@ const { spawnSync } = require('node:child_process');
 const { MockProvider, PKT } = require('./mock-xtream');
 const { createApp } = require('../src/server');
 const { qualityOf } = require('../src/lists');
-const { cleanSpec, ffmpegArgs } = require('../src/compose');
+const { cleanSpec, ffmpegArgs, canvasOf, PipeClient, intEnv, shortReason } = require('../src/compose');
+const { PassThrough } = require('node:stream');
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 function request(base, pathname, { method = 'GET', body, ms = 0 } = {}) {
@@ -167,5 +168,176 @@ describe('shared screen and transcode requests', () => {
   test('a viewer who may not see a channel cannot ask for it', async () => {
     const r = await request(ctx.base, '/stream/compose/0123456789abcdef.ts');
     assert.equal(r.status, 404);
+  });
+});
+
+// ---- 0.4.1: robustness of the composite
+const CLIP = process.env.CLIP_TS || '';
+const hasX264 = /libx264/.test(spawnSync('ffmpeg', ['-hide_banner', '-encoders'], { encoding: 'utf8' }).stdout || '');
+const needReal = (!CLIP && 'needs CLIP_TS') || (!hasX264 && 'no libx264');
+
+describe('picture geometry', () => {
+  test('the picture has the shape of the page grid and no per-input timestamp rewriting', () => {
+    const spec = cleanSpec({ res: 480, cols: 2, rows: 1, aspect: 2, cells: [{ x: 1, y: 1, w: 1, h: 1, p: 'a', sid: '1' }, { x: 2, y: 1, w: 1, h: 1, p: 'a', sid: '2' }] });
+    assert.deepEqual(canvasOf(spec).slice(0, 2), [960, 480]);
+    const a = ffmpegArgs(spec, [0, 1], 'x264');
+    const fc = a[a.indexOf('-filter_complex') + 1];
+    assert.match(fc, /overlay=480:0:/);
+    assert.match(fc, /scale=480:480/);
+    assert.doesNotMatch(fc, /setpts/);
+    assert.doesNotMatch(a.join(' '), /asetpts/);
+    assert.ok(a.includes('color=c=black:s=960x480:r=25'));
+    assert.notEqual(cleanSpec({ res: 480, cols: 2, rows: 1, aspect: 1.5, cells: spec.cells }).id, spec.id, 'another shape is another picture');
+    assert.equal(canvasOf(cleanSpec({ res: 480, cols: 1, rows: 1, aspect: 99, cells: [spec.cells[0]] }))[0], 1152, 'absurd shapes are limited');
+  });
+
+  test('tiles land in their own half of the picture, without offset', { skip: !hasX264 && 'no libx264' }, async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mv-geo-'));
+    const mk = (name, colour) => { const f = path.join(dir, name); spawnSync('ffmpeg', ['-v', 'error', '-f', 'lavfi', '-i', `color=c=${colour}:s=640x360:r=25`, '-t', '4', '-c:v', 'libx264', '-g', '25', '-f', 'mpegts', f]); return f; };
+    const files = [mk('r.ts', 'red'), mk('b.ts', 'blue')];
+    const spec = cleanSpec({ res: 480, cols: 2, rows: 1, aspect: 2, cells: [{ x: 1, y: 1, w: 1, h: 1, p: 'a', sid: '1' }, { x: 2, y: 1, w: 1, h: 1, p: 'a', sid: '2' }] });
+    const child = require('node:child_process').spawn('ffmpeg', ffmpegArgs(spec, [0, 1], 'x264'), { stdio: ['ignore', 'pipe', 'pipe', 'pipe', 'pipe'] });
+    files.forEach((f, k) => fs.createReadStream(f).pipe(child.stdio[3 + k]));
+    const out = [];
+    child.stdout.on('data', (d) => out.push(d));
+    child.stdio[3].on('error', () => {}); child.stdio[4].on('error', () => {});
+    await new Promise((r) => setTimeout(r, 7000)); // the black base runs for ever: take 7 seconds of it
+    child.kill('SIGKILL');
+    await new Promise((r) => child.on('close', r));
+    const ts = path.join(dir, 'out.ts');
+    fs.writeFileSync(ts, Buffer.concat(out));
+    const px = (x, y) => {
+      const r = spawnSync('ffmpeg', ['-v', 'error', '-ss', '1.5', '-i', ts, '-vf', `format=rgb24,crop=1:1:${x}:${y}`, '-frames:v', '1', '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-'], { encoding: 'buffer' });
+      return [...r.stdout];
+    };
+    for (const [x, y] of [[2, 240], [240, 240], [470, 240]]) { const [r, , b] = px(x, y); assert.ok(r > 150 && b < 100, `(${x},${y}) should be red, got ${px(x, y)}`); }
+    for (const [x, y] of [[490, 240], [720, 240], [957, 240]]) { const [r, , b] = px(x, y); assert.ok(b > 150 && r < 100, `(${x},${y}) should be blue, got ${px(x, y)}`); }
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+describe('settings and messages', () => {
+  test('limits must be whole numbers; anything else falls back to the default', () => {
+    const was = process.env.MV_TEST_N;
+    for (const [v, want] of [['abc', 2], ['-1', 2], ['1.5', 2], ['', 2], ['0', 0], ['3', 3]]) { process.env.MV_TEST_N = v; assert.equal(intEnv('MV_TEST_N', 2), want, `"${v}"`); }
+    delete process.env.MV_TEST_N;
+    assert.equal(intEnv('MV_TEST_N', 2), 2);
+    if (was !== undefined) process.env.MV_TEST_N = was;
+  });
+
+  test('the short reason says what is wrong without the filter graph', () => {
+    const tail = '[fc#0 @ 0x55] Stream specifier \':v:0\' in filtergraph description [0:v:0]scale=568:320[t0];[6:v][t0]overlay=0:0 matches no streams.\nError opening output file pipe:1.\n';
+    const r = shortReason(tail);
+    assert.ok(r.length < 300);
+    assert.doesNotMatch(r, /overlay=0:0/);
+  });
+});
+
+describe('a slow input is skipped ahead, not dropped', () => {
+  test('the queue stays bounded and the input keeps flowing once ffmpeg reads again', () => {
+    const stream = new PassThrough({ highWaterMark: 1000 });
+    const up = { bytesPerSec: () => 1000, burst: () => Buffer.alloc(PKT * 10, 1) };
+    const c = new PipeClient(stream, { up, label: 'test', queueMin: 100000, queueSeconds: 1 });
+    for (let i = 0; i < 100; i++) c.send(Buffer.alloc(20000, 7)); // 2 MB while nobody reads
+    assert.ok(c.resyncs >= 1, 'skipped ahead');
+    assert.ok(c.qBytes <= 140000, `queue is ${c.qBytes}`);
+    assert.equal(c.dead, false);
+    let got = 0;
+    stream.on('data', (d) => { got += d.length; });
+    c.send(Buffer.alloc(PKT * 5, 9));
+    return new Promise((r) => setTimeout(() => { assert.ok(got > 0, 'data flows again'); assert.equal(c.dead, false); r(); }, 50));
+  });
+});
+
+describe('the composite survives bad inputs', { skip: needReal }, () => {
+  let ctx; let prov; let dir; let audioOnly;
+  const tileCells = (ids) => ids.map((sid, i) => ({ x: i + 1, y: 1, w: 1, h: 1, p: 'a', sid }));
+  const spec = (ids, extra = {}) => ({ res: 480, cols: ids.length, rows: 1, audio: 0, cells: tileCells(ids), ...extra });
+  const savedEnv = {};
+  before(async () => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mv-aud-'));
+    audioOnly = path.join(dir, 'audio.ts');
+    spawnSync('ffmpeg', ['-v', 'error', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=6', '-c:a', 'aac', '-f', 'mpegts', audioOnly]);
+    for (const k of ['COMPOSE_MAX']) { savedEnv[k] = process.env[k]; }
+    process.env.COMPOSE_MAX = '1';
+    prov = await new MockProvider({ user: 'u', pass: 'p', max: 6 }).listen();
+    let late = 0;
+    prov.files = {
+      v1: { path: CLIP, seconds: 40 }, v2: { path: CLIP, seconds: 40 },
+      aud: { path: audioOnly, seconds: 6 },
+      late: { path: CLIP, seconds: 40, delayMs: () => (late++ === 0 ? 3500 : 0) },
+    };
+    const dd = fs.mkdtempSync(path.join(os.tmpdir(), 'mv-comp2-'));
+    const app = createApp({ dataDir: dd, basicAuth: '', composeIdleMs: 5000, relay: { idleMs: 300 }, compose: { gateMs: 1500, watchMs: 300, recheckMs: 500, minRebuildMs: 500 } });
+    await new Promise((r) => app.server.listen(0, '127.0.0.1', r));
+    ctx = { app, dir: dd, base: `http://127.0.0.1:${app.server.address().port}` };
+    await put(ctx.base, [{ id: 'a', name: 'A', url: prov.url, username: 'u', password: 'p', maxConnections: 6 }]);
+  });
+  after(() => {
+    ctx.app.close(); prov.close();
+    fs.rmSync(ctx.dir, { recursive: true, force: true }); fs.rmSync(dir, { recursive: true, force: true });
+    if (savedEnv.COMPOSE_MAX === undefined) delete process.env.COMPOSE_MAX; else process.env.COMPOSE_MAX = savedEnv.COMPOSE_MAX;
+  });
+
+  const info = async () => json(await request(ctx.base, '/api/compose/info'));
+  // keeps asking for the stream like the page does when it is restarted
+  async function watchFor(stream, ms, until) {
+    const end = Date.now() + ms;
+    const bytes = [];
+    let last = null;
+    while (Date.now() < end) {
+      const r = await request(ctx.base, stream, { ms: Math.min(2500, end - Date.now()) });
+      if (r.status === 200) bytes.push(r.buf);
+      last = await info();
+      if (until && until(last)) break;
+    }
+    return { bytes: Buffer.concat(bytes), info: last };
+  }
+  const states = (inf) => (inf.jobs[0] ? inf.jobs[0].inputs.map((i) => i.state) : []);
+
+  test('an input with no video: the composite still starts, that tile is black, the others play', async () => {
+    const made = json(await request(ctx.base, '/api/compose', { method: 'POST', body: spec(['v1', 'aud', 'v2']) }));
+    const r = await watchFor(made.stream, 9000, (i) => states(i).join() === 'live,black,live' && /no video/.test(i.jobs[0].inputs[1].why));
+    assert.deepEqual(states(r.info), ['live', 'black', 'live']);
+    assert.match(r.info.jobs[0].inputs[1].why, /no video/);
+    assert.ok(r.bytes.length > 30000, `only ${r.bytes.length} bytes`);
+    const probe = spawnSync('ffprobe', ['-v', 'error', '-select_streams', 'v:0', '-show_entries', 'stream=width,height,codec_name', '-of', 'csv=p=0', '-'], { input: r.bytes, encoding: 'utf8' });
+    assert.match(probe.stdout, /h264,(854|1280),480/);
+    assert.equal(prov.opened.filter((x) => x === 'aud').length, 1, 'the black tile still shares one provider connection');
+  });
+
+  test('an input that delivers nothing for a few seconds and then data appears in the picture', async () => {
+    await sleep(5500); // the previous composite ends
+    const made = json(await request(ctx.base, '/api/compose', { method: 'POST', body: spec(['v1', 'late']) }));
+    const first = await watchFor(made.stream, 3000);
+    assert.ok(states(first.info).includes('black') || states(first.info).includes('live'), 'it started without waiting');
+    const r = await watchFor(made.stream, 20000, (i) => states(i).join() === 'live,live');
+    assert.deepEqual(states(r.info), ['live', 'live'], JSON.stringify(r.info.jobs));
+    assert.equal(prov.opened.filter((x) => x === 'late').length, 1, 'no second provider connection for the late channel');
+  });
+
+  test('a second request from the same viewer replaces the first instead of competing for COMPOSE_MAX=1', async () => {
+    await sleep(5500);
+    const a = await request(ctx.base, '/api/compose', { method: 'POST', body: spec(['v1']) });
+    assert.equal(a.status, 200);
+    const b = await request(ctx.base, '/api/compose', { method: 'POST', body: spec(['v1', 'v2']) });
+    assert.equal(b.status, 200, b.buf.toString());
+    const inf = await info();
+    assert.deepEqual(inf.jobs.map((j) => j.id), [json(b).id]);
+  });
+
+  test('every refused request is explained', async () => {
+    process.env.COMPOSE_MAX = '0';
+    const dd = fs.mkdtempSync(path.join(os.tmpdir(), 'mv-comp3-'));
+    const app = createApp({ dataDir: dd, basicAuth: '', composeIdleMs: 400, relay: { idleMs: 300 } });
+    process.env.COMPOSE_MAX = '1';
+    await new Promise((r) => app.server.listen(0, '127.0.0.1', r));
+    const base = `http://127.0.0.1:${app.server.address().port}`;
+    await put(base, [{ id: 'a', name: 'A', url: prov.url, username: 'u', password: 'p', maxConnections: 6 }]);
+    const r = await request(base, '/api/compose', { method: 'POST', body: spec(['v1', 'v2']) });
+    assert.equal(r.status, 503);
+    assert.equal(json(r).error, 'compose_disabled');
+    assert.match(json(r).message, /COMPOSE_MAX=0/);
+    app.close(); fs.rmSync(dd, { recursive: true, force: true });
   });
 });

@@ -42,7 +42,7 @@ function createApp(options = {}) {
     stallMs: Number(env('STALL_SECONDS', 15)) * 1000,
     ...(options.relay || {}),
   });
-  const compose = new Compose(relay, { idleMs: options.composeIdleMs !== undefined ? options.composeIdleMs : Number(env('COMPOSE_IDLE_SECONDS', 8)) * 1000 });
+  const compose = new Compose(relay, { ...(options.compose || {}), idleMs: options.composeIdleMs !== undefined ? options.composeIdleMs : Number(env('COMPOSE_IDLE_SECONDS', 8)) * 1000 });
   const maxQueue = (options.maxClientQueueMB !== undefined ? options.maxClientQueueMB : Number(env('CLIENT_QUEUE_MB', 8))) * MB;
 
   const MIME = {
@@ -209,7 +209,8 @@ function createApp(options = {}) {
 
   // ---- shared screen / per-tile transcode: one ffmpeg output, delivered like a normal stream
   const denyOf = (status, error, message) => Object.assign(new Error(message), { deny: { status, error, message } });
-  async function runCompose(me, id, sink, begin) {
+  const ownerOf = (req, me) => `${me && me.username || ''}|${req.socket && req.socket.remoteAddress || ''}`;
+  async function runCompose(me, id, sink, begin, owner) {
     if (!me) throw denyOf(401, 'login_required', 'Login required');
     const spec = compose.specFor(id);
     if (!spec) throw denyOf(404, 'gone', 'This shared screen has ended - reload the page');
@@ -218,7 +219,7 @@ function createApp(options = {}) {
       if (d) throw denyOf(d.status, d.error, d.message);
     }
     let job;
-    try { job = compose.acquire(spec); } catch (e) { throw denyOf(e.status || 502, e.code || 'compose_failed', e.message); }
+    try { job = compose.acquire(spec, owner); } catch (e) { console.log(`[compose] refused ${spec.id}: ${e.message}`); throw denyOf(e.status || 502, e.code || 'compose_failed', e.message); }
     let mine = null;
     if (me.username) {
       mine = streamsByUser.get(me.username);
@@ -249,7 +250,7 @@ function createApp(options = {}) {
       await runCompose(me, decodeURIComponent(m[1]), res, () => {
         if (res.socket) res.socket.setNoDelay(true);
         res.writeHead(200, { 'Content-Type': 'video/mp2t', 'Cache-Control': 'no-store', 'Connection': 'keep-alive', 'X-Accel-Buffering': 'no' });
-      });
+      }, ownerOf(req, me));
     } catch (e) {
       if (!e.deny) throw e;
       sendJson(req, res, e.deny.status, { error: e.deny.error, message: e.deny.message });
@@ -312,7 +313,7 @@ function createApp(options = {}) {
       wsHandshake(req, socket);
       const csink = new WsSink(socket);
       try {
-        await runCompose(me, cm[1], csink, () => {});
+        await runCompose(me, cm[1], csink, () => {}, ownerOf(req, me));
       } catch (e) {
         if (!e.deny) { console.error(e); return csink.close(1011, 'error'); }
         csink.close(1011, e.deny.error);
@@ -460,7 +461,7 @@ function createApp(options = {}) {
         const d = streamDenied(me, c.p, c.sid);
         if (d) throw httpError(d.status, d.message, d.error);
       }
-      compose.acquire(spec); // refuses now (limit, or a transcode that needs a GPU) rather than on the first frame
+      compose.acquire(spec, ownerOf(req, me)); // refuses now (limit, or a transcode that needs a GPU) rather than on the first frame
       compose.remember(spec);
       return sendJson(req, res, 200, { id: spec.id, kind: spec.kind, res: spec.res, stream: `/stream/compose/${spec.id}.ts`, ws: `/ws/compose/${spec.id}` });
     }

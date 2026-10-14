@@ -206,12 +206,18 @@ MockProvider.prototype.streamFile = function streamFile(file, res) {
   const data = fs.readFileSync(file.path);
   const perTick = Math.max(PKT, Math.floor((data.length / file.seconds) * 0.1 / PKT) * PKT);
   let pos = 0;
-  const timer = setInterval(() => {
-    if (pos >= data.length) pos = 0;
-    res.write(data.subarray(pos, Math.min(data.length, pos + perTick)));
-    pos += perTick;
-  }, 100);
-  res.on('close', () => { clearInterval(timer); this.active--; });
+  let timer = null;
+  const begin = () => {
+    timer = setInterval(() => {
+      if (pos >= data.length) pos = 0;
+      res.write(data.subarray(pos, Math.min(data.length, pos + perTick)));
+      pos += perTick;
+    }, 100);
+  };
+  // file.delayMs: the connection is open but no bytes arrive for a while (a provider that is slow to start a channel)
+  const delay = typeof file.delayMs === 'function' ? file.delayMs() : (file.delayMs || 0);
+  const starter = delay ? setTimeout(begin, delay) : (begin(), null);
+  res.on('close', () => { clearInterval(timer); clearTimeout(starter); this.active--; });
 };
 
 module.exports = { MockProvider, PKT, packet, pat, pmt };
