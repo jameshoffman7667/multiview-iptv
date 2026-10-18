@@ -13,7 +13,7 @@ Requested: 2026-10-18. Tap any screen (single view or multiview) to show a full-
 - bottom middle: progress bar; bottom left: mute button and volume bar
 - arrow under the progress bar (up; turns down when open) that expands a row of options, left to right: 1 Layout (shows the current layout icon; all layout choices live here), 2 Expand (magnifying glass; replaces "zoom this tile"; tapping the same tile twice also expands), 3 Quality (filled TV icon with the current quality as text), 4 Reload (circular arrow), 5 Favourite (outline / filled star), 6 Record (red dot with REC: "to end of current event" with the stop time shown, or a chosen length; see P-5), 7 Download (down arrow with line: to server or to device; see P-6). Tapping an option opens its sub-options in a menu that grows upward from that icon; the arrow closes the row.
 Type: minor-to-major (replaces the current top menu, tile menu and idle-hide behaviour)   Status: Pending
-Decided 2026-10-18: controls act on the selected tile (a tap selects it first); skip back 10 s / forward 30 s; the 5 s idle auto-hide stays. Skip and progress bar rely on the live buffer (P-7). Open: remote/focus navigation on the Android TV app.
+Decided 2026-10-18: controls act on the selected tile (a tap selects it first); skip back 10 s / forward 30 s; the 5 s idle auto-hide stays. Skip and progress bar rely on the live buffer (P-7). Decided 2026-10-18: every overlay control is reachable with the D-pad/remote on the Android TV app.
 
 ### P-2 - Left pull-out menu
 Requested: 2026-10-18. Options: Watch (closes the menu and the overlays), Multiviews, Recordings & Downloads, Settings, Providers, Logout. Admin options move under Settings and are shown only to admins.
@@ -33,12 +33,12 @@ Notes / questions: 0.3.0 already has Providers > Add capture card (V4L2 video + 
 ### P-5 - Record live and future events
 Requested: 2026-10-18. Record from the overlay (to end of current programme with stop time shown, or a set length) and schedule future programmes from the guide.
 Type: minor   Status: Pending
-Notes / questions: a recording holds a provider connection (shares the relay connection if the channel is already open); Decided 2026-10-18: files go to a folder set by a new environment variable in the deployment, separate from app data and the rewind buffer, so it can sit on a large slow disk (shared with P-6 downloads). Open: retention/size limit, format (.ts as received or remux to .mp4/.mkv), padding before/after, what happens if the provider is full at the start time.
+Notes / questions: a recording holds a provider connection (shares the relay connection if the channel is already open); Decided 2026-10-18: files go to a folder set by a new environment variable in the deployment, separate from app data and the rewind buffer, so it can sit on a large slow disk (shared with P-6 downloads). Decided 2026-10-18: kept indefinitely, no size cap (deleted only by the user). Open: format (.ts as received or remux to .mp4/.mkv), padding before/after, what happens if the provider is full at the start time.
 
 ### P-6 - Download movies and series for offline viewing
 Requested: 2026-10-18. Download to the server or to the device.
 Type: minor   Status: Pending
-Notes / questions: server download = background job into storage, listed in Recordings & Downloads and playable from the server; device download = browser download of the file (fine on phone/PC; the Android TV app has limited storage and no file picker). A download holds a provider connection while it runs. Decided 2026-10-18: server downloads use the same separate recordings/downloads folder as P-5. Open: retention.
+Notes / questions: server download = background job into storage, listed in Recordings & Downloads and playable from the server; device download = browser download of the file (fine on phone/PC; the Android TV app has limited storage and no file picker). A download holds a provider connection while it runs. Decided 2026-10-18: server downloads use the same separate recordings/downloads folder as P-5. Decided 2026-10-18: kept indefinitely, no size cap.
 
 ### P-7 - Automatic 1-hour rewind buffer for live video
 Requested: 2026-10-18. Live video is recorded automatically for up to 1 hour so the viewer can rewind.
