@@ -33,7 +33,7 @@ Notes / questions: 0.3.0 already has Providers > Add capture card (V4L2 video + 
 ### P-5 - Record live and future events
 Requested: 2026-10-18. Record from the overlay (to end of current programme with stop time shown, or a set length) and schedule future programmes from the guide.
 Type: minor   Status: Pending
-Notes / questions: a recording holds a provider connection (shares the relay connection if the channel is already open); Decided 2026-10-18: files go to a folder set by a new environment variable in the deployment, separate from app data and the rewind buffer, so it can sit on a large slow disk (shared with P-6 downloads). Decided 2026-10-18: kept indefinitely, no size cap (deleted only by the user). Open: format (.ts as received or remux to .mp4/.mkv), padding before/after, what happens if the provider is full at the start time.
+Notes / questions: a recording holds a provider connection (shares the relay connection if the channel is already open); Decided 2026-10-18: files go to a folder set by a new environment variable in the deployment, separate from app data and the rewind buffer, so it can sit on a large slow disk (shared with P-6 downloads). Decided 2026-10-18: kept indefinitely, no size cap (deleted only by the user). Decided 2026-10-18: saved as .mp4; scheduled live-event recordings start 5 minutes early and end 60 minutes late (sports overtime), shown in the schedule screen and removable per recording. Open: what happens if the provider is full at the start time (default: the recording fails and shows an error).
 
 ### P-6 - Download movies and series for offline viewing
 Requested: 2026-10-18. Download to the server or to the device.
