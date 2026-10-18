@@ -7,6 +7,12 @@ services:
       - "1234:1234"
     environment:
       - TZ=America/Toronto
+      # Recordings and downloads (kept until you delete them, no size cap): put this on a large, slow disk.
+      - REC_DIR=/recordings
+      # Rewind buffer (the last hour of every channel being watched, cleared at start): put this on a fast disk.
+      # About 2 GB per hour per 4-5 Mbps channel, so a 6-tile multiview needs about 12 GB.
+      - REWIND_DIR=/rewind
+      # - REWIND_MINUTES=60           # 0 switches rewind off, up to 240
       # Create the first admin account at start (otherwise create it in the app: Logins > Users and logins).
       # Do this if anything other than your own LAN can reach this port:
       # - ADMIN_USER=james
@@ -32,6 +38,10 @@ services:
       # Named volume: Docker gives it the right owner automatically.
       # To use a folder instead:  - ./data:/data   (then run: mkdir data && chown 1000:1000 data)
       - ${DATA_PATH:-iptv-data}:/data  # set DATA_PATH to a host folder (e.g. /srv/iptv) or leave for the named volume
+      - ${REC_PATH:-iptv-recordings}:/recordings  # set REC_PATH to a folder on a big disk (owned by uid 1000)
+      - ${REWIND_PATH:-iptv-rewind}:/rewind       # set REWIND_PATH to a folder on a fast disk (owned by uid 1000)
 
 volumes:
   iptv-data:
+  iptv-recordings:
+  iptv-rewind:

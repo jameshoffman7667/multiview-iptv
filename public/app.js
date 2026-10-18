@@ -62,7 +62,7 @@
   var S = loadState();
   var ME = null; // set after /api/me: { admin, user, open, authRequired }
   function loadState() {
-    var d = { layout: '3x3', tiles: [], sel: 0, muted: false, bufSec: 4, keepSec: 0, transport: 'auto', fit: 'contain', failover: true, smallSd: true, shared: '', workers: true, stats: false, labels: false, epgOn: true, favs: {}, pk: {} };
+    var d = { layout: '3x3', tiles: [], sel: 0, muted: false, bufSec: 4, keepSec: 0, transport: 'auto', fit: 'contain', failover: true, smallSd: true, vol: 1, shared: '', workers: true, stats: false, labels: false, epgOn: true, favs: {}, pk: {} };
     var j = {};
     try { j = JSON.parse(localStorage.getItem(LS_KEY)) || {}; } catch (e) { j = {}; }
     Object.keys(d).forEach(function (k) { if (j[k] !== undefined && typeof j[k] === typeof d[k]) d[k] = j[k]; });
@@ -130,7 +130,7 @@
     if (!sentinel) { try { history.pushState({ mv: 1 }, ''); sentinel = true; } catch (e) { /* ignore */ } }
   }
   function popSentinel() {
-    if (modals.length || !sentinel) return;
+    if (modals.length || !sentinel || (ovl && ovl.shown) || (side && side.open)) return;
     backTimer = setTimeout(function () {
       backTimer = null;
       if (sentinel && !modals.length) { sentinel = false; ignorePops++; history.back(); }
@@ -141,9 +141,22 @@
     sentinel = false;
     if (modals.length) {
       removeModal(modals[modals.length - 1]);
-      if (modals.length) pushSentinel();
+      if (modals.length || (ovl && ovl.shown) || (side && side.open)) pushSentinel();
+    } else if (backStep()) {
+      if ((ovl && ovl.shown) || (side && side.open)) pushSentinel();
     }
   });
+  // The Back button (a phone, the TV remote) closes things from the top: side menu, then options sub-menu, row, controls.
+  function backStep() {
+    if (side && side.open) { sideClose(); return true; }
+    if (ovl && ovl.shown) {
+      if (ovl.sub) { subClose(); return true; }
+      if (ovl.optsOpen) { optsClose(); return true; }
+      ovlHide();
+      return true;
+    }
+    return false;
+  }
 
   function focusables(root) {
     var list = root.querySelectorAll('button:not([disabled]), select, input:not([disabled]), [tabindex="0"]');
@@ -240,19 +253,20 @@
     this.label = h('div', { class: 'label' }, this.labName, this.labNow);
     this.now = null;
     this.speaker = h('div', { class: 'speaker', text: 'sound' });
-    this.more = h('button', { class: 'more', type: 'button', tabindex: '-1', title: 'Tile menu', text: '...' });
     this.status = h('div', { class: 'status', hidden: true });
     this.stats = h('div', { class: 'stats' });
     this.empty = h('div', { class: 'empty' }, h('b', { text: '+' }), h('span', { text: 'Add channel' }));
     this.el = h('div', { class: 'tile', tabindex: '0', 'data-idx': String(idx) },
-      this.video, this.empty, this.num, this.label, this.speaker, this.more, this.status, this.stats);
+      this.video, this.empty, this.num, this.label, this.speaker, this.status, this.stats);
     this.touch = false;
+    this.back = 0;          // seconds behind live (rewind)
+    this.userPaused = false;
+    this.avail = 0;         // seconds of rewind available
+    this.availAt = 0;
     this.el.addEventListener('pointerdown', function (e) { self.touch = e.pointerType === 'touch'; });
     this.el.addEventListener('click', function () { tileClick(self); });
-    this.el.addEventListener('dblclick', function () { if (self.cfg) toggleZoom(self.idx); });
-    this.el.addEventListener('contextmenu', function (e) { e.preventDefault(); select(self.idx); openTileMenu(self.idx); });
+    this.el.addEventListener('contextmenu', function (e) { e.preventDefault(); select(self.idx); if (self.cfg) ovlShow(); });
     this.el.addEventListener('focus', function () { if (S.sel !== self.idx) select(self.idx, true); });
-    this.more.addEventListener('click', function (e) { e.stopPropagation(); select(self.idx); openTileMenu(self.idx); });
     this.video.addEventListener('playing', function () { self.hasPlayed = true; if (self.viaWs) { wsWorked = true; wsFails = 0; } });
     this.video.addEventListener('timeupdate', function () { self.lastTime = Date.now(); });
     this.render();
@@ -282,6 +296,9 @@
   Tile.prototype.setCfg = function (cfg) {
     this.cfg = cfg;
     this.now = null;
+    this.back = 0;
+    this.userPaused = false;
+    this.avail = 0;
     this.retry = 0;
     this.mediaErrors = 0;
     this.render();
@@ -348,7 +365,7 @@
     var useWs = S.transport !== 'http' && !wsBlocked && typeof WebSocket !== 'undefined';
     this.viaWs = useWs;
     this.sdUsed = this.wantSd();
-    var path = encodeURIComponent(c.p) + '/' + encodeURIComponent(c.sid) + '.ts?buf=' + S.bufSec + (S.failover ? '' : '&failover=0') + (this.sdUsed ? '&q=sd' : '');
+    var path = encodeURIComponent(c.p) + '/' + encodeURIComponent(c.sid) + '.ts?buf=' + S.bufSec + (S.failover ? '' : '&failover=0') + (this.sdUsed ? '&q=sd' : '') + (this.back > 0 ? '&back=' + Math.round(this.back) : '');
     var url = useWs ? (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws/stream/' + path : location.origin + '/stream/' + path;
     this.txUsed = false;
     function begin(url) {
@@ -405,7 +422,7 @@
     var key = c.p + ':' + c.sid;
     var resume = this.resumeKey === key ? this.resumeAt : 0;
     this.vodKey = key;
-    v.controls = true;
+    v.controls = false;
     v.onloadedmetadata = function () { if (gen === self.gen && resume > 1) { try { v.currentTime = resume; } catch (e) { /* not seekable yet */ } } };
     v.onplaying = function () { if (gen === self.gen) { self.hasPlayed = true; self.retry = 0; self.setStatus(''); } };
     v.onwaiting = function () { if (gen === self.gen && self.hasPlayed) self.setStatus('Buffering...'); };
@@ -439,7 +456,7 @@
   Tile.prototype.retryVod = function (gen, msg, delay) {
     var self = this;
     this.retry++;
-    if (this.retry > 5) { this.setStatus((msg || 'Playback failed') + ' - use the tile menu to reload', true); return; }
+    if (this.retry > 5) { this.setStatus((msg || 'Playback failed') + ' - use the Reload button to retry', true); return; }
     delay = delay || BACKOFF[clamp(this.retry - 1, 0, BACKOFF.length - 1)];
     if (msg) this.setStatus(msg + ' - retrying in ' + Math.round(delay / 1000) + 's', true);
     clearTimeout(this.retryTimer);
@@ -517,7 +534,7 @@
     else { msg = 'Stream error' + (detail ? ' (' + detail + ')' : ''); delay = backoff; }
     this.stop();
     var self = this;
-    if (fatal) { this.setStatus(msg + (isAdmin() ? ' - use the tile menu to change channel' : ''), true); return; }
+    if (fatal) { this.setStatus(msg + (isAdmin() ? ' - tap the screen and use the channel button to change it' : ''), true); return; }
     this.setStatus(msg + ' - retrying in ' + Math.round(delay / 1000) + 's', true);
     this.retryTimer = setTimeout(function () { self.start(); }, delay);
   };
@@ -526,6 +543,7 @@
     this.phase = 'playing';
     this.playingSince = Date.now();
     this.setStatus('');
+    if (this.userPaused) return;
     var pr;
     try { pr = this.video.play(); } catch (e) { pr = null; }
     if (pr && pr.catch) pr.catch(noop);
@@ -545,13 +563,13 @@
       else if (waited > 25000 && ahead <= 0.05) this.onError('timeout');
       else this.setStatus(ahead > 0.05 && buf > 0 ? 'Buffering ' + fmtSec(ahead, need) + ' / ' + fmtSec(need, need) + ' s' : 'Connecting...');
     } else if (this.phase === 'playing') {
-      if (v.paused && !v.ended && now - this.playingSince > 1000) { try { var pr = v.play(); if (pr && pr.catch) pr.catch(noop); } catch (e) { /* ignore */ } }
+      if (v.paused && !v.ended && !this.userPaused && now - this.playingSince > 1000) { try { var pr = v.play(); if (pr && pr.catch) pr.catch(noop); } catch (e) { /* ignore */ } }
       if (buf > 0 && this.hasPlayed && ahead < 0.15 && !v.paused) {
         v.pause();
         this.phase = 'rebuffer';
         this.phaseAt = now;
         this.setStatus('Buffering...');
-      } else if (ahead > Math.max(S.keepSec || 0, buf) + 8) {
+      } else if (!this.back && ahead > Math.max(S.keepSec || 0, buf) + 8) {
         var b = v.buffered;
         if (b.length) v.currentTime = Math.max(b.start(b.length - 1), b.end(b.length - 1) - Math.max(buf, 1)); // drifted behind live: catch up
       } else if (this.hasPlayed && now - this.lastTime > 12000 && !v.paused) {
@@ -764,17 +782,16 @@
   function audioIdx() { return S.muted ? -1 : S.sel; }
   function applyAudio() {
     var a = audioIdx();
+    var vv = clamp(S.vol === undefined ? 1 : S.vol, 0, 1);
     tiles.forEach(function (t, i) {
       var on = i === a && t.cfg;
       t.video.muted = !(userActive && on);
+      try { t.video.volume = vv; } catch (e) { /* read-only on some phones */ }
       t.el.classList.toggle('audio', !!on);
     });
-    if (shared.video) shared.video.muted = !(userActive && !S.muted && sharedOn());
+    if (shared.video) { shared.video.muted = !(userActive && !S.muted && sharedOn()); try { shared.video.volume = vv; } catch (e) { /* ignore */ } }
     sharedSync();
-    var b = $('#btn-audio');
-    b.textContent = S.muted ? 'Muted' : 'Sound on';
-    b.classList.toggle('on', !S.muted);
-    b.setAttribute('aria-pressed', S.muted ? 'false' : 'true');
+    ovlSync();
     updateHint();
   }
 
@@ -796,12 +813,14 @@
     if (!fromFocus && document.activeElement !== tiles[idx].el && !modals.length) tiles[idx].el.focus();
   }
 
+  // Tap a tile: it is selected and the player controls come up; tap the same tile again to expand it (or go back to the grid).
   function tileClick(t) {
     userGesture();
-    if (S.sel !== t.idx) { select(t.idx); return; }
-    if (!t.cfg && !isAdmin()) return;
-    if (!t.cfg) { openPicker(t.idx); return; }
-    if (t.touch) openTileMenu(t.idx); // second tap on the selected tile opens its menu
+    var was = S.sel === t.idx;
+    if (!was) select(t.idx);
+    if (!t.cfg) { if (was && isAdmin()) openPicker(t.idx); return; }
+    if (!ovl.shown) { ovlShow(); return; }
+    if (was && visibleCount() > 1) toggleZoom(t.idx); else ovlSync();
   }
 
   function assign(idx, cfg) {
@@ -869,19 +888,21 @@
     return best;
   }
 
-  // ---------------------------------------------------------------- toolbar
-  var toolbarTimer = null;
-  function toolbarWake() {
-    var tb = $('#toolbar');
-    tb.classList.remove('hide');
-    document.body.classList.remove('idle');
-    clearTimeout(toolbarTimer);
-    toolbarTimer = setTimeout(function () {
-      if (modals.length || tb.contains(document.activeElement)) { toolbarWake(); return; }
-      tb.classList.add('hide');
+  // ---------------------------------------------------------------- activity (names and the sound marker fade after 5 s idle)
+  var idleTimer = null;
+  function idleArm() {
+    clearTimeout(idleTimer);
+    idleTimer = setTimeout(function () {
+      if (modals.length || (ovl && ovl.shown) || (side && side.open)) { idleArm(); return; }
       document.body.classList.add('idle');
     }, 5000);
   }
+  function activity() {
+    document.body.classList.remove('idle');
+    idleArm();
+    ovlWake();
+  }
+  function toolbarWake() { activity(); }
 
   function layoutIcon(key) {
     var L = LAYOUTS[key];
@@ -901,31 +922,476 @@
     return svg;
   }
 
-  function buildToolbar() {
-    var box = $('#layouts');
-    LAYOUT_ORDER.forEach(function (key) {
-      var L = LAYOUTS[key];
-      var b = h('button', { class: 'btn layout', type: 'button', 'data-layout': key, title: L.name + ' (' + L.cells.length + ' stream' + (L.cells.length > 1 ? 's' : '') + ')', 'aria-label': L.name }, layoutIcon(key));
-      b.addEventListener('click', function () { setLayout(key); });
-      box.appendChild(b);
-    });
-    $('#btn-audio').addEventListener('click', toggleMute);
-    $('#btn-conn').addEventListener('click', function () { openProviders(); });
-    $('#btn-settings').addEventListener('click', function () { openSettings(); });
-    $('#btn-full').addEventListener('click', toggleFullscreen);
-    $('#btn-views').addEventListener('click', function () { openViews(); });
-    $('#btn-acct').addEventListener('click', function () { openAccount(); });
+  // ---------------------------------------------------------------- icons
+  var SVGNS = 'http://www.w3.org/2000/svg';
+  var ICONS = {
+    guide: { d: 'M3 4h18v16H3z M3 9h18 M9 9v11 M12 13h6 M12 17h6' },
+    cast: { d: 'M3 8V6a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-6 M3 12a8 8 0 0 1 8 8 M3 16a4 4 0 0 1 4 4 M3 20h.01' },
+    chevR: { d: 'M9 4l8 8-8 8' },
+    chevL: { d: 'M15 4l-8 8 8 8' },
+    up: { d: 'M5 15l7-7 7 7' },
+    down: { d: 'M5 9l7 7 7-7' },
+    chUp: { d: 'M12 20V5 M5 11l7-7 7 7' },
+    chDown: { d: 'M12 4v15 M5 13l7 7 7-7' },
+    play: { d: 'M7 4v16l13-8z', fill: true },
+    pause: { d: 'M6 4h4v16H6z M14 4h4v16h-4z', fill: true },
+    back: { d: 'M12 5V1L6 6l6 5V7a6 6 0 1 1-6 6', text: '10' },
+    fwd: { d: 'M12 5V1l6 5-6 5V7a6 6 0 1 0 6 6', text: '30' },
+    vol: { d: 'M3 9v6h4l5 4V5L7 9z M16 8.5a5 5 0 0 1 0 7 M19 6a9 9 0 0 1 0 12' },
+    mute: { d: 'M3 9v6h4l5 4V5L7 9z M16 9l6 6 M22 9l-6 6' },
+    magnify: { d: 'M10 3a7 7 0 1 0 0 14 7 7 0 0 0 0-14z M15 15l6 6' },
+    reload: { d: 'M20 12a8 8 0 1 1-2.6-5.9 M20 3v5h-5' },
+    star: { d: 'M12 3l2.7 5.6 6.1.9-4.4 4.3 1 6.1-5.4-2.9-5.4 2.9 1-6.1L3.2 9.5l6.1-.9z' },
+    starOn: { d: 'M12 3l2.7 5.6 6.1.9-4.4 4.3 1 6.1-5.4-2.9-5.4 2.9 1-6.1L3.2 9.5l6.1-.9z', fill: true },
+    download: { d: 'M12 3v12 M7 10l5 5 5-5 M5 20h14' },
+    tv: { d: 'M3 5h18v12H3z M8 21h8 M12 17v4', fill: true, text: '', dark: true },
+    rec: { d: 'M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18z', fill: true, red: true, text: 'REC' },
+    menu: { d: 'M4 6h16 M4 12h16 M4 18h16' }
+  };
+  function icon(name, label) {
+    var def = ICONS[name];
+    var s = document.createElementNS(SVGNS, 'svg');
+    s.setAttribute('viewBox', '0 0 24 24');
+    s.setAttribute('class', 'ic ic-' + name);
+    s.setAttribute('aria-hidden', 'true');
+    var p = document.createElementNS(SVGNS, 'path');
+    p.setAttribute('d', def.d);
+    if (def.fill) p.setAttribute('class', def.red ? 'fillred' : 'fill');
+    s.appendChild(p);
+    if (def.text !== undefined) {
+      var t = document.createElementNS(SVGNS, 'text');
+      t.setAttribute('x', '12');
+      t.setAttribute('y', name === 'rec' ? '14.2' : name === 'tv' ? '14' : '16');
+      t.setAttribute('text-anchor', 'middle');
+      t.setAttribute('class', name === 'tv' ? 'ictext dark' : 'ictext');
+      t.textContent = label !== undefined ? label : def.text;
+      s.appendChild(t);
+    }
+    return s;
+  }
+  function setIcon(btn, name, label) {
+    var old = btn.querySelector('svg.ic');
+    var n = icon(name, label);
+    if (old) btn.replaceChild(n, old); else btn.insertBefore(n, btn.firstChild);
   }
 
-  function updateLayoutButtons() {
-    Array.prototype.forEach.call(document.querySelectorAll('#layouts .btn'), function (b) {
-      b.classList.toggle('on', b.getAttribute('data-layout') === S.layout);
-    });
+  // ---------------------------------------------------------------- player overlay
+  // Tap any screen to bring it up, over everything, whether one channel or a multiview is showing. It acts on the selected tile.
+  var ovl = { el: null, shown: false, optsOpen: false, sub: '', timer: null, tick: null, p: {} };
+  var side = { el: null, open: false };
+  var castState = { avail: false, session: null, ready: false };
+
+  function curTile() { return tiles[S.sel]; }
+  function qualityLabel(c) { return !c ? '' : ({ sd: 'SD', full: 'FULL', '480': '480p' }[c.q || ''] || 'AUTO'); }
+  function fmtClockMs(ms) { try { return new Date(ms).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }); } catch (e) { return ''; } }
+  function fmtDur(s) {
+    s = Math.max(0, Math.round(s));
+    var hh = Math.floor(s / 3600);
+    var mm = Math.floor((s % 3600) / 60);
+    var ss = s % 60;
+    return (hh ? hh + ':' + (mm < 10 ? '0' : '') + mm : mm) + ':' + (ss < 10 ? '0' : '') + ss;
   }
+  function obtn(id, ic, title, fn, cls) {
+    var b = h('button', { id: id, class: 'ovb' + (cls ? ' ' + cls : ''), type: 'button', title: title, 'aria-label': title });
+    if (ic) b.appendChild(icon(ic));
+    b.addEventListener('click', function (e) { e.stopPropagation(); userGesture(); activity(); fn(e); });
+    return b;
+  }
+
+  function buildOverlay() {
+    var o = ovl.p;
+    o.guide = obtn('ov-guide', 'guide', 'Change channel (programme guide)', function () { ovlHide(); var pk = pkState(); pk.tab = 'guide'; openPicker(S.sel); });
+    o.title = h('span', { id: 'view-title', class: 'ov-title' });
+    o.cast = obtn('ov-cast', 'cast', 'Cast to a Google device', openCast);
+    o.cast.hidden = true;
+    o.pull = obtn('ov-pull', 'chevR', 'Menu', function () { sideToggle(); }, 'ov-pull');
+    o.back = obtn('ov-back', 'back', 'Back 10 seconds', function () { skip(-10); }, 'big');
+    o.play = obtn('ov-play', 'pause', 'Play / pause', togglePlay, 'huge');
+    o.fwd = obtn('ov-fwd', 'fwd', 'Forward 30 seconds', function () { skip(30); }, 'big');
+    o.up = obtn('ov-up', 'chUp', 'Channel up', function () { stepChannel(-1); }, 'big');
+    o.down = obtn('ov-down', 'chDown', 'Channel down', function () { stepChannel(1); }, 'big');
+    o.mute = obtn('ov-mute', 'vol', 'Mute / unmute (M)', toggleMute);
+    o.vol = h('input', { id: 'ov-vol', class: 'ovrange', type: 'range', min: '0', max: '100', step: '1', 'aria-label': 'Volume' });
+    o.vol.addEventListener('input', function () {
+      S.vol = Number(o.vol.value) / 100;
+      if (S.vol > 0 && S.muted) S.muted = false;
+      if (S.vol === 0) S.muted = true;
+      userGesture();
+      applyAudio();
+      saveSoon();
+      activity();
+    });
+    o.seek = h('input', { id: 'ov-seek', class: 'ovrange seek', type: 'range', min: '0', max: '1', step: '1', value: '0', 'aria-label': 'Position' });
+    o.seek.addEventListener('input', function () { ovl.dragging = true; activity(); o.time.textContent = seekLabel(Number(o.seek.value)); });
+    o.seek.addEventListener('change', function () { ovl.dragging = false; seekTo(Number(o.seek.value)); });
+    o.time = h('span', { id: 'ov-time', class: 'ov-time', text: 'LIVE' });
+    o.arrow = obtn('ov-arrow', 'up', 'More options', function () { optsToggle(); }, 'ov-arrow');
+    // the seven options, left to right
+    o.opts = h('div', { id: 'ov-opts', class: 'ov-opts' });
+    o.opt = {};
+    [['layout', 'Layout'], ['expand', 'Expand'], ['quality', 'Quality'], ['reload', 'Reload'], ['fav', 'Favourite'], ['rec', 'Record'], ['dl', 'Download']].forEach(function (d) {
+      var key = d[0];
+      var btn = h('button', { id: 'ov-o-' + key, class: 'ovb opt', type: 'button', title: d[1], 'aria-label': d[1], 'aria-haspopup': key === 'expand' || key === 'reload' || key === 'fav' ? null : 'menu' });
+      var sub = h('div', { class: 'ov-sub', hidden: true, role: 'menu' });
+      var wrap = h('div', { class: 'ov-opt' }, btn, sub);
+      btn.addEventListener('click', function (e) { e.stopPropagation(); userGesture(); activity(); optClick(key); });
+      o.opt[key] = { btn: btn, sub: sub, wrap: wrap };
+      o.opts.appendChild(wrap);
+    });
+    o.opt.layout.btn.appendChild(layoutIcon(S.layout));
+    o.opt.expand.btn.appendChild(icon('magnify'));
+    o.opt.quality.btn.appendChild(icon('tv', 'AUTO'));
+    o.opt.reload.btn.appendChild(icon('reload'));
+    o.opt.fav.btn.appendChild(icon('star'));
+    o.opt.rec.btn.appendChild(icon('rec'));
+    o.opt.dl.btn.appendChild(icon('download'));
+    var top = h('div', { class: 'ov-top' }, o.guide, o.title, h('span', { class: 'spacer' }), o.cast);
+    var mid = h('div', { class: 'ov-mid' }, o.back, o.play, o.fwd);
+    var right = h('div', { class: 'ov-right' }, o.up, o.down);
+    var bar = h('div', { class: 'ov-bar' }, h('div', { class: 'ov-vols' }, o.mute, o.vol), h('div', { class: 'ov-prog' }, o.seek, o.time));
+    var bottom = h('div', { class: 'ov-bottom' }, o.opts, bar, h('div', { class: 'ov-arrowrow' }, o.arrow));
+    ovl.el = h('div', { id: 'ovl', class: 'ovl', 'aria-label': 'Player controls' }, top, o.pull, mid, right, bottom);
+    ovl.el.addEventListener('pointerdown', function (e) { e.stopPropagation(); activity(); }, true);
+    document.body.appendChild(ovl.el);
+    buildSide();
+    ovlSync();
+  }
+
+  function ovlShow() {
+    if (!ME) return;
+    ovl.shown = true;
+    pushSentinel();
+    ovl.el.classList.add('show');
+    document.body.classList.add('ovl-on');
+    document.body.classList.remove('idle');
+    fetchAvail(curTile());
+    ovlSync();
+    clearInterval(ovl.tick);
+    ovl.tick = setInterval(ovlSync, 500);
+    ovlWake();
+  }
+  function ovlHide() {
+    ovl.shown = false;
+    optsClose();
+    subClose();
+    sideClose();
+    ovl.el.classList.remove('show');
+    document.body.classList.remove('ovl-on');
+    clearInterval(ovl.tick);
+    clearTimeout(ovl.timer);
+    if (ovl.el.contains(document.activeElement) && tiles[S.sel]) tiles[S.sel].el.focus();
+    popSentinel();
+  }
+  function ovlWake() {
+    if (!ovl.shown) return;
+    clearTimeout(ovl.timer);
+    ovl.timer = setTimeout(function () {
+      if (modals.length || ovl.sub || side.open || ovl.dragging) { ovlWake(); return; }
+      ovlHide();
+    }, ovl.idleMs || 5000);
+  }
+  function optsToggle() {
+    ovl.optsOpen ? optsClose() : optsOpen();
+  }
+  function optsOpen() {
+    ovl.optsOpen = true;
+    ovl.p.opts.classList.add('open');
+    setIcon(ovl.p.arrow, 'down');
+    ovl.el.classList.add('opts-open');
+  }
+  function optsClose() {
+    ovl.optsOpen = false;
+    subClose();
+    ovl.p.opts.classList.remove('open');
+    setIcon(ovl.p.arrow, 'up');
+    ovl.el.classList.remove('opts-open');
+  }
+  function subClose() {
+    ovl.sub = '';
+    Object.keys(ovl.p.opt || {}).forEach(function (k) { ovl.p.opt[k].sub.hidden = true; ovl.p.opt[k].btn.classList.remove('on'); });
+  }
+  function subOpen(key, fill) {
+    if (ovl.sub === key) { subClose(); return; }
+    subClose();
+    ovl.sub = key;
+    var o = ovl.p.opt[key];
+    o.sub.textContent = '';
+    o.sub.hidden = false;
+    o.btn.classList.add('on');
+    fill(o.sub);
+    var f = o.sub.querySelector('button');
+    if (f) f.focus();
+  }
+  function subItem(label, fn, on, cls) {
+    var b = h('button', { class: 'ovitem' + (on ? ' on' : '') + (cls ? ' ' + cls : ''), type: 'button', role: 'menuitem', text: label });
+    b.addEventListener('click', function (e) { e.stopPropagation(); userGesture(); activity(); fn(); });
+    return b;
+  }
+
+  function optClick(key) {
+    var t = curTile();
+    var c = t && t.cfg;
+    if (key === 'layout') { if (!isAdmin()) return; subOpen('layout', function (box) {
+      box.className = 'ov-sub lays';
+      LAYOUT_ORDER.forEach(function (k) {
+        var b = h('button', { class: 'ovitem lay' + (k === S.layout ? ' on' : ''), type: 'button', role: 'menuitem', title: LAYOUTS[k].name, 'aria-label': LAYOUTS[k].name, 'data-layout': k }, layoutIcon(k));
+        b.addEventListener('click', function (e) { e.stopPropagation(); setLayout(k); subClose(); ovlSync(); });
+        box.appendChild(b);
+      });
+    }); return; }
+    subClose();
+    if (!c) return;
+    if (key === 'expand') { if (visibleCount() > 1) { toggleZoom(S.sel); ovlSync(); } return; }
+    if (key === 'reload') { t.back = 0; t.userPaused = false; t.reload(); return; }
+    if (key === 'fav') { if (!c.vod && isAdmin()) { toggleFav(c); ovlSync(); } return; }
+    if (key === 'quality') {
+      if (c.vod) return;
+      subOpen('quality', function (box) {
+        [['', 'Auto (small tiles use SD)'], ['sd', 'SD when available'], ['full', 'As chosen (full quality)'], ['480', '480p transcode (server GPU)']].forEach(function (q) {
+          box.appendChild(subItem(q[1], function () {
+            if (q[0]) c.q = q[0]; else delete c.q;
+            saveSoon();
+            if (c.q === '480' || t.txUsed) t.start(); else t.applyQuality();
+            sharedSync();
+            subClose();
+            ovlSync();
+          }, (c.q || '') === q[0]));
+        });
+      });
+      return;
+    }
+    if (key === 'rec') { if (c.vod) return; subOpen('rec', function (box) { fillRecSub(box, c); }); return; }
+    if (key === 'dl') {
+      subOpen('dl', function (box) {
+        if (c.vod) {
+          box.appendChild(subItem('Download to the server', function () { downloadToServer(c); subClose(); }));
+          box.appendChild(subItem('Download to this device', function () { downloadToDevice(c); subClose(); }));
+        } else {
+          box.appendChild(h('div', { class: 'ovnote', text: 'Live channels cannot be downloaded. Record them instead:' }));
+          box.appendChild(subItem('Record...', function () { subClose(); optClick('rec'); }));
+        }
+      });
+    }
+  }
+
+  function fillRecSub(box, c) {
+    box.appendChild(h('div', { class: 'ovnote', text: 'Loading guide...' }));
+    function items(ev) {
+      box.textContent = '';
+      if (ev) {
+        box.appendChild(subItem('To end of "' + (ev.title || 'this programme') + '" - stops ' + fmtClockMs(ev.recordUntil), function () { startRec({ mode: 'event' }, c); }));
+      } else {
+        box.appendChild(h('div', { class: 'ovnote', text: 'No guide data for this channel - choose a length:' }));
+      }
+      [[30, '30 minutes'], [60, '1 hour'], [120, '2 hours'], [180, '3 hours']].forEach(function (d) {
+        box.appendChild(subItem(d[1] + ' - stops ' + fmtClockMs(Date.now() + d[0] * 60000), function () { startRec({ mode: 'minutes', minutes: d[0] }, c); }));
+      });
+      var f = box.querySelector('button');
+      if (f && box.contains(document.activeElement) === false && ovl.sub === 'rec') f.focus();
+    }
+    api('/api/recordings/event?p=' + enc(c.p) + '&sid=' + enc(c.sid)).then(function (r) { if (ovl.sub === 'rec') items(r.event); }, function () { if (ovl.sub === 'rec') items(null); });
+  }
+  function startRec(opts, c) {
+    var body = Object.assign({ p: c.p, sid: c.sid, name: c.name || c.sid }, opts);
+    api('/api/recordings', { method: 'POST', body: body }).then(function (r) {
+      var it = r.item;
+      banner('Recording ' + (it.title || it.name) + ' until ' + fmtClockMs(it.end) + ' (see Recordings & Downloads)', 6000);
+    }, function (e) { banner('Could not record: ' + e.message, 7000); });
+    subClose();
+    ovlSync();
+  }
+  function downloadToServer(c) {
+    api('/api/recordings', { method: 'POST', body: { kind: 'download', p: c.p, sid: c.sid, ext: c.ext || 'mp4', name: c.name || c.sid } }).then(function () {
+      banner('Downloading "' + (c.name || c.sid) + '" to the server (see Recordings & Downloads)', 6000);
+    }, function (e) { banner('Could not download: ' + e.message, 7000); });
+  }
+  function downloadToDevice(c) {
+    var a = h('a', { href: '/vod/' + enc(c.p) + '/' + enc(c.sid + '.' + (c.ext || 'mp4')) + '?dl=1&name=' + enc(c.name || c.sid), download: '' });
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    banner('Download to this device started - see your browser downloads', 5000);
+  }
+
+  // ---- live rewind and VOD position
+  function fetchAvail(t) {
+    if (!t || !t.cfg || t.cfg.vod || sharedOn()) return;
+    var now = Date.now();
+    if (t.availAt && now - t.availAt < 3000) return;
+    t.availAt = now;
+    api('/api/rewind/' + enc(t.cfg.p) + '/' + enc(t.cfg.sid)).then(function (r) { t.avail = r.seconds || 0; t.availMax = r.max || 0; }, noop);
+  }
+  function seekLabel(v) {
+    var t = curTile();
+    if (!t || !t.cfg) return '';
+    if (t.cfg.vod) return fmtDur(v) + ' / ' + fmtDur(t.video.duration || 0);
+    var back = (t.avail || 0) - v;
+    return back < 3 ? 'LIVE' : '-' + fmtDur(back);
+  }
+  function liveSeek(t, back) {
+    var avail = t.avail || 0;
+    if (back > 0 && avail < 3) { banner('Rewind is not available yet for this channel (' + avail + ' s recorded so far)', 3500); return; }
+    back = Math.max(0, Math.min(Math.round(back), avail));
+    if (back < 3) back = 0;
+    if (back === (t.back || 0)) return;
+    t.back = back;
+    t.userPaused = false;
+    t.start();
+  }
+  function seekTo(v) {
+    var t = curTile();
+    if (!t || !t.cfg || sharedOn()) return;
+    if (t.cfg.vod) { try { t.video.currentTime = v; } catch (e) { /* not seekable */ } return; }
+    liveSeek(t, (t.avail || 0) - v);
+  }
+  function skip(sec) {
+    var t = curTile();
+    if (!t || !t.cfg || sharedOn()) return;
+    if (t.cfg.vod) { try { t.video.currentTime = Math.max(0, t.video.currentTime + sec); } catch (e) { /* not seekable */ } return; }
+    liveSeek(t, (t.back || 0) - sec);
+  }
+  function togglePlay() {
+    var t = curTile();
+    if (!t || !t.cfg || sharedOn()) return;
+    var v = t.video;
+    if (t.cfg.vod) { if (v.paused) { var pr = v.play(); if (pr && pr.catch) pr.catch(noop); } else v.pause(); ovlSync(); return; }
+    if (!t.userPaused) { t.userPaused = true; t.pausedAt = Date.now(); try { v.pause(); } catch (e) { /* ignore */ } }
+    else {
+      var gap = (Date.now() - t.pausedAt) / 1000;
+      t.userPaused = false;
+      if (gap > 5) { t.back = (t.back || 0) + gap; t.start(); } // the live stream moved on: continue from where the viewer paused
+      else { var p2 = v.play(); if (p2 && p2.catch) p2.catch(noop); }
+    }
+    ovlSync();
+  }
+
+  // ---- channel up / down inside the current category
+  function stepChannel(dir) {
+    var t = curTile();
+    var c = t && t.cfg;
+    if (!c || c.vod || !isAdmin()) return;
+    loadChannels(c.p).then(function (data) {
+      var cur = null;
+      data.list.forEach(function (ch) { if (String(ch.i) === String(c.sid)) cur = ch; });
+      var pool = cur ? data.list.filter(function (ch) { return ch.cn === cur.cn; }) : data.list;
+      if (pool.length < 2) { banner('No other channels in this category', 2500); return; }
+      var at = pool.indexOf(cur);
+      var next = pool[(at < 0 ? 0 : at + dir + pool.length) % pool.length];
+      t.back = 0;
+      t.userPaused = false;
+      assign(S.sel, cleanTile({ p: c.p, sid: next.i, name: next.n, icon: next.l || '' }));
+      ovlSync();
+    }, function (e) { banner(e.message, 3000); });
+  }
+
+  // ---- keep the buttons in step with the selected tile
+  function ovlSync() {
+    if (!ovl.el) return;
+    var o = ovl.p;
+    var t = curTile();
+    var c = t && t.cfg;
+    var shared = sharedOn();
+    var admin = isAdmin();
+    o.title.textContent = (curView ? curView.name + (c ? '  -  ' : '') : '') + (c ? c.name || ('Channel ' + c.sid) : '');
+    o.guide.hidden = !admin;
+    o.up.hidden = !admin; o.down.hidden = !admin;
+    o.up.disabled = o.down.disabled = !c || !!(c && c.vod);
+    var paused = !!c && (c.vod ? t.video.paused : !!t.userPaused);
+    setIcon(o.play, paused ? 'play' : 'pause');
+    var noSeek = !c || shared;
+    o.play.disabled = o.back.disabled = o.fwd.disabled = o.seek.disabled = noSeek;
+    o.play.title = shared ? 'Not available while the shared screen is on' : 'Play / pause';
+    setIcon(o.mute, S.muted || S.vol === 0 ? 'mute' : 'vol');
+    if (document.activeElement !== o.vol) o.vol.value = String(Math.round((S.vol === undefined ? 1 : S.vol) * 100));
+    if (c && c.vod) {
+      var dur = t.video.duration;
+      o.seek.max = String(isFinite(dur) && dur > 0 ? Math.floor(dur) : 1);
+      if (!ovl.dragging) o.seek.value = String(Math.floor(t.video.currentTime || 0));
+    } else {
+      var avail = Math.max(1, t ? t.avail || 0 : 0);
+      o.seek.max = String(avail);
+      if (!ovl.dragging) o.seek.value = String(Math.max(0, avail - ((t && t.back) || 0)));
+    }
+    if (!ovl.dragging) o.time.textContent = c ? seekLabel(Number(o.seek.value)) : '';
+    if (t && t.cfg && !t.cfg.vod && ovl.shown) fetchAvail(t);
+    // options
+    var many = visibleCount() > 1;
+    var oo = o.opt;
+    oo.layout.wrap.hidden = !admin;
+    var li = oo.layout.btn.querySelector('svg:not(.ic)');
+    if (li) oo.layout.btn.replaceChild(layoutIcon(S.layout), li);
+    oo.expand.btn.disabled = !c || !many;
+    oo.expand.btn.classList.toggle('on', zoom >= 0);
+    oo.expand.btn.title = zoom >= 0 ? 'Back to the grid' : 'Expand';
+    oo.quality.btn.disabled = !c || !!(c && c.vod);
+    setIcon(oo.quality.btn, 'tv', qualityLabel(c));
+    oo.reload.btn.disabled = !c;
+    var fav = !!(c && !c.vod && S.favs[favKey(c)]);
+    oo.fav.wrap.hidden = !admin;
+    oo.fav.btn.disabled = !c || !!(c && c.vod);
+    setIcon(oo.fav.btn, fav ? 'starOn' : 'star');
+    oo.fav.btn.title = fav ? 'Remove from favourites' : 'Add to favourites';
+    oo.rec.btn.disabled = !c || !!(c && c.vod);
+    oo.dl.btn.disabled = !c;
+    o.cast.hidden = !castState.avail;
+    o.pull.classList.toggle('open', side.open);
+  }
+
+  // ---------------------------------------------------------------- pull-out menu
+  function buildSide() {
+    var items = [
+      ['watch', 'Watch', function () { sideClose(); ovlHide(); }],
+      ['views', 'Multiviews', function () { sideClose(); openViews(); }],
+      ['recs', 'Recordings & Downloads', function () { sideClose(); openRecordings(); }],
+      ['settings', 'Settings', function () { sideClose(); openSettings(); }],
+      ['providers', 'Providers', function () { sideClose(); openProviders(); }],
+      ['logout', 'Log out', function () { sideClose(); logout(); }]
+    ];
+    side.btns = {};
+    var list = h('div', { class: 'side-list' });
+    items.forEach(function (it) {
+      var b = h('button', { id: 'sm-' + it[0], class: 'sideitem', type: 'button', text: it[1] });
+      b.addEventListener('click', function (e) { e.stopPropagation(); userGesture(); it[2](); });
+      side.btns[it[0]] = b;
+      list.appendChild(b);
+    });
+    side.back = h('div', { class: 'side-back', hidden: true });
+    side.back.addEventListener('click', function () { sideClose(); });
+    side.el = h('aside', { id: 'side', class: 'side', 'aria-label': 'Menu' }, h('div', { class: 'side-head', text: 'IPTV Multiview' }), list);
+    side.el.addEventListener('pointerdown', function (e) { e.stopPropagation(); }, true);
+    document.body.appendChild(side.back);
+    document.body.appendChild(side.el);
+  }
+  function sideToggle() { side.open ? sideClose() : sideOpen(); }
+  function sideOpen() {
+    side.open = true;
+    pushSentinel();
+    side.el.classList.add('open');
+    side.back.hidden = false;
+    var f = side.btns.watch;
+    if (f) f.focus();
+    ovlSync();
+  }
+  function sideClose() {
+    if (!side.open) return;
+    side.open = false;
+    side.el.classList.remove('open');
+    side.back.hidden = true;
+    ovlSync();
+    popSentinel();
+  }
+  function sideSync() {
+    if (!side.btns) return;
+    side.btns.providers.hidden = !isAdmin();
+    side.btns.logout.hidden = !(ME && ME.user);
+  }
+
+  function updateLayoutButtons() { ovlSync(); }
 
   function toggleMute() {
     userGesture();
     S.muted = !S.muted;
+    if (!S.muted && S.vol === 0) S.vol = 0.5;
     applyAudio();
     saveSoon();
   }
@@ -938,7 +1404,62 @@
       else (el.requestFullscreen || el.webkitRequestFullscreen).call(el);
     } catch (e) { banner('Fullscreen is not available in this browser', 3000); }
   }
-  function onFullscreenChange() { $('#btn-full').textContent = fsElement() ? 'Exit fullscreen' : 'Fullscreen'; }
+  function onFullscreenChange() { var b = $('#set-full'); if (b) b.textContent = fsElement() ? 'Exit fullscreen' : 'Fullscreen'; }
+
+  // ---------------------------------------------------------------- casting (Google Cast; needs HTTPS)
+  function initCast() {
+    try {
+      var ctx = window.cast.framework.CastContext.getInstance();
+      ctx.setOptions({ receiverApplicationId: window.chrome.cast.media.DEFAULT_MEDIA_RECEIVER_APP_ID, autoJoinPolicy: window.chrome.cast.AutoJoinPolicy.ORIGIN_SCOPED });
+      castState.ready = true;
+      function upd() { castState.avail = ctx.getCastState() !== window.cast.framework.CastState.NO_DEVICES_AVAILABLE; ovlSync(); }
+      ctx.addEventListener(window.cast.framework.CastContextEventType.CAST_STATE_CHANGED, upd);
+      upd();
+    } catch (e) { castState.avail = false; }
+  }
+  function loadCastSdk() {
+    if (window.MVApp || !(location.protocol === 'https:' || location.hostname === 'localhost')) return;
+    window.__onGCastApiAvailable = function (ok) { if (ok) initCast(); };
+    var s = h('script', { src: 'https://www.gstatic.com/cv/js/sender/v1/cast_sender.js?loadCastFramework=1', async: true });
+    document.head.appendChild(s);
+  }
+  function openCast() {
+    var t = curTile();
+    var c = t && t.cfg;
+    var many = S.tiles.slice(0, visibleCount()).filter(function (x) { return x && !x.vod; }).length > 1;
+    var msg = h('div', { class: 'note' });
+    var items = [];
+    function go(what) {
+      msg.textContent = 'Choose a device...';
+      var body;
+      if (what === 'multiview') {
+        var spec = sharedSpec() || null;
+        if (!spec) { msg.textContent = 'Nothing to cast'; return; }
+        spec.res = Number(S.shared) || 720;
+        spec.aspect = 1.778;
+        spec.fit = 'contain';
+        body = { mode: 'multiview', spec: spec };
+      } else {
+        if (!c || c.vod) { msg.textContent = 'Pick a live channel first'; return; }
+        body = { mode: 'channel', p: c.p, sid: c.sid };
+      }
+      var ctx = window.cast.framework.CastContext.getInstance();
+      var sess = ctx.getCurrentSession();
+      var ready = sess ? Promise.resolve(sess) : ctx.requestSession().then(function (err) { if (err) throw new Error('Cast: ' + err); return ctx.getCurrentSession(); });
+      Promise.all([ready, api('/api/cast', { method: 'POST', body: body })]).then(function (r) {
+        var session = r[0];
+        var info = new window.chrome.cast.media.MediaInfo(location.origin + r[1].url, r[1].contentType);
+        info.streamType = window.chrome.cast.media.StreamType.LIVE;
+        info.metadata = new window.chrome.cast.media.GenericMediaMetadata();
+        info.metadata.title = r[1].title;
+        return session.loadMedia(new window.chrome.cast.media.LoadRequest(info));
+      }).then(function () { msg.textContent = 'Casting. Mute this device\'s sound to avoid an echo.'; castState.casting = true; }, function (e) { msg.textContent = 'Could not cast: ' + (e && e.message ? e.message : e); });
+    }
+    if (c && !c.vod) items.push(h('button', { class: 'btn', type: 'button', id: 'cast-channel', text: 'This channel (' + (c.name || c.sid) + ')', onclick: function () { go('channel'); } }));
+    if (many) items.push(h('button', { class: 'btn', type: 'button', id: 'cast-multi', text: 'The whole multiview (as one picture)', onclick: function () { go('multiview'); } }));
+    items.push(h('button', { class: 'btn', type: 'button', id: 'cast-stop', text: 'Stop casting', onclick: function () { try { window.cast.framework.CastContext.getInstance().endCurrentSession(true); castState.casting = false; msg.textContent = 'Stopped.'; } catch (e) { msg.textContent = 'Nothing is being cast.'; } } }));
+    var m = openModal({ title: 'Cast to a Google device', body: [h('div', { class: 'menu' }, items), msg, h('div', { class: 'note', text: 'The TV opens the picture straight from this server, so the server address must be reachable from the TV (an https address works from anywhere).' })], foot: closeBtn({ close: function () { m.close(); } }) });
+  }
 
   // ---------------------------------------------------------------- server state
   var providersLoaded = false;
@@ -951,10 +1472,12 @@
       var used = 0;
       var max = 0;
       s.providers.forEach(function (p) { if (p.enabled && !p.local) { used += p.active; max += p.max; } });
-      var b = $('#btn-conn');
-      if (!s.providers.length) { b.textContent = 'Add provider'; b.classList.add('warn'); }
-      else { b.textContent = 'Providers ' + used + '/' + max; b.classList.toggle('warn', used >= max); }
-      b.title = s.providers.map(function (p) { return p.name + ': ' + p.active + '/' + p.max + ' connections'; }).join('\n');
+      var b = side.btns && side.btns.providers;
+      if (b) {
+        if (!s.providers.length) { b.textContent = 'Add a provider'; b.classList.add('warn'); }
+        else { b.textContent = 'Providers  ' + used + '/' + max; b.classList.toggle('warn', used >= max); }
+        b.title = s.providers.map(function (p) { return p.name + ': ' + p.active + '/' + p.max + ' connections'; }).join('\n');
+      }
       banner('');
       updateHint();
       return s;
@@ -986,44 +1509,6 @@
     });
   }
   setInterval(pollEpg, 90000);
-
-  // ---------------------------------------------------------------- tile menu
-  function openTileMenu(idx) {
-    var t = tiles[idx];
-    var c = t.cfg;
-    var fk = c ? c.p + ':' + c.sid : '';
-    var items = [];
-    function act(label, fn, cls) { items.push(h('button', { class: 'btn' + (cls ? ' ' + cls : ''), type: 'button', text: label, onclick: function () { m.close(); fn(); } })); }
-    if (isAdmin()) act(c ? 'Change channel...' : 'Add channel...', function () { openPicker(idx); });
-    if (c) {
-      act(S.muted ? 'Unmute' : 'Mute', toggleMute);
-      if (idx !== 0 && isAdmin()) act('Make main (swap with tile 1)', function () { swapWithMain(idx); });
-      act(zoom === idx ? 'Back to grid' : 'Zoom this tile', function () { toggleZoom(idx); });
-      if (c.vod) {
-        act(t.video.paused ? 'Play' : 'Pause', function () { if (t.video.paused) { var pr = t.video.play(); if (pr && pr.catch) pr.catch(noop); } else t.video.pause(); });
-        act('Back 30 seconds', function () { try { t.video.currentTime = Math.max(0, t.video.currentTime - 30); } catch (e) { /* not seekable */ } });
-        act('Forward 30 seconds', function () { try { t.video.currentTime = t.video.currentTime + 30; } catch (e) { /* not seekable */ } });
-      }
-      if (!c.vod) {
-        var qn = { sd: 'SD when available', full: 'As chosen', '480': '480p transcode (server GPU)' }[c.q] || 'Auto (small tiles use SD)';
-        act('Quality: ' + qn + ' - change', function () {
-          var next = { '': 'sd', sd: 'full', full: '480', '480': '' }[c.q || ''];
-          if (next) c.q = next; else delete c.q;
-          saveSoon();
-          if (c.q === '480' || t.txUsed) t.start(); else t.applyQuality();
-          sharedSync();
-        });
-      }
-      act('Reload stream', function () { t.reload(); });
-      if (isAdmin() && !c.vod) act(S.favs[fk] ? 'Remove from favorites' : 'Add to favorites', function () { toggleFav(c); });
-      if (isAdmin()) act('Remove channel', function () { assign(idx, null); }, 'danger');
-    }
-    var m = openModal({
-      title: 'Tile ' + (idx + 1) + (c ? ' - ' + (c.name || c.sid) : ''),
-      body: h('div', { class: 'menu' }, items),
-      foot: h('button', { class: 'btn', type: 'button', text: 'Close', onclick: function () { m.close(); } })
-    });
-  }
 
   // ---------------------------------------------------------------- favorites + channel lists
   function favKey(c) { return c.p + ':' + c.sid; }
@@ -1374,7 +1859,7 @@
             class: 'prog' + (isNow ? ' now' : ''), type: 'button', 'data-key': pid + ':' + sid,
             style: 'left:' + (l * 100).toFixed(3) + '%;width:' + ((rgt - l) * 100).toFixed(3) + '%',
             title: pr[2] + '\n' + fmtClock(pr[0]) + ' - ' + fmtClock(pr[1]) + (pr[3] ? '\n' + pr[3] : ''),
-            onclick: function () { choose(row.r); }
+            onclick: function () { programmeMenu(row.r, pr[2], pr[0], pr[1], function () { choose(row.r); }); }
           }, h('span', { text: pr[2] })));
         });
       });
@@ -1409,7 +1894,7 @@
           info.textContent = results.length + ' programme' + (results.length === 1 ? '' : 's') + ' in the next 24 hours';
           results.slice(0, 150).forEach(function (r) {
             var live = r.s <= Date.now() / 1000;
-            listEl.appendChild(h('div', { class: 'ch' }, h('button', { class: 'pick', type: 'button', 'data-key': r.p + ':' + r.sid, onclick: function () { choose(r); } },
+            listEl.appendChild(h('div', { class: 'ch' }, h('button', { class: 'pick', type: 'button', 'data-key': r.p + ':' + r.sid, onclick: function () { programmeMenu(r, r.t, r.s, r.e, function () { choose(r); }); } },
               imgOrBlank(r.icon),
               h('span', { class: 'nm' }, h('b', { text: r.t }), h('small', { text: '  ' + r.name })),
               h('span', { class: 'chip' + (live ? ' live' : ''), text: (live ? 'now · ' : '') + fmtClock(r.s) + '-' + fmtClock(r.e) }))));
@@ -1611,7 +2096,7 @@
     [30, 60, 120, 300, 600].forEach(function (n) { keepSel.appendChild(h('option', { value: String(n), text: secLabel(n) })); });
     keepSel.value = String(S.keepSec);
     if (keepSel.value !== String(S.keepSec)) keepSel.value = '0';
-    var memNote = h('div', { class: 'note' });
+    var memNote = h('div', { class: 'note', id: 'mem-note' });
     function memWarn() {
       var keep = Math.max(S.keepSec || 0, S.bufSec);
       var tilesN = visibleCount();
@@ -1650,16 +2135,22 @@
       });
     }
     var keys = h('div', { class: 'keys' },
-      h('b', { text: 'Arrows' }), h('span', { text: 'move between tiles (Up from the top row = toolbar)' }),
-      h('b', { text: 'OK / Enter' }), h('span', { text: 'tile menu (or add a channel to an empty tile)' }),
+      h('b', { text: 'Arrows' }), h('span', { text: 'move between tiles (Up from the top row = player controls)' }),
+      h('b', { text: 'OK / Enter' }), h('span', { text: 'player controls (or add a channel to an empty tile)' }),
+      h('b', { text: 'Back / Esc' }), h('span', { text: 'close options, then the controls' }),
       h('b', { text: '1 - 9' }), h('span', { text: 'jump to a tile; the selected tile has the sound' }),
       h('b', { text: 'M  L  F' }), h('span', { text: 'mute, next layout, fullscreen' }),
       h('b', { text: 'S  Z  C  R' }), h('span', { text: 'make main, zoom, change channel, reload' }),
       h('b', { text: 'I' }), h('span', { text: 'show/hide stats (resolution, buffer, dropped frames)' }),
-      h('b', { text: 'Back / Esc' }), h('span', { text: 'close a window' }));
+      h('b', { text: 'Tap twice' }), h('span', { text: 'tap the same tile twice to expand it (again to go back)' }));
     var m = openModal({
       title: 'Settings',
       body: [
+        h('div', { class: 'viewbtns', id: 'set-actions' },
+          h('button', { class: 'btn', type: 'button', id: 'set-full', text: fsElement() ? 'Exit fullscreen' : 'Fullscreen', onclick: toggleFullscreen }),
+          ME && ME.user ? h('button', { class: 'btn', type: 'button', id: 'set-pw', text: 'Change my password...', onclick: function () { m.close(); changeOwnPassword(); } }) : null,
+          isAdmin() ? h('button', { class: 'btn', type: 'button', id: 'set-users', text: 'Users and logins...', onclick: function () { m.close(); openUsers(); } }) : null),
+        installRow(),
         field('Start playing after (video collected before a tile starts; smoother, adds delay)', bufSel),
         field('Keep up to (largest cushion kept while playing)', keepSel),
         memNote,
@@ -1862,6 +2353,145 @@
     list();
   }
 
+
+  // ---------------------------------------------------------------- recordings & downloads
+  function fmtBytes(n) {
+    n = Number(n) || 0;
+    if (n >= 1073741824) return (n / 1073741824).toFixed(1) + ' GB';
+    if (n >= 1048576) return Math.round(n / 1048576) + ' MB';
+    return Math.round(n / 1024) + ' KB';
+  }
+  function fmtWhen(ms) {
+    try { return new Date(ms).toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }); } catch (e) { return ''; }
+  }
+  function recStatus(it) {
+    var s = it.status;
+    if (s === 'scheduled') return 'Scheduled - starts ' + fmtWhen(it.start) + ', stops ' + fmtClockMs(it.end);
+    if (s === 'recording') return 'Recording now - until ' + fmtClockMs(it.end);
+    if (s === 'queued') return 'Waiting to download';
+    if (s === 'downloading') return 'Downloading to the server';
+    if (s === 'done') return 'Saved';
+    if (s === 'stopped') return 'Stopped early (what was recorded is kept)';
+    return 'Failed';
+  }
+  function openRecordings() {
+    var timer = null;
+    var m = openModal({ title: 'Recordings & Downloads', wide: true, body: h('div', { class: 'note', text: 'Loading...' }), foot: null, onClose: function () { clearInterval(timer); } });
+    var rev = '';
+    function render(r) {
+      var sig = JSON.stringify(r.items.map(function (i) { return [i.id, i.status, i.size, i.error, i.end]; }));
+      if (sig === rev && m.box.contains(document.activeElement)) return;
+      rev = sig;
+      var keep = document.activeElement && document.activeElement.getAttribute ? document.activeElement.getAttribute('data-act') : '';
+      var body = [];
+      body.push(h('div', { class: 'note', id: 'rec-usage', text: fmtBytes(r.usage.bytes) + ' used here' + (r.usage.free ? ', ' + fmtBytes(r.usage.free) + ' free on the disk' : '') + '. Recordings and downloads are kept until you delete them.' + (r.usage.dir ? ' Folder: ' + r.usage.dir : '') }));
+      if (!r.items.length) body.push(h('div', { class: 'note', text: 'Nothing here yet. Record a live channel with the red REC button, or download a movie or episode with the download button, while watching.' }));
+      r.items.forEach(function (it) {
+        var live = it.status === 'recording' || it.status === 'downloading';
+        var active = live || it.status === 'scheduled' || it.status === 'queued';
+        var bad = it.status === 'failed';
+        var ext = (it.file || '').split('.').pop();
+        var url = '/recordings/' + it.id + '.' + (ext || 'mp4');
+        var btns = [];
+        if (it.file && (live || it.status === 'done' || it.status === 'stopped')) {
+          btns.push(h('button', { class: 'btn', type: 'button', 'data-act': 'play-' + it.id, text: 'Play', onclick: function () { playRecording(it, url); } }));
+          btns.push(h('a', { class: 'btn', 'data-act': 'dl-' + it.id, href: url + '?dl=1', download: '', text: 'Download' }));
+        }
+        if (live) btns.push(h('button', { class: 'btn', type: 'button', 'data-act': 'stop-' + it.id, text: 'Stop', onclick: function () { api('/api/recordings/' + it.id + '/stop', { method: 'POST', body: {} }).then(poll, function (e) { banner(e.message, 4000); }); } }));
+        if (it.status === 'scheduled' || it.status === 'recording') {
+          btns.push(h('button', { class: 'btn', type: 'button', 'data-act': 'ext-' + it.id, text: '+30 min', title: 'Record 30 minutes longer', onclick: function () { api('/api/recordings/' + it.id + '/update', { method: 'POST', body: { end: it.end + 30 * 60000 } }).then(poll, function (e) { banner(e.message, 4000); }); } }));
+        }
+        btns.push(h('button', { class: 'btn danger', type: 'button', 'data-act': 'del-' + it.id, text: active ? 'Cancel' : 'Delete', onclick: function () {
+          confirmBox((active ? 'Cancel and delete "' : 'Delete "') + (it.title || it.name) + '"? The file is removed from the server.', active ? 'Cancel it' : 'Delete', function () {
+            api('/api/recordings/' + it.id, { method: 'DELETE' }).then(function () { rev = ''; poll(); }, function (e) { banner(e.message, 4000); });
+          });
+        } }));
+        body.push(h('div', { class: 'prov recrow' + (bad ? ' bad' : '') },
+          h('div', { class: 'name' },
+            h('b', { text: (it.kind === 'download' ? 'Download: ' : '') + (it.title || it.name) }),
+            h('small', { text: (it.title && it.name && it.title !== it.name ? it.name + '  ·  ' : '') + recStatus(it) + (it.size ? '  ·  ' + fmtBytes(it.size) : '') + (r.users ? '  ·  ' + it.owner : '') }),
+            bad && it.error ? h('small', { class: 'recerr', text: it.error }) : null),
+          h('div', { class: 'viewbtns' }, btns)));
+      });
+      m.setBody(body, [h('button', { class: 'btn', type: 'button', text: 'Refresh', onclick: function () { rev = ''; poll(); } }), closeBtn(m)]);
+      var f = keep ? $('[data-act="' + keep + '"]', m.box) : null;
+      if (!f) f = $('.btn', m.box);
+      if (f && !m.box.contains(document.activeElement)) f.focus();
+    }
+    function poll() {
+      return api('/api/recordings').then(function (r) { r.users = isAdmin() && r.items.some(function (i) { return i.owner; }); render(r); }, function (e) { if (!rev) m.setBody(h('div', { class: 'msg bad', text: e.message }), closeBtn(m)); });
+    }
+    poll();
+    timer = setInterval(poll, 5000);
+  }
+  function playRecording(it, url) {
+    var v = h('video', { class: 'recplayer', src: url, controls: true, autoplay: true, playsinline: true });
+    var pm = openModal({ title: it.title || it.name, wide: true, body: [v, it.status === 'recording' ? h('div', { class: 'note', text: 'Still recording: you can play what exists so far; reopen to see more.' }) : null], foot: closeBtn({ close: function () { pm.close(); } }), onClose: function () { try { v.pause(); v.removeAttribute('src'); v.load(); } catch (e) { /* gone */ } } });
+  }
+
+  // a programme in the guide that has not started: offer to record it
+  function programmeMenu(r, title, s, e, watch) {
+    var now = Date.now() / 1000;
+    if (s <= now) { watch(); return; }
+    var m = openModal({
+      title: title,
+      body: [h('div', { class: 'note', text: r.name + '  ·  ' + fmtClockMs(s * 1000) + ' - ' + fmtClockMs(e * 1000) }), h('div', { class: 'menu' }, [
+        h('button', { class: 'btn primary', type: 'button', id: 'prog-rec', text: 'Record it (starts 5 minutes early, stops 60 minutes late)', onclick: function () {
+          m.close();
+          api('/api/recordings', { method: 'POST', body: { p: r.p, sid: r.sid, name: r.name, mode: 'programme', start: s, stop: e, title: title } }).then(function (x) { banner('Scheduled "' + title + '" - ' + fmtWhen(x.item.start) + ' to ' + fmtClockMs(x.item.end), 6000); }, function (err) { banner('Could not schedule: ' + err.message, 7000); });
+        } }),
+        h('button', { class: 'btn', type: 'button', text: 'Watch this channel now', onclick: function () { m.close(); watch(); } })
+      ])],
+      foot: closeBtn({ close: function () { m.close(); } }, 'Cancel')
+    });
+  }
+
+  // ---------------------------------------------------------------- installable app (PWA)
+  var pwa = { prompt: null, reg: null, updating: false, hadController: false };
+  function isStandalone() { return (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches) || window.navigator.standalone === true; }
+  function isIos() { return /iphone|ipad|ipod/i.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1); }
+  function secureOrigin() { return location.protocol === 'https:' || location.hostname === 'localhost' || location.hostname === '127.0.0.1'; }
+  window.addEventListener('beforeinstallprompt', function (e) { e.preventDefault(); pwa.prompt = e; });
+  window.addEventListener('appinstalled', function () { pwa.prompt = null; banner('IPTV Multiview is installed', 4000); });
+
+  function pwaInit() {
+    if (window.MVApp || !('serviceWorker' in navigator) || !secureOrigin()) return;
+    pwa.hadController = !!navigator.serviceWorker.controller;
+    navigator.serviceWorker.register('/sw.js').then(function (reg) {
+      pwa.reg = reg;
+      function watch(w) { w.addEventListener('statechange', function () { if (w.state === 'installed' && navigator.serviceWorker.controller) updateReady(w); }); }
+      if (reg.waiting && navigator.serviceWorker.controller) updateReady(reg.waiting);
+      reg.addEventListener('updatefound', function () { if (reg.installing) watch(reg.installing); });
+      setInterval(function () { reg.update().catch(noop); }, 6 * 3600 * 1000);
+    }).catch(noop);
+    navigator.serviceWorker.addEventListener('controllerchange', function () { if (pwa.updating) location.reload(); });
+  }
+  // A new version is waiting: ask first, because updating restarts every stream on screen.
+  function updateReady(w) {
+    if ($('#updatebar')) return;
+    var bar = h('div', { id: 'updatebar', class: 'updatebar', role: 'status' },
+      h('span', { text: 'A new version of IPTV Multiview is ready.' }),
+      h('button', { class: 'btn primary', type: 'button', id: 'update-now', text: 'Update now', onclick: function () { pwa.updating = true; try { w.postMessage({ type: 'SKIP_WAITING' }); } catch (e) { location.reload(); } } }),
+      h('button', { class: 'btn', type: 'button', text: 'Later', onclick: function () { bar.remove(); } }));
+    document.body.appendChild(bar);
+  }
+  function installRow() {
+    if (window.MVApp || isStandalone()) return null;
+    var note = h('div', { class: 'note' });
+    var btn = null;
+    if (pwa.prompt) {
+      btn = h('button', { class: 'btn primary', type: 'button', id: 'set-install', text: 'Install app', onclick: function () { var p = pwa.prompt; pwa.prompt = null; p.prompt(); } });
+      note.textContent = 'Adds IPTV Multiview to your home screen or desktop as an app.';
+    } else if (isIos()) {
+      note.textContent = 'To install on iPhone or iPad: tap the Share button in Safari, then "Add to Home Screen".';
+    } else if (!secureOrigin()) {
+      note.textContent = 'Installing as an app needs an https address (for example your Cloudflare hostname). This plain http address cannot be installed.';
+    } else {
+      note.textContent = 'To install: use your browser menu ("Install app" or "Add to Home screen"). If it is not offered, this browser may not support it.';
+    }
+    return h('div', { class: 'field', id: 'set-install-box' }, h('label', { text: 'Install as an app' }), btn, note);
+  }
+
   // ---------------------------------------------------------------- input
   var wakeLock = null;
   function userGesture() {
@@ -1873,12 +2503,39 @@
 
   function typing(t) { return t && (t.tagName === 'INPUT' || t.tagName === 'SELECT' || t.tagName === 'TEXTAREA'); }
 
+  function ovlNav(t, key) {
+    var items = focusables(ovl.el);
+    if (!items.length) return false;
+    var r = t.getBoundingClientRect();
+    var cx = r.left + r.width / 2;
+    var cy = r.top + r.height / 2;
+    var best = null;
+    var bs = Infinity;
+    items.forEach(function (el) {
+      if (el === t) return;
+      var b = el.getBoundingClientRect();
+      var x = b.left + b.width / 2 - cx;
+      var y = b.top + b.height / 2 - cy;
+      var ok;
+      var sc;
+      if (key === 'ArrowRight') { ok = x > 4; sc = x + Math.abs(y) * 3; }
+      else if (key === 'ArrowLeft') { ok = x < -4; sc = -x + Math.abs(y) * 3; }
+      else if (key === 'ArrowDown') { ok = y > 4; sc = y + Math.abs(x) * 3; }
+      else { ok = y < -4; sc = -y + Math.abs(x) * 3; }
+      if (ok && sc < bs) { bs = sc; best = el; }
+    });
+    if (best) { best.focus(); return true; }
+    return false;
+  }
+
   function onKey(e) {
     if (!ME) return;
     userGesture();
-    toolbarWake();
+    activity();
+    var key = e.key;
+    var isBack = key === 'Escape' || key === 'GoBack' || key === 'BrowserBack' || e.keyCode === 4;
     if (modals.length) {
-      if (e.key === 'Escape' || e.key === 'GoBack' || e.key === 'BrowserBack' || e.keyCode === 4 || (e.key === 'Backspace' && !typing(e.target))) {
+      if (isBack || (key === 'Backspace' && !typing(e.target))) {
         e.preventDefault();
         closeTopModal();
       }
@@ -1886,9 +2543,45 @@
     }
     if (e.ctrlKey || e.metaKey || e.altKey) return;
     var t = e.target;
-    if (typing(t)) return;
-    var inToolbar = $('#toolbar').contains(t);
-    var key = e.key;
+    var isRange = t && t.tagName === 'INPUT' && t.type === 'range';
+    if (typing(t) && !isRange) return;
+    var arrow = key === 'ArrowLeft' || key === 'ArrowRight' || key === 'ArrowUp' || key === 'ArrowDown';
+    // pull-out menu
+    if (side.open) {
+      if (isBack || key === 'ArrowLeft') { e.preventDefault(); sideClose(); if (ovl.p.pull && ovl.shown) ovl.p.pull.focus(); return; }
+      if (key === 'ArrowUp' || key === 'ArrowDown') {
+        var sitems = focusables(side.el);
+        var si = sitems.indexOf(t);
+        var sn = sitems[clamp(si + (key === 'ArrowDown' ? 1 : -1), 0, sitems.length - 1)];
+        if (sn) sn.focus();
+        e.preventDefault();
+      }
+      return;
+    }
+    // player overlay
+    if (ovl.shown && isBack) {
+      e.preventDefault();
+      if (ovl.sub) { var ob = ovl.p.opt[ovl.sub].btn; subClose(); ob.focus(); }
+      else if (ovl.optsOpen) { optsClose(); ovl.p.arrow.focus(); }
+      else ovlHide();
+      return;
+    }
+    if (ovl.shown && ovl.el.contains(t)) {
+      if (arrow) {
+        e.preventDefault();
+        if (t.id === 'ov-seek' && (key === 'ArrowLeft' || key === 'ArrowRight')) { skip(key === 'ArrowLeft' ? -10 : 30); return; }
+        if (t.id === 'ov-vol' && (key === 'ArrowLeft' || key === 'ArrowRight')) {
+          S.vol = clamp((S.vol === undefined ? 1 : S.vol) + (key === 'ArrowLeft' ? -0.05 : 0.05), 0, 1);
+          S.muted = S.vol === 0;
+          applyAudio();
+          saveSoon();
+          return;
+        }
+        if (!ovlNav(t, key) && key === 'ArrowDown' && tiles[S.sel]) tiles[S.sel].el.focus();
+        return;
+      }
+      return; // Enter / OK presses the focused button
+    }
     var n = visibleCount();
     if (key === 'Escape' && zoom >= 0) { toggleZoom(zoom); e.preventDefault(); return; }
     if (key.length === 1 && key >= '1' && key <= '9') {
@@ -1896,20 +2589,13 @@
       if (i < n && zoom < 0) { select(i); e.preventDefault(); }
       return;
     }
-    if (key === 'ArrowLeft' || key === 'ArrowRight' || key === 'ArrowUp' || key === 'ArrowDown') {
-      if (inToolbar) {
-        var items = focusables($('#toolbar'));
-        var at = items.indexOf(t);
-        if (key === 'ArrowDown') { tiles[S.sel].el.focus(); e.preventDefault(); }
-        else if (key === 'ArrowLeft' || key === 'ArrowRight') { var nx = items[clamp(at + (key === 'ArrowRight' ? 1 : -1), 0, items.length - 1)]; if (nx) nx.focus(); e.preventDefault(); }
-        return;
-      }
+    if (arrow) {
       e.preventDefault();
-      if (zoom >= 0) return;
+      if (zoom >= 0) { if (key === 'ArrowUp') { ovlShow(); focusOvl(); } return; }
       var from = t && t.classList && t.classList.contains('tile') ? Number(t.getAttribute('data-idx')) : S.sel;
       var to = neighbor(from, key);
       if (to >= 0) select(to);
-      else if (key === 'ArrowUp') { var b = $('#layouts .btn.on') || $('#toolbar .btn'); if (b) b.focus(); }
+      else if (key === 'ArrowUp') { ovlShow(); focusOvl(); }
       else if (!t || !t.classList || !t.classList.contains('tile')) tiles[S.sel].el.focus();
       return;
     }
@@ -1919,7 +2605,7 @@
       case ' ':
         if (t && t.classList && t.classList.contains('tile')) {
           e.preventDefault();
-          if (tile.cfg) openTileMenu(S.sel); else if (isAdmin()) openPicker(S.sel);
+          if (tile.cfg) { ovlShow(); focusOvl(); } else if (isAdmin()) openPicker(S.sel);
         }
         break;
       case 'm': case 'M': toggleMute(); break;
@@ -1933,6 +2619,11 @@
       case 'Delete': if (tile.cfg && isAdmin()) assign(S.sel, null); break;
       default: break;
     }
+  }
+  function focusOvl() {
+    var o = ovl.p;
+    var f = !o.play.disabled ? o.play : (!o.guide.hidden ? o.guide : o.arrow);
+    if (f) f.focus();
   }
 
   // ---------------------------------------------------------------- accounts, login, shared multiviews
@@ -2037,7 +2728,7 @@
     }
     renderGrid();
     changed.forEach(function (x) { if (x.was && tiles[x.i].visible) tiles[x.i].start(); });
-    $('#view-title').textContent = v.name;
+    ovlSync();
     try { localStorage.setItem('mv.lastview', v.id); } catch (e) { /* ignore */ }
     saveSoon();
     updateHint();
@@ -2046,7 +2737,7 @@
 
   function clearGrid() {
     curView = null;
-    $('#view-title').textContent = '';
+    ovlSync();
     S.tiles = S.tiles.map(function () { return null; });
     tiles.forEach(function (t) { t.stop(); t.cfg = null; t.render(); });
     updateHint();
@@ -2187,20 +2878,7 @@
     function m1() { return { close: function () { m.close(); } }; }
   }
 
-  // ---- account menu + user management
-  function openAccount() {
-    var items = [];
-    function act(label, fn, cls) { items.push(h('button', { class: 'btn' + (cls ? ' ' + cls : ''), type: 'button', text: label, onclick: function () { m.close(); fn(); } })); }
-    if (isAdmin()) act('Users and logins...', openUsers);
-    if (ME && ME.user) act('Change my password...', changeOwnPassword);
-    if (ME && ME.user) act('Log out', logout, 'danger');
-    var m = openModal({
-      title: ME && ME.user ? ME.user.username + (ME.admin ? ' (admin)' : '') : 'Accounts',
-      body: h('div', { class: 'menu' }, items),
-      foot: closeBtn({ close: function () { m.close(); } })
-    });
-  }
-
+  // ---- user management (opened from Settings)
   function logout() {
     api('/api/logout', { method: 'POST', body: {} }).then(function () { location.reload(); }).catch(function () { location.reload(); });
   }
@@ -2303,15 +2981,18 @@
 
   // ---------------------------------------------------------------- init
   function init() {
-    buildToolbar();
     sharedInit();
     for (var i = 0; i < SLOTS; i++) tiles.push(new Tile(i));
+    buildOverlay();
     applyBodyPrefs();
     renderGrid();
     applyAudio();
     updateLayoutButtons();
+    pwaInit();
+    loadCastSdk();
 
     document.addEventListener('keydown', onKey);
+    document.addEventListener('pointerdown', function (e) { if (side.open && !side.el.contains(e.target)) sideClose(); }, true);
     ['mousemove', 'mousedown', 'touchstart', 'pointerdown', 'wheel'].forEach(function (ev) { document.addEventListener(ev, toolbarWake, { passive: true }); });
     ['click', 'touchstart'].forEach(function (ev) { document.addEventListener(ev, userGesture, { passive: true }); });
     document.addEventListener('fullscreenchange', onFullscreenChange);
@@ -2350,9 +3031,8 @@
     banner('');
     ME = { admin: !!me.admin, user: me.user, open: !!me.open, authRequired: !!me.authRequired };
     document.body.classList.toggle('viewer', !ME.admin);
-    var acct = $('#btn-acct');
-    acct.textContent = ME.user ? ME.user.username : 'Logins';
-    acct.hidden = !ME.user && !ME.admin;
+    sideSync();
+    ovlSync();
     if (!ME.admin) {
       LS_KEY = 'mv.state.viewer.v1';
       S = loadState();
@@ -2386,5 +3066,5 @@
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init); else init();
 
   // test hook (harmless in production)
-  window.__mv = { get S() { return S; }, get ME() { return ME; }, applyView: applyView, tiles: tiles, LAYOUTS: LAYOUTS, setLayout: setLayout, select: select, assign: assign, toggleZoom: toggleZoom, sharedApply: sharedApply, get shared() { return shared; }, get zoom() { return zoom; }, get modals() { return modals.length; } };
+  window.__mv = { updateReady: updateReady, ovlShow: ovlShow, ovlHide: ovlHide, get ovl() { return ovl; }, get side() { return side; }, castState: castState, openRecordings: openRecordings, get S() { return S; }, get ME() { return ME; }, applyView: applyView, tiles: tiles, LAYOUTS: LAYOUTS, setLayout: setLayout, select: select, assign: assign, toggleZoom: toggleZoom, sharedApply: sharedApply, get shared() { return shared; }, get zoom() { return zoom; }, get modals() { return modals.length; } };
 })();

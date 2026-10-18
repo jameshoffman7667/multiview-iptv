@@ -81,7 +81,7 @@ describe('browser', () => {
   });
 
   async function openPage({ fake = true, state, viewport = { width: 1920, height: 1080 } } = {}) {
-    const ctx = await browser.newContext({ viewport });
+    const ctx = await browser.newContext({ viewport, serviceWorkers: 'block' });
     const errors = [];
     if (fake) {
       await ctx.route('**/vendor/mpegts.js', (route) => route.fulfill({ contentType: 'text/javascript', body: FAKE_MPEGTS }));
@@ -96,6 +96,7 @@ describe('browser', () => {
     return { ctx, page, errors };
   }
 
+  const menu = (page, id) => page.evaluate((i) => document.getElementById('sm-' + i).click(), id);
   const rects = (page) => page.$$eval('.tile', (els) => els.map((e) => { const r = e.getBoundingClientRect(); return { i: Number(e.dataset.idx), x: r.x, y: r.y, w: r.width, h: r.height, shown: e.offsetParent !== null }; }).filter((r) => r.shown).sort((a, b) => a.i - b.i));
   const near = (a, b, tol = 2.5) => Math.abs(a - b) <= tol;
 
@@ -171,7 +172,7 @@ describe('browser', () => {
     await ctx.close();
   });
 
-  test('keyboard / remote navigation, digits, layout key, toolbar hand-over', async () => {
+  test('keyboard / remote navigation, digits, layout key, player-controls hand-over', async () => {
     const { ctx, page, errors } = await openPage({ state: { layout: '1+7' } });
     const sel = () => page.evaluate(() => window.__mv.S.sel);
     await page.focus('.tile[data-idx="0"]');
@@ -186,9 +187,11 @@ describe('browser', () => {
     await page.keyboard.press('2'); assert.equal(await sel(), 1);
     await page.keyboard.press('9'); assert.equal(await sel(), 1, 'tile 9 does not exist in 1+7');
     await page.keyboard.press('ArrowUp');
-    assert.equal(await page.evaluate(() => !!document.activeElement.closest('#toolbar')), true, 'Up from the top row reaches the toolbar');
-    await page.keyboard.press('ArrowDown');
-    assert.equal(await page.evaluate(() => document.activeElement.classList.contains('tile')), true, 'Down returns to the tiles');
+    assert.equal(await page.evaluate(() => !!document.activeElement.closest('#ovl')), true, 'Up from the top row reaches the player controls');
+    assert.equal(await page.evaluate(() => window.__mv.ovl.shown), true);
+    await page.keyboard.press('Escape');
+    assert.equal(await page.evaluate(() => window.__mv.ovl.shown), false, 'Back closes the controls');
+    assert.equal(await page.evaluate(() => document.activeElement.classList.contains('tile')), true, 'and returns to the tiles');
     await page.keyboard.press('l');
     assert.equal(await page.evaluate(() => window.__mv.S.layout), '1', 'L cycles the layout');
     assert.equal((await rects(page)).length, 1);
@@ -256,6 +259,7 @@ describe('browser', () => {
     const { ctx, page, errors } = await openPage({ state: { layout: '3x3', tiles: [{ p: 'p1', sid: '1', name: 'ESPN' }, { p: 'p1', sid: '2', name: 'CNN' }] } });
     await page.click('.tile[data-idx="1"]');
     await page.keyboard.press('z');
+    await page.evaluate(() => window.__mv.ovlHide());
     let r = await rects(page);
     assert.equal(r.length, 1);
     assert.ok(near(r[0].w, 1920, 1) && near(r[0].h, 1080, 1), 'zoomed tile fills the screen');
@@ -265,7 +269,7 @@ describe('browser', () => {
     assert.deepEqual(await page.evaluate(() => window.__mv.S.tiles.slice(0, 2).map((t) => t && t.name)), ['CNN', 'ESPN'], 'S swaps with the main tile');
     assert.equal(await page.evaluate(() => window.__mv.S.sel), 0);
     await page.keyboard.press('m');
-    assert.equal(await page.textContent('#btn-audio'), 'Muted');
+    assert.equal(await page.evaluate(() => window.__mv.S.muted), true);
     await page.keyboard.press('i');
     assert.equal(await page.evaluate(() => document.body.classList.contains('stats')), true);
     assert.deepEqual(errors, []);
@@ -275,18 +279,18 @@ describe('browser', () => {
   test('settings window, Back button closes windows, failover flag reaches the stream URL', async () => {
     const { ctx, page, errors } = await openPage({ state: { layout: '1', tiles: [{ p: 'p1', sid: '1', name: 'ESPN' }] } });
     const url0 = page.url();
-    await page.click('#btn-settings');
+    await menu(page, 'settings');
     await page.waitForSelector('.modal h2');
     await page.selectOption('.modal select >> nth=0', '8');
     assert.equal(await page.evaluate(() => window.__mv.S.bufSec), 8);
     await page.keyboard.press('Escape');
     await page.waitForFunction(() => window.__mv.modals === 0);
-    await page.click('#btn-settings');
+    await menu(page, 'settings');
     await page.waitForSelector('.modal h2');
     await page.goBack();
     await page.waitForFunction(() => window.__mv.modals === 0);
     assert.equal(page.url(), url0, 'Back stayed in the app');
-    await page.click('#btn-settings');
+    await menu(page, 'settings');
     await page.uncheck('.modal .check input >> nth=0');
     await page.click('.modal .btn:has-text("Restart all streams")');
     await page.waitForFunction(() => window.__players.length >= 2);
@@ -297,8 +301,8 @@ describe('browser', () => {
 
   test('providers window: usage, add a provider (test fills max connections), password never shown', async () => {
     const { ctx, page, errors } = await openPage();
-    assert.match(await page.textContent('#btn-conn'), /Providers 0\/3/);
-    await page.click('#btn-conn');
+    assert.match(await page.textContent('#sm-providers'), /Providers\s+0\/3/);
+    await menu(page, 'providers');
     await page.waitForFunction(() => document.querySelectorAll('.prov').length === 2);
     const html = await page.content();
     assert.ok(!html.includes('pw1') && !html.includes('pw2'));
@@ -317,9 +321,9 @@ describe('browser', () => {
     assert.equal(app.config.providers[2].maxConnections, 3);
     assert.ok(!(await page.content()).includes('pw3'));
     await page.click('.modal .btn:has-text("Close")');
-    await page.waitForFunction(() => /Providers \d\/6/.test(document.querySelector('#btn-conn').textContent));
+    await page.waitForFunction(() => /Providers\s+\d\/6/.test(document.querySelector('#sm-providers').textContent));
     // wrong password shows the provider's message
-    await page.click('#btn-conn');
+    await menu(page, 'providers');
     await page.waitForSelector('.prov');
     await page.click('.prov:nth-of-type(3) .btn');
     await page.fill('.modal input[type=password]', 'nope');
@@ -331,12 +335,17 @@ describe('browser', () => {
     app.config.replace(app.config.providers.slice(0, 2).map((p) => ({ ...p })));
   });
 
-  test('toolbar hides when idle and returns on movement; fit toggle', async () => {
-    const { ctx, page } = await openPage({ state: { layout: '1' } });
-    await page.waitForFunction(() => document.querySelector('#toolbar').classList.contains('hide'), null, { timeout: 8000 });
-    await page.mouse.move(300, 300);
-    await page.mouse.move(320, 310);
-    assert.equal(await page.evaluate(() => document.querySelector('#toolbar').classList.contains('hide')), false);
+  test('tap brings the player controls up over the screen; they hide after 5 s idle and stay while there is movement', async () => {
+    const { ctx, page } = await openPage({ state: { layout: '1', tiles: [{ p: 'p1', sid: '1', name: 'ESPN' }] } });
+    assert.equal(await page.evaluate(() => window.__mv.ovl.shown), false, 'hidden at first');
+    await page.click('.tile[data-idx="0"]', { position: { x: 400, y: 300 } });
+    assert.equal(await page.evaluate(() => window.__mv.ovl.shown), true, 'a tap shows them');
+    assert.equal(await page.evaluate(() => getComputedStyle(document.getElementById('ovl')).visibility), 'visible');
+    for (let i = 0; i < 4; i++) { await page.waitForTimeout(2000); await page.mouse.move(300 + i * 5, 300); }
+    assert.equal(await page.evaluate(() => window.__mv.ovl.shown), true, 'movement keeps them up');
+    await page.waitForFunction(() => !window.__mv.ovl.shown, null, { timeout: 9000 });
+    await page.waitForTimeout(400);
+    assert.equal(await page.evaluate(() => getComputedStyle(document.getElementById('ovl')).visibility), 'hidden');
     await ctx.close();
   });
 
@@ -349,7 +358,7 @@ describe('browser', () => {
     const { ctx, page } = await openPage();
     await page.waitForSelector('.modal h2');
     assert.match(await page.textContent('.modal'), /Add your IPTV provider/);
-    assert.match(await page.textContent('#btn-conn'), /Add provider/);
+    assert.match(await page.textContent('#sm-providers'), /Add a provider/);
     await ctx.close();
     base = saved;
     app2.close();
@@ -416,7 +425,7 @@ describe('browser', () => {
     const src = await page.evaluate(() => document.querySelector('.tile[data-idx="0"] video').getAttribute('src'));
     assert.ok(src.endsWith('/vod/p1/movie%3A501.mp4'), src);
     assert.equal(await page.evaluate(() => window.__players.length), 0, 'a movie does not use the live player');
-    assert.equal(await page.evaluate(() => document.querySelector('.tile[data-idx="0"] video').controls), true);
+    assert.equal(await page.evaluate(() => document.querySelector('.tile[data-idx="0"] video').controls), false, 'the overlay is the only control bar');
     // series -> episodes
     await page.keyboard.press('c');
     await page.waitForSelector('.modal .tabs');
@@ -441,12 +450,12 @@ describe('browser', () => {
   test('long buffer: settings offer minutes, the stream asks for that much, a memory note appears', async () => {
     const { ctx, page, errors } = await openPage({ state: { layout: '1', tiles: [{ p: 'p1', sid: '1', name: 'ESPN' }], bufSec: 4 } });
     await page.keyboard.press('Escape');
-    await page.evaluate(() => document.getElementById('btn-settings').click());
+    await page.evaluate(() => document.getElementById('sm-settings').click());
     await page.waitForSelector('.modal h2');
     const opts = await page.$$eval('.modal select:nth-of-type(1) option', (o) => o.map((x) => x.value));
     assert.ok(opts.includes('300') && opts.includes('120') && opts.includes('60'), opts.join(','));
-    await page.selectOption('.modal .field:nth-child(1) select', '120');
-    assert.match(await page.textContent('.modal .note'), /2 minutes/);
+    await page.selectOption('.modal select >> nth=0', '120');
+    assert.match(await page.textContent('#mem-note'), /2 minutes/);
     await page.keyboard.press('Escape');
     await page.evaluate(() => window.__mv.tiles[0].reload());
     await page.waitForFunction(() => window.__players.length === 2);
@@ -464,7 +473,7 @@ describe('browser', () => {
 
   test('capture card: add one in the providers window, it becomes a provider with a source', async () => {
     const { ctx, page, errors } = await openPage();
-    await page.evaluate(() => document.getElementById('btn-conn').click());
+    await page.evaluate(() => document.getElementById('sm-providers').click());
     await page.waitForSelector('.modal .foot .btn:has-text("Add capture card")');
     await page.click('.modal .foot .btn:has-text("Add capture card")');
     await page.waitForSelector('.srcbox');
@@ -495,7 +504,7 @@ describe('browser', () => {
     await page.waitForFunction(() => window.__players.length === 2);
     await page.mouse.move(100, 100);
     const css = () => page.evaluate(() => ({
-      bar: document.querySelector('#toolbar').classList.contains('hide'),
+      bar: document.body.classList.contains('idle'),
       speaker: getComputedStyle(document.querySelector('.tile:nth-child(2) .speaker')).display,
       speakerBg: getComputedStyle(document.querySelector('.tile:nth-child(2) .speaker')).backgroundColor,
       labelOp: getComputedStyle(document.querySelector('.tile:nth-child(2) .label')).opacity,
@@ -509,7 +518,7 @@ describe('browser', () => {
     assert.equal(c.labelOp, '1');
     await page.waitForTimeout(5600);
     c = await css();
-    assert.equal(c.bar, true, 'toolbar hidden');
+    assert.equal(c.bar, true, 'idle: names and sound marker hidden');
     assert.equal(c.speaker === 'block' && Number(await page.evaluate(() => getComputedStyle(document.querySelector('.tile:nth-child(2) .speaker')).opacity)) > 0.01, false, 'bubble hidden');
     assert.equal(Number(c.labelOp) < 0.01, true, 'channel name hidden');
     await page.mouse.move(300, 300);
@@ -571,7 +580,7 @@ describe('browser', () => {
   });
 
   test('shared screen: a compose_failed 502 shows a readable message, retries with backoff, then stops and keeps the message', async () => {
-    const ctx = await browser.newContext({ viewport: { width: 1920, height: 1080 } });
+    const ctx = await browser.newContext({ viewport: { width: 1920, height: 1080 }, serviceWorkers: 'block' });
     await ctx.route('**/vendor/mpegts.js', (route) => route.fulfill({ contentType: 'text/javascript', body: FAKE_MPEGTS }));
     await ctx.addInitScript(MEDIA_STUBS);
     await ctx.addInitScript('window.__mvSharedBackoff = [300, 300]; window.__mvSharedDebounce = 100;');
@@ -674,8 +683,9 @@ describe('logins and shared multiviews (browser)', () => {
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
+  const menu = (page, id) => page.evaluate((i) => document.getElementById('sm-' + i).click(), id);
   async function newPage() {
-    const ctx = await browser.newContext({ viewport: { width: 1600, height: 900 } });
+    const ctx = await browser.newContext({ viewport: { width: 1600, height: 900 }, serviceWorkers: 'block' });
     await ctx.route('**/vendor/mpegts.js', (route) => route.fulfill({ contentType: 'text/javascript', body: FAKE_MPEGTS }));
     await ctx.addInitScript(MEDIA_STUBS);
     const errors = [];
@@ -696,17 +706,16 @@ describe('logins and shared multiviews (browser)', () => {
       window.__mv.assign(1, { p: 'p1', sid: '2', name: 'CNN' });
     });
     // turn on logins
-    await page.click('#btn-acct');
-    await page.click('text=Users and logins...');
+    await menu(page, 'settings');
+    await page.click('#set-users');
     await page.fill('.modal input[type=text]', 'boss');
     await page.fill('.modal input[type=password]', 'hunter22');
     await Promise.all([page.waitForNavigation(), page.click('text=Create admin and turn on logins')]);
     await page.waitForFunction(() => window.__mv && window.__mv.ME);
     assert.equal(await page.evaluate(() => window.__mv.ME.user.username), 'boss');
-    assert.equal(await page.textContent('#btn-acct'), 'boss');
     // add a viewer
-    await page.click('#btn-acct');
-    await page.click('text=Users and logins...');
+    await menu(page, 'settings');
+    await page.click('#set-users');
     await page.click('text=Add user');
     await page.fill('.modal input[type=text]', 'alice');
     await page.fill('.modal input[type=password]', 'alicepw1');
@@ -714,7 +723,7 @@ describe('logins and shared multiviews (browser)', () => {
     await page.waitForSelector('.modal .prov b:text("alice")');
     await page.keyboard.press('Escape');
     // publish
-    await page.click('#btn-views');
+    await menu(page, 'views');
     await page.click('text=Publish my current screen...');
     await page.fill('.modal input[type=text]', 'Game day');
     await page.click('.modal .btn.primary');
@@ -733,15 +742,17 @@ describe('logins and shared multiviews (browser)', () => {
     await v.page.fill('.login input[type=password]', 'alicepw1');
     await v.page.keyboard.press('Enter');
     // only one multiview shared, so it opens straight away
-    await v.page.waitForFunction(() => document.getElementById('view-title').textContent === 'Game day');
+    await v.page.waitForFunction(() => /^Game day/.test(document.getElementById('view-title').textContent));
     const state = await v.page.evaluate(() => ({ layout: window.__mv.S.layout, admin: window.__mv.ME.admin, urls: window.__players.map((p) => p.ds.url) }));
     assert.equal(state.admin, false);
     assert.equal(state.layout, '2x2');
     assert.equal(state.urls.length, 2);
     assert.match(state.urls[0], /^ws:\/\/[^/]+\/ws\/stream\/p1\/1\.ts/);
     // viewer chrome: no layout buttons, no providers, cannot add channels
-    assert.equal(await v.page.isVisible('#layouts'), false);
-    assert.equal(await v.page.isVisible('#btn-conn'), false);
+    assert.equal(await v.page.evaluate(() => document.getElementById('ov-o-layout').closest('.ov-opt').hidden), true, 'no layout choices for viewers');
+    assert.equal(await v.page.evaluate(() => document.getElementById('ov-guide').hidden), true, 'no channel guide for viewers');
+    assert.equal(await v.page.evaluate(() => document.getElementById('sm-providers').hidden), true, 'no providers for viewers');
+    assert.equal(await v.page.evaluate(() => document.getElementById('sm-recs').hidden), false, 'recordings are for everyone');
     await v.page.click('.tile[data-idx="2"]');
     await v.page.click('.tile[data-idx="2"]');
     assert.equal(await v.page.$('.modal'), null, 'empty tiles do not open a picker for viewers');
@@ -760,8 +771,7 @@ describe('logins and shared multiviews (browser)', () => {
     await v.page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
     await v.page.waitForFunction(() => window.__mv.S.layout === '1' && window.__players.some((p) => !p.destroyed && /\/stream\/p1\/3/.test(p.ds.url)), null, { timeout: 8000 });
     // log out returns to the login screen
-    await v.page.click('#btn-acct');
-    await Promise.all([v.page.waitForNavigation(), v.page.click('text=Log out')]);
+    await Promise.all([v.page.waitForNavigation(), v.page.evaluate(() => document.getElementById('sm-logout').click())]);
     await v.page.waitForSelector('.login-back');
     assert.deepEqual(v.errors, []);
     await v.ctx.close();
@@ -823,7 +833,7 @@ describe('real player, many streams, picker categories', () => {
   });
 
   test('nine real mpegts.js players over WebSocket (workers on): provider sees nine, page requests stay instant', { skip: !CLIP && 'needs CLIP_TS' }, async () => {
-    const ctx = await browser.newContext();
+    const ctx = await browser.newContext({ serviceWorkers: 'block' });
     const page = await ctx.newPage();
     await page.goto(base);
     await page.waitForFunction(() => window.__mv && window.__mv.ME);
@@ -849,7 +859,7 @@ describe('real player, many streams, picker categories', () => {
   });
 
   test('single provider: category dropdown is on and filters; provider without categories falls back to name prefixes', async () => {
-    const ctx = await browser.newContext({ viewport: { width: 1400, height: 900 } });
+    const ctx = await browser.newContext({ viewport: { width: 1400, height: 900 }, serviceWorkers: 'block' });
     await ctx.route('**/vendor/mpegts.js', (route) => route.fulfill({ contentType: 'text/javascript', body: FAKE_MPEGTS }));
     await ctx.addInitScript(MEDIA_STUBS);
     const page = await ctx.newPage();
@@ -867,7 +877,7 @@ describe('real player, many streams, picker categories', () => {
     // no categories from the provider: names come from "US|" style prefixes
     p1.noCategories = true;
     app.lists.forget('a');
-    const ctx2 = await browser.newContext({ viewport: { width: 1400, height: 900 } });
+    const ctx2 = await browser.newContext({ viewport: { width: 1400, height: 900 }, serviceWorkers: 'block' });
     await ctx2.route('**/vendor/mpegts.js', (route) => route.fulfill({ contentType: 'text/javascript', body: FAKE_MPEGTS }));
     await ctx2.addInitScript(MEDIA_STUBS);
     const page2 = await ctx2.newPage();
@@ -900,7 +910,7 @@ describe('browser: picker remembers its place', () => {
   after(async () => { await browser.close(); app.close(); await big.close(); fs.rmSync(dir, { recursive: true, force: true }); });
 
   async function page1() {
-    const ctx = await browser.newContext({ viewport: { width: 1400, height: 900 } });
+    const ctx = await browser.newContext({ viewport: { width: 1400, height: 900 }, serviceWorkers: 'block' });
     await ctx.route('**/vendor/mpegts.js', (route) => route.fulfill({ contentType: 'text/javascript', body: FAKE_MPEGTS }));
     await ctx.addInitScript(MEDIA_STUBS);
     const page = await ctx.newPage();
@@ -963,6 +973,482 @@ describe('browser: picker remembers its place', () => {
     assert.equal(pk.q, '');
     assert.equal(pk.favs, false);
     assert.equal(pk.last, '');
+    await ctx.close();
+  });
+});
+
+describe('player overlay, pull-out menu, recordings, PWA', () => {
+  let browser;
+  let app;
+  let base;
+  let dir;
+  let p1;
+  const pkg = JSON.parse(fs.readFileSync(path.join(path.dirname(new URL(import.meta.url).pathname), '..', 'package.json'), 'utf8'));
+
+  before(async () => {
+    p1 = await new MockProvider({ user: 'u1', pass: 'pw1', max: 3, kbps: 1000, channels: [
+      { id: 1, name: 'US| ESPN HD', cat: '10' }, { id: 2, name: 'US| CNN FHD', cat: '10' }, { id: 3, name: 'UK| BBC One', cat: '20' },
+    ] }).listen();
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mv-ui3-'));
+    fs.writeFileSync(path.join(dir, 'providers.json'), JSON.stringify({ providers: [{ id: 'p1', name: 'Alpha', url: p1.url, username: 'u1', password: 'pw1', maxConnections: 3 }] }));
+    app = createApp({ dataDir: dir, basicAuth: '', relay: { idleMs: 300 }, recTickMs: 500 });
+    await new Promise((r) => app.server.listen(0, '127.0.0.1', r));
+    base = `http://127.0.0.1:${app.server.address().port}`;
+    await app.lists.get(app.config.get('p1'));
+    browser = await chromium.launch(process.env.CHROME ? { executablePath: process.env.CHROME } : {});
+  });
+  after(async () => {
+    await browser.close();
+    app.close();
+    await p1.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  async function open(state, { viewport = { width: 1600, height: 900 }, sw = 'block' } = {}) {
+    const ctx = await browser.newContext({ viewport, serviceWorkers: sw });
+    if (sw === 'block') {
+      await ctx.route('**/vendor/mpegts.js', (route) => route.fulfill({ contentType: 'text/javascript', body: FAKE_MPEGTS }));
+      await ctx.addInitScript(MEDIA_STUBS);
+    }
+    if (state) await ctx.addInitScript(`if (!localStorage.getItem('mv.state.v1')) localStorage.setItem('mv.state.v1', ${JSON.stringify(JSON.stringify(state))});`);
+    const errors = [];
+    const page = await ctx.newPage();
+    page.on('pageerror', (e) => errors.push(`pageerror: ${e.message}`));
+    page.on('console', (m) => { if (m.type() === 'error' && !/Failed to load resource/.test(m.text())) errors.push(`console: ${m.text()}`); });
+    await page.goto(base);
+    await page.waitForFunction(() => window.__mv && window.__mv.tiles.length === 9 && window.__mv.ME);
+    return { ctx, page, errors };
+  }
+  const two = { layout: '2x2', sel: 0, tiles: [{ p: 'p1', sid: '1', name: 'ESPN' }, { p: 'p1', sid: '2', name: 'CNN' }, null, null] };
+  const one = { layout: '1', sel: 0, tiles: [{ p: 'p1', sid: '1', name: 'ESPN' }] };
+  const vis = (page, sel) => page.evaluate((s) => { const e = document.querySelector(s); return !!e && !e.hidden && e.offsetParent !== null && getComputedStyle(e).visibility !== 'hidden'; }, sel);
+  const centre = (page, sel) => page.$eval(sel, (e) => { const r = e.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; });
+
+  test('tapping a screen brings up the controls where the design says they go', async () => {
+    const { ctx, page, errors } = await open(two);
+    await page.waitForFunction(() => window.__players.length === 2);
+    assert.equal(await vis(page, '#ov-play'), false, 'hidden until tapped');
+    await page.click('.tile[data-idx="1"]');
+    await page.waitForFunction(() => window.__mv.ovl.shown);
+    assert.equal(await page.evaluate(() => window.__mv.S.sel), 1, 'the tap selected the tile');
+    for (const id of ['#ov-guide', '#ov-pull', '#ov-back', '#ov-play', '#ov-fwd', '#ov-up', '#ov-down', '#ov-mute', '#ov-vol', '#ov-seek', '#ov-arrow']) assert.equal(await vis(page, id), true, id);
+    assert.equal(await vis(page, '#ov-cast'), false, 'no cast icon when no cast device is around');
+    const pos = {};
+    for (const id of ['guide', 'pull', 'back', 'play', 'fwd', 'up', 'down', 'mute', 'seek', 'arrow']) pos[id] = await centre(page, '#ov-' + id);
+    assert.ok(pos.guide.x < 200 && pos.guide.y < 100, 'change-channel button top left');
+    assert.ok(pos.pull.x < 60 && Math.abs(pos.pull.y - 450) < 60, 'pull-out arrow on the left side');
+    assert.ok(pos.back.x < pos.play.x && pos.play.x < pos.fwd.x && Math.abs(pos.play.x - 800) < 5 && Math.abs(pos.play.y - 450) < 5, 'play in the middle, skip back and forward either side');
+    assert.ok(pos.up.x > 1500 && pos.down.x > 1500 && pos.up.y < pos.down.y, 'channel up and down on the right');
+    assert.ok(pos.mute.x < 200 && pos.mute.y > 800, 'mute bottom left');
+    assert.ok(pos.seek.y > 800 && pos.seek.x > pos.mute.x, 'progress bar along the bottom');
+    assert.ok(pos.arrow.y > pos.seek.y - 5 && Math.abs(pos.arrow.x - 800) < 5, 'options arrow below the progress bar');
+    assert.equal(await vis(page, '#ov-o-layout'), false, 'options are folded away');
+    assert.equal(await page.evaluate(() => !!document.querySelector('#ov-arrow svg.ic-up')), true, 'arrow points up');
+    await page.click('#ov-arrow');
+    assert.equal(await page.evaluate(() => !!document.querySelector('#ov-arrow svg.ic-down')), true, 'arrow turns down when open');
+    const order = await page.$$eval('#ov-opts .ov-opt > button', (b) => b.map((x) => x.id));
+    assert.deepEqual(order, ['ov-o-layout', 'ov-o-expand', 'ov-o-quality', 'ov-o-reload', 'ov-o-fav', 'ov-o-rec', 'ov-o-dl']);
+    const xs = [];
+    for (const id of order) { assert.equal(await vis(page, '#' + id), true, id); xs.push((await centre(page, '#' + id)).x); }
+    assert.deepEqual([...xs].sort((a, b) => a - b), xs, 'left to right in the numbered order');
+    assert.ok((await centre(page, '#ov-o-layout')).y < pos.seek.y, 'the row expands upward');
+    assert.equal(await page.evaluate(() => document.querySelector('#ov-o-layout svg').getAttribute('viewBox')), '0 0 20 20', 'layout icon shows the 2 x 2 layout');
+    assert.equal(await page.textContent('#ov-o-quality .ic-tv text'), 'AUTO');
+    await page.click('#ov-arrow');
+    assert.equal(await vis(page, '#ov-o-layout'), false, 'tapping again closes the row');
+    assert.deepEqual(errors, []);
+    await ctx.close();
+  });
+
+  test('the layout option holds every layout; expand is the magnifying glass and a second tap on the same tile does it too', async () => {
+    const { ctx, page, errors } = await open(two);
+    await page.click('.tile[data-idx="0"]');
+    await page.click('#ov-arrow');
+    await page.click('#ov-o-layout');
+    assert.equal(await page.locator('#ov-o-layout ~ .ov-sub .ovitem.lay').count(), 5);
+    await page.click('#ov-o-layout ~ .ov-sub .ovitem[data-layout="3x3"]');
+    assert.equal(await page.evaluate(() => window.__mv.S.layout), '3x3');
+    assert.equal(await page.evaluate(() => document.querySelector('#ov-o-layout svg').getAttribute('viewBox')), '0 0 30 30', 'the icon is the current layout');
+    await page.click('#ov-o-expand');
+    assert.equal(await page.evaluate(() => window.__mv.zoom), 0, 'expand zooms the selected tile');
+    assert.equal(await page.evaluate(() => document.querySelector('#ov-o-expand').classList.contains('on')), true);
+    await page.click('#ov-o-expand');
+    assert.equal(await page.evaluate(() => window.__mv.zoom), -1);
+    // tapping the already-selected tile again expands it (the controls are already up, so the first tap only selected)
+    await page.evaluate(() => window.__mv.ovlHide());
+    await page.click('.tile[data-idx="1"]');
+    await page.waitForFunction(() => window.__mv.ovl.shown);
+    const box = await page.$eval('.tile[data-idx="1"]', (e) => { const r = e.getBoundingClientRect(); return { x: r.x + 20, y: r.y + 20 }; });
+    await page.mouse.click(box.x, box.y);
+    await page.waitForFunction(() => window.__mv.zoom === 1);
+    await page.mouse.click(300, 300);
+    await page.waitForFunction(() => window.__mv.zoom === -1);
+    assert.deepEqual(errors, []);
+    await ctx.close();
+  });
+
+  test('quality, reload, favourite', async () => {
+    const { ctx, page, errors } = await open(one);
+    await page.waitForFunction(() => window.__players.length === 1);
+    await page.click('.tile[data-idx="0"]');
+    await page.click('#ov-arrow');
+    await page.click('#ov-o-quality');
+    assert.equal(await page.locator('#ov-o-quality ~ .ov-sub .ovitem').count(), 4);
+    await page.click('#ov-o-quality ~ .ov-sub .ovitem:has-text("SD when available")');
+    assert.equal(await page.evaluate(() => window.__mv.S.tiles[0].q), 'sd');
+    await page.waitForFunction(() => /q=sd/.test(window.__players[window.__players.length - 1].ds.url));
+    assert.equal(await page.textContent('#ov-o-quality .ic-tv text'), 'SD');
+    const n = await page.evaluate(() => window.__players.length);
+    await page.click('#ov-o-reload');
+    await page.waitForFunction((k) => window.__players.length === k + 1, n);
+    assert.equal(await page.evaluate(() => !!document.querySelector('#ov-o-fav svg.ic-star')), true, 'outline star');
+    await page.click('#ov-o-fav');
+    assert.equal(await page.evaluate(() => !!window.__mv.S.favs['p1:1']), true);
+    assert.equal(await page.evaluate(() => !!document.querySelector('#ov-o-fav svg.ic-starOn')), true, 'filled star');
+    await page.click('#ov-o-fav');
+    assert.equal(await page.evaluate(() => !!window.__mv.S.favs['p1:1']), false);
+    assert.deepEqual(errors, []);
+    await ctx.close();
+  });
+
+  test('play/pause, skip, progress bar and volume act on the selected tile; rewind restarts the stream behind live', async () => {
+    const { ctx, page, errors } = await open(one);
+    await page.waitForFunction(() => window.__players.length === 1);
+    await page.click('.tile[data-idx="0"]');
+    assert.equal(await page.textContent('#ov-time'), 'LIVE');
+    // pause a live channel
+    await page.click('#ov-play');
+    assert.equal(await page.evaluate(() => window.__mv.tiles[0].userPaused), true);
+    assert.equal(await page.evaluate(() => !!document.querySelector('#ov-play svg.ic-play')), true, 'shows play while paused');
+    await page.click('#ov-play');
+    assert.equal(await page.evaluate(() => window.__mv.tiles[0].userPaused), false);
+    // not enough rewind recorded yet: a message, no restart
+    const n0 = await page.evaluate(() => window.__players.length);
+    await page.evaluate(() => { window.__mv.tiles[0].avail = 0; window.__mv.tiles[0].availAt = Date.now() + 60000; });
+    await page.click('#ov-back');
+    assert.match(await page.textContent('#banner'), /Rewind is not available yet/);
+    assert.equal(await page.evaluate(() => window.__players.length), n0);
+    // plenty recorded: back 10 s restarts the stream with ?back=10
+    await page.evaluate(() => { window.__mv.tiles[0].avail = 300; });
+    await page.click('#ov-back');
+    await page.waitForFunction((k) => window.__players.length === k + 1, n0);
+    assert.match(await page.evaluate(() => window.__players[window.__players.length - 1].ds.url), /&back=10$/);
+    assert.match(await page.textContent('#ov-time'), /^-0:10$/);
+    await page.click('#ov-fwd');   // forward 30 from 10 behind live: clamps to live
+    await page.waitForFunction((k) => window.__players.length === k + 2, n0);
+    assert.doesNotMatch(await page.evaluate(() => window.__players[window.__players.length - 1].ds.url), /back=/);
+    assert.equal(await page.textContent('#ov-time'), 'LIVE');
+    // dragging the bar to 100 s behind live
+    await page.evaluate(() => { const s = document.getElementById('ov-seek'); s.value = String(300 - 100); s.dispatchEvent(new Event('change')); });
+    await page.waitForFunction((k) => window.__players.length === k + 3, n0);
+    assert.match(await page.evaluate(() => window.__players[window.__players.length - 1].ds.url), /&back=100$/);
+    // paused for a while: resuming continues from where the viewer left off
+    await page.evaluate(() => window.__mv.tiles[0].reload());
+    await page.evaluate(() => { const t = window.__mv.tiles[0]; t.back = 0; });
+    await page.click('#ov-play');
+    await page.evaluate(() => { window.__mv.tiles[0].pausedAt = Date.now() - 20000; });
+    const n1 = await page.evaluate(() => window.__players.length);
+    await page.click('#ov-play');
+    await page.waitForFunction((k) => window.__players.length === k + 1, n1);
+    assert.match(await page.evaluate(() => window.__players[window.__players.length - 1].ds.url), /&back=(19|20|21)$/);
+    // volume
+    await page.evaluate(() => { const v = document.getElementById('ov-vol'); v.value = '40'; v.dispatchEvent(new Event('input')); });
+    assert.equal(await page.evaluate(() => window.__mv.S.vol), 0.4);
+    assert.equal(await page.evaluate(() => Math.round(window.__mv.tiles[0].video.volume * 100)), 40);
+    await page.click('#ov-mute');
+    assert.equal(await page.evaluate(() => window.__mv.S.muted), true);
+    assert.equal(await page.evaluate(() => !!document.querySelector('#ov-mute svg.ic-mute')), true);
+    assert.deepEqual(errors, []);
+    await ctx.close();
+  });
+
+  test('channel up and down stay inside the category; guide button opens the change channel screen on the guide', async () => {
+    const { ctx, page, errors } = await open(one);
+    await page.click('.tile[data-idx="0"]');
+    await page.click('#ov-down');
+    await page.waitForFunction(() => window.__mv.S.tiles[0].sid === '2');
+    await page.click('#ov-down');   // category US has two channels in this list: wraps to the first
+    await page.waitForFunction(() => window.__mv.S.tiles[0].sid !== '2');
+    assert.equal(await page.evaluate(() => window.__mv.S.tiles[0].sid), '1');
+    await page.click('#ov-up');
+    await page.waitForFunction(() => window.__mv.S.tiles[0].sid === '2');
+    await page.click('.tile[data-idx="0"]');
+    await page.waitForFunction(() => window.__mv.ovl.shown);
+    await page.click('#ov-guide');
+    await page.waitForSelector('.modal .tabs');
+    assert.equal(await page.evaluate(() => document.querySelector('.tab.on').textContent.trim()), 'Guide');
+    assert.deepEqual(errors, []);
+    await ctx.close();
+  });
+
+  test('pull-out menu: Watch, Multiviews, Recordings & Downloads, Settings, Providers, Log out', async () => {
+    const { ctx, page, errors } = await open(one);
+    await page.click('.tile[data-idx="0"]');
+    await page.click('#ov-pull');
+    await page.waitForFunction(() => window.__mv.side.open);
+    const items = await page.$$eval('#side .sideitem:not([hidden])', (b) => b.map((x) => x.textContent.trim().replace(/\s+/g, ' ')));
+    assert.equal(items[0], 'Watch');
+    assert.equal(items[1], 'Multiviews');
+    assert.equal(items[2], 'Recordings & Downloads');
+    assert.equal(items[3], 'Settings');
+    assert.match(items[4], /^Providers/);
+    assert.equal(items.length, 5, 'no Log out while logins are off');
+    await page.click('#sm-watch');
+    assert.equal(await page.evaluate(() => window.__mv.side.open || window.__mv.ovl.shown), false, 'Watch closes the menu and the overlays');
+    await page.click('.tile[data-idx="0"]');
+    await page.click('#ov-pull');
+    await page.click('#sm-settings');
+    await page.waitForSelector('.modal h2');
+    assert.equal(await page.textContent('.modal h2'), 'Settings');
+    assert.equal(await page.evaluate(() => window.__mv.side.open), false);
+    assert.equal(await vis(page, '#set-users'), true, 'admin options live under Settings');
+    assert.equal(await vis(page, '#set-full'), true);
+    assert.equal(await vis(page, '#set-install-box'), true);
+    await page.keyboard.press('Escape');
+    await page.click('.tile[data-idx="0"]');
+    await page.click('#ov-pull');
+    await page.click('#sm-recs');
+    await page.waitForSelector('.modal h2:has-text("Recordings")');
+    await page.keyboard.press('Escape');
+    // a tap outside closes it
+    await page.click('.tile[data-idx="0"]');
+    await page.click('#ov-pull');
+    await page.mouse.click(1200, 400);
+    await page.waitForFunction(() => !window.__mv.side.open);
+    assert.deepEqual(errors, []);
+    await ctx.close();
+  });
+
+  test('record: to the end of the event (with the stop time shown) or for a length; the Recordings screen lists, plays and deletes', async () => {
+    const { ctx, page, errors } = await open(one);
+    await page.click('.tile[data-idx="0"]');
+    await page.click('#ov-arrow');
+    await page.click('#ov-o-rec');
+    await page.waitForSelector('#ov-o-rec ~ .ov-sub .ovitem');
+    const labels = await page.$$eval('#ov-o-rec ~ .ov-sub .ovitem', (b) => b.map((x) => x.textContent));
+    assert.match(labels[0], /^To end of ".+" - stops \d{1,2}:\d{2}/, labels[0]);
+    assert.match(labels[1], /^30 minutes - stops/);
+    await page.click('#ov-o-rec ~ .ov-sub .ovitem >> nth=0');
+    await page.waitForFunction(() => /Recording .* until/.test(document.getElementById('banner').textContent));
+    let items = app.recordings.list(null);
+    assert.equal(items.length, 1);
+    assert.equal(items[0].kind, 'live');
+    assert.equal(items[0].sid, '1');
+    // the event recording stops 60 minutes after the programme ends
+    const ev = await app.recordings.eventNow('p1', '1');
+    assert.ok(Math.abs(items[0].end - ev.recordUntil) < 5000);
+    await page.evaluate(() => document.getElementById('sm-recs').click());
+    await page.waitForSelector('.recrow');
+    assert.match(await page.textContent('.recrow'), /Recording now|Scheduled/);
+    await page.click('[data-act^="stop-"]');
+    await page.waitForFunction(() => /Stopped|Saved|Failed/.test(document.querySelector('.recrow').textContent), null, { timeout: 15000 });
+    await page.click('[data-act^="del-"]');
+    await page.click('.modal .btn.primary:has-text("Delete")');
+    await page.waitForFunction(() => !document.querySelector('.recrow'));
+    assert.equal(app.recordings.list(null).length, 0);
+    assert.deepEqual(errors, []);
+    await ctx.close();
+  });
+
+  test('download a movie to the server or to the device; a live channel offers recording instead', async () => {
+    const vod = { layout: '1', sel: 0, tiles: [{ p: 'p1', sid: 'movie:501', name: 'Big Movie', vod: 'movie', ext: 'mp4' }] };
+    const { ctx, page, errors } = await open(vod);
+    await page.click('.tile[data-idx="0"]');
+    assert.equal(await vis(page, '#ov-fwd'), true);
+    await page.click('#ov-arrow');
+    assert.equal(await page.evaluate(() => document.getElementById('ov-o-rec').disabled), true, 'a movie cannot be recorded');
+    await page.click('#ov-o-dl');
+    const subs = await page.$$eval('#ov-o-dl ~ .ov-sub .ovitem', (b) => b.map((x) => x.textContent));
+    assert.deepEqual(subs, ['Download to the server', 'Download to this device']);
+    await page.click('#ov-o-dl ~ .ov-sub .ovitem >> nth=0');
+    await page.waitForFunction(() => /Downloading "Big Movie" to the server/.test(document.getElementById('banner').textContent));
+    await page.waitForFunction(() => true);
+    const d = app.recordings.list(null).filter((x) => x.kind === 'download');
+    assert.equal(d.length, 1);
+    assert.equal(d[0].sid, 'movie:501');
+    // to the device = a browser download with a file name
+    await page.click('#ov-o-dl');
+    const [dl] = await Promise.all([page.waitForEvent('download'), page.click('#ov-o-dl ~ .ov-sub .ovitem >> nth=1')]);
+    assert.match(dl.suggestedFilename(), /Big Movie|501/);
+    for (const x of app.recordings.list(null)) app.recordings.remove(x.id);
+    assert.deepEqual(errors, []);
+    await ctx.close();
+  });
+
+  test('a programme that has not started in the guide can be scheduled for recording', async () => {
+    const { ctx, page, errors } = await open({ layout: '1', sel: 0, tiles: [null] });
+    await page.click('.tile[data-idx="0"]');   // empty tile -> picker
+    await page.waitForSelector('.modal .tabs');
+    await page.selectOption('select[aria-label="Provider"]', 'p1');
+    await page.click('.tab:has-text("Guide")');
+    await page.waitForSelector('.guide .grow .prog');
+    const nextBtn = await page.evaluateHandle(() => [...document.querySelectorAll('.guide .grow:nth-child(2) .prog')].filter((b) => !b.classList.contains('now')).pop());
+    await nextBtn.asElement().click();
+    await page.waitForSelector('#prog-rec');
+    await page.click('#prog-rec');
+    await page.waitForFunction(() => /Scheduled/.test(document.getElementById('banner').textContent));
+    const it = app.recordings.list(null).find((x) => x.status === 'scheduled');
+    assert.ok(it, 'a scheduled recording exists');
+    assert.ok(it.end - it.start > 60 * 60 * 1000, 'starts 5 minutes early, ends 60 minutes late');
+    app.recordings.remove(it.id);
+    assert.deepEqual(errors, []);
+    await ctx.close();
+  });
+
+  test('remote control: Enter shows the controls, arrows move between them, Back closes sub-menu, row, then controls', async () => {
+    const { ctx, page, errors } = await open(two);
+    await page.focus('.tile[data-idx="0"]');
+    await page.keyboard.press('Enter');
+    await page.waitForFunction(() => window.__mv.ovl.shown);
+    const active = () => page.evaluate(() => document.activeElement.id);
+    assert.equal(await active(), 'ov-play');
+    await page.keyboard.press('ArrowRight'); assert.equal(await active(), 'ov-fwd');
+    await page.keyboard.press('ArrowLeft'); await page.keyboard.press('ArrowLeft'); assert.equal(await active(), 'ov-back');
+    await page.keyboard.press('ArrowRight');
+    await page.keyboard.press('ArrowDown');
+    assert.ok(['ov-mute', 'ov-seek', 'ov-vol', 'ov-arrow'].includes(await active()), await active());
+    // reach the arrow and open the row with OK
+    for (let i = 0; i < 6 && (await active()) !== 'ov-arrow'; i++) await page.keyboard.press('ArrowDown');
+    assert.equal(await active(), 'ov-arrow');
+    await page.keyboard.press('Enter');
+    assert.equal(await page.evaluate(() => window.__mv.ovl.optsOpen), true);
+    await page.keyboard.press('ArrowUp');
+    assert.ok((await active()).startsWith('ov-o-'), await active());
+    await page.focus('#ov-o-quality');
+    await page.keyboard.press('Enter');
+    assert.notEqual(await page.evaluate(() => window.__mv.ovl.sub), '');
+    await page.keyboard.press('Escape');
+    assert.equal(await page.evaluate(() => window.__mv.ovl.sub), '');
+    assert.equal(await page.evaluate(() => window.__mv.ovl.optsOpen), true);
+    await page.keyboard.press('Escape');
+    assert.equal(await page.evaluate(() => window.__mv.ovl.optsOpen), false);
+    assert.equal(await page.evaluate(() => window.__mv.ovl.shown), true);
+    await page.keyboard.press('Escape');
+    assert.equal(await page.evaluate(() => window.__mv.ovl.shown), false);
+    // the pull-out menu by remote
+    await page.keyboard.press('Enter');
+    await page.waitForFunction(() => window.__mv.ovl.shown);
+    for (let i = 0; i < 6 && (await active()) !== 'ov-pull'; i++) await page.keyboard.press('ArrowLeft');
+    assert.equal(await active(), 'ov-pull');
+    await page.keyboard.press('Enter');
+    await page.waitForFunction(() => window.__mv.side.open);
+    assert.equal(await active(), 'sm-watch');
+    await page.keyboard.press('ArrowDown');
+    assert.equal(await active(), 'sm-views');
+    await page.keyboard.press('Escape');
+    assert.equal(await page.evaluate(() => window.__mv.side.open), false);
+    assert.deepEqual(errors, []);
+    await ctx.close();
+  });
+
+  test('the Back button (history) closes the side menu, then the controls, instead of leaving the app', async () => {
+    const { ctx, page, errors } = await open(one);
+    const url0 = page.url();
+    await page.click('.tile[data-idx="0"]');
+    await page.click('#ov-pull');
+    await page.waitForFunction(() => window.__mv.side.open);
+    await page.goBack();
+    await page.waitForFunction(() => !window.__mv.side.open);
+    assert.equal(await page.evaluate(() => window.__mv.ovl.shown), true, 'the controls are still up after the first Back');
+    await page.goBack();
+    await page.waitForFunction(() => !window.__mv.ovl.shown);
+    assert.equal(page.url(), url0, 'Back stayed in the app');
+    // an opened row and sub-menu close one step at a time
+    await page.click('.tile[data-idx="0"]');
+    await page.click('#ov-arrow');
+    await page.click('#ov-o-quality');
+    await page.goBack();
+    assert.equal(await page.evaluate(() => window.__mv.ovl.sub), '');
+    assert.equal(await page.evaluate(() => window.__mv.ovl.optsOpen), true);
+    await page.goBack();
+    await page.waitForFunction(() => !window.__mv.ovl.optsOpen);
+    await page.goBack();
+    await page.waitForFunction(() => !window.__mv.ovl.shown);
+    assert.equal(page.url(), url0);
+    assert.deepEqual(errors, []);
+    await ctx.close();
+  });
+
+  test('cast icon appears only when a Google device can be cast to; both ways of casting are offered', async () => {
+    const { ctx, page, errors } = await open(two);
+    await page.click('.tile[data-idx="0"]');
+    assert.equal(await vis(page, '#ov-cast'), false);
+    await page.evaluate(() => { window.__mv.castState.avail = true; });
+    await page.waitForFunction(() => !document.getElementById('ov-cast').hidden);
+    const c = await centre(page, '#ov-cast');
+    assert.ok(c.x > 1400 && c.y < 100, 'top right');
+    await page.click('#ov-cast');
+    await page.waitForSelector('#cast-channel');
+    assert.equal(await vis(page, '#cast-multi'), true, 'the whole multiview is offered when there are several channels');
+    assert.match(await page.textContent('#cast-channel'), /ESPN/);
+    assert.deepEqual(errors, []);
+    await ctx.close();
+  });
+
+  test('viewers get the controls without layout, guide, channel keys or favourites', async () => {
+    const { ctx, page } = await open(one);
+    await page.evaluate(() => { window.__mv.ME.admin = false; });
+    await page.click('.tile[data-idx="0"]');
+    await page.click('#ov-arrow');
+    const hidden = await page.evaluate(() => ['ov-guide', 'ov-up', 'ov-down'].map((i) => document.getElementById(i).hidden).concat(['layout', 'fav'].map((k) => document.getElementById('ov-o-' + k).closest('.ov-opt').hidden)));
+    assert.deepEqual(hidden, [true, true, true, true, true]);
+    assert.equal(await vis(page, '#ov-o-rec'), true, 'recording is for everyone');
+    await ctx.close();
+  });
+
+  test('PWA: valid manifest, icons, screenshots, version-tied service worker that never caches streams or the API, install help, update prompt', async () => {
+    const res = await fetch(`${base}/manifest.webmanifest`);
+    assert.equal(res.status, 200);
+    assert.match(res.headers.get('content-type'), /manifest\+json/);
+    assert.equal(res.headers.get('cache-control'), 'no-cache');
+    const man = await res.json();
+    assert.equal(man.display, 'standalone');
+    assert.equal(man.start_url, '/');
+    assert.ok(man.name && man.short_name && man.theme_color && man.background_color);
+    const sizes = man.icons.map((i) => `${i.sizes}/${i.purpose}`);
+    assert.ok(sizes.includes('192x192/any') && sizes.includes('512x512/any') && sizes.includes('512x512/maskable'));
+    for (const f of [...man.icons, ...man.screenshots]) {
+      const r = await fetch(base + f.src);
+      assert.equal(r.status, 200, f.src);
+      assert.equal(r.headers.get('content-type'), f.type, f.src);
+    }
+    assert.ok(man.screenshots.some((s) => s.form_factor === 'wide') && man.screenshots.some((s) => s.form_factor === 'narrow'), 'wide and narrow screenshots');
+    assert.equal((await fetch(`${base}/icons/apple-touch-icon.png`)).status, 200);
+    assert.equal((await fetch(`${base}/offline.html`)).status, 200);
+    const swRes = await fetch(`${base}/sw.js`);
+    assert.equal(swRes.headers.get('cache-control'), 'no-cache');
+    const sw = await swRes.text();
+    assert.match(sw, new RegExp(`const VERSION = '${pkg.version.replace(/\./g, '\\.')}'`), 'the cache name follows the app version');
+    assert.match(sw, /\(api\|stream\|ws\|vod\|recordings\|cast\)/, 'streams, API, recordings and casts are never touched');
+    // really install it
+    const { ctx, page, errors } = await open(null, { sw: 'allow' });
+    const info = await page.evaluate(async () => {
+      const reg = await navigator.serviceWorker.ready;
+      await new Promise((r) => { if (navigator.serviceWorker.controller) r(); else navigator.serviceWorker.addEventListener('controllerchange', r); setTimeout(r, 4000); });
+      const keys = await caches.keys();
+      const c = await caches.open(keys[0]);
+      const urls = (await c.keys()).map((r) => new URL(r.url).pathname);
+      return { scope: new URL(reg.scope).pathname, keys, urls, manifest: document.querySelector('link[rel=manifest]').getAttribute('href') };
+    });
+    assert.equal(info.scope, '/');
+    assert.deepEqual(info.keys, [`mv-shell-${pkg.version}`]);
+    assert.ok(info.urls.includes('/app.js') && info.urls.includes('/styles.css') && info.urls.includes('/offline.html'));
+    assert.equal(info.urls.some((u) => /^\/(api|stream|ws|vod|recordings|cast)\b/.test(u)), false, 'nothing from the API or streams is stored: ' + info.urls.join(','));
+    // an API call goes through the worker untouched and is not cached
+    await page.evaluate(() => fetch('/api/me').then((r) => r.json()));
+    const after = await page.evaluate(async () => { const c = await caches.open((await caches.keys())[0]); return (await c.keys()).map((r) => new URL(r.url).pathname); });
+    assert.equal(after.includes('/api/me'), false);
+    // Settings explains how to install
+    await page.evaluate(() => document.getElementById('sm-settings').click());
+    await page.waitForSelector('#set-install-box');
+    assert.match(await page.textContent('#set-install-box'), /Install as an app/);
+    await page.keyboard.press('Escape');
+    // a new version asks first
+    await page.evaluate(() => { window.__mv.updateReady && window.__mv.updateReady({ postMessage() { window.__posted = true; } }); });
+    await page.waitForSelector('#updatebar');
+    await page.click('#update-now');
+    assert.equal(await page.evaluate(() => window.__posted), true, 'Update now tells the waiting worker to take over');
+    assert.deepEqual(errors, []);
     await ctx.close();
   });
 });

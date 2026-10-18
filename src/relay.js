@@ -4,6 +4,8 @@ const { Ring } = require('./ring');
 const xtream = require('./xtream');
 const { httpError } = require('./config');
 const capture = require('./capture');
+const path = require('path');
+const { Rewind } = require('./rewind');
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const log = (...a) => console.log(new Date().toISOString().slice(11, 19), ...a);
@@ -187,6 +189,10 @@ class Upstream {
     this.samples.push({ t: now, bytes: this.bytes });
     while (this.samples.length > 2 && now - this.samples[0].t > 10000) this.samples.shift();
     this.ring.write(out);
+    if (this.mgr.opts.rewindDir && this.mgr.opts.rewindMs > 0) {
+      if (!this.rewind) this.rewind = new Rewind(path.join(this.mgr.opts.rewindDir, this.key.replace(/[^A-Za-z0-9_-]/g, '_')), { maxMs: this.mgr.opts.rewindMs, segMs: this.mgr.opts.rewindSegMs || 10000 });
+      this.rewind.write(out);
+    }
     this.info.feed(out);
     for (const c of this.clients) c.send(out);
     if (this.state !== 'live') {
@@ -251,6 +257,7 @@ class Upstream {
     this.rejectReady(httpError(502, `stream closed (${reason})`));
     for (const c of this.clients) c.end();
     this.clients.clear();
+    if (this.rewind) { this.rewind.close(); this.rewind = null; }
     if (this.mgr.map.get(this.key) === this) this.mgr.map.delete(this.key);
     log(`[${this.provider.name}] ${this.sid} closed (${reason})`);
   }
@@ -404,6 +411,17 @@ class Relay {
     if (lastErr) throw lastErr;
     const e = httpError(503, `No free connection at ${primary.name} (${this.activeCount(primary.id)}/${primary.maxConnections} in use)`, 'provider_limit');
     throw e;
+  }
+
+  // The running upstream that serves this channel for a viewer (the channel itself, its SD variant or a failover copy).
+  find(providerId, sid) {
+    sid = String(sid);
+    const cands = [`${providerId}:${sid}`];
+    const v = this.lists.lowerVariant(providerId, sid);
+    if (v) cands.push(`${v.providerId}:${v.sid}`);
+    for (const a of this.lists.alternates(providerId, sid)) cands.push(`${a.providerId}:${a.sid}`);
+    for (const k of cands) { const up = this.map.get(k); if (up && up.active) return up; }
+    return null;
   }
 
   state() {

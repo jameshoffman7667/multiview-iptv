@@ -21,7 +21,7 @@ Open `http://<server-ip>:1234` on the PC, and the same address in the Android TV
 
 First run opens the **Providers** window: enter the server URL, username and password from your provider and press **Test**. It reads how many connections your plan allows and fills that in. Add as many providers as you like. Then pick a tile, press Enter (or click it) and choose a channel.
 
-**Dockhand / prebuilt image:** create a stack from `stack.yml` (it uses `mybadreligon/multiview-iptv:0.4.1` from Docker Hub). Add `ADMIN_USER` / `ADMIN_PASSWORD` under environment if the port is reachable beyond your LAN.
+**Dockhand / prebuilt image:** create a stack from `stack.yml` (it uses `mybadreligon/multiview-iptv:0.5.0` from Docker Hub). Add `ADMIN_USER` / `ADMIN_PASSWORD` under environment if the port is reachable beyond your LAN.
 
 Without Docker: `node src/server.js` (Node 20+, no packages to install). Settings are stored in the `/data` volume (`providers.json`, channel list cache).
 
@@ -58,6 +58,9 @@ The picker **remembers where you were**: provider, tab, category, search words, 
 
 ## Local capture card as a channel
 
+A recording or rewind works on a capture-card channel like on any other. A cheap USB 3 "HDMI to USB" dongle that shows up as a normal video device (UVC, the MS2109 / MS2130 type) is enough for 1080p30 and needs no driver; HDCP-protected sources cannot be captured. On a Proxmox VM pass the USB device through to the VM first, then into the container (see `stack.yml`).
+
+
 A capture card (HDMI-to-USB dongle, TV tuner card with a V4L2 driver) plugged into the machine that runs the container can be a channel. Linux hosts only.
 
 1. Pass the devices into the container (see `stack.yml`): `devices: [/dev/video0:/dev/video0, /dev/snd:/dev/snd]`, then restart the stack.
@@ -90,15 +93,40 @@ Passwords are stored hashed (scrypt). Sessions last 30 days and are kept in the 
 
 | Key | Action |
 |---|---|
-| Arrow keys | move between tiles (the selected tile has the sound). Up from the top row goes to the toolbar |
-| OK / Enter | tile menu: change channel, mute, make main, zoom, reload, favorite, remove |
+| Arrow keys | move between tiles (the selected tile has the sound). Up from the top row opens the player controls |
+| OK / Enter | player controls (or add a channel to an empty tile). Inside the controls the arrows move between buttons and OK presses one |
 | 1 - 9 | jump to a tile |
 | M / L / F | mute, next layout, fullscreen |
-| S / Z / C / R | make main (swap with tile 1), zoom, change channel, reload |
+| S / Z / C / R | make main (swap with tile 1), expand, change channel, reload |
 | I | show stats on tiles (resolution, buffer seconds, dropped frames) |
-| Back / Esc | close a window |
+| Back / Esc | close a sub-menu, then the options row, then the controls; then a window |
 
-Mouse: click selects (and moves the sound), double-click zooms, right-click or the `...` button opens the tile menu. Touch: tap selects, tap again opens the menu. The layout, channels and favorites are remembered per browser.
+**Player controls.** Tap (or click) any screen, single channel or multiview, and the controls come up over the whole screen; they act on the selected tile (the tap selects it first) and hide after 5 seconds without input.
+
+- Top left: the programme-guide button opens the change-channel screen. Top right: the cast icon (only when a Google device is available).
+- Middle: play/pause with back 10 s and forward 30 s either side. Right: channel up / down (inside the same category). Left edge: the arrow that pulls out the menu.
+- Bottom: mute and volume at the left, the progress bar across the middle. Under it an arrow (points up, turns down when open) shows the options row, left to right: **Layout** (shows the current layout; all layouts are here), **Expand** (magnifying glass; tapping the same tile twice does it too), **Quality** (shows the current quality), **Reload**, **Favourite** (outline / filled star), **Record** (red REC: to the end of the current programme, with the stop time shown, or a length) and **Download** (movies and episodes: to the server or to this device). Choosing an option opens its choices in a menu that grows upward from its icon.
+- Viewers (non-admin logins) get the same controls without layout, change channel, channel up/down and favourite.
+
+**Pull-out menu** (left arrow): Watch (closes the menu and the controls), Multiviews, Recordings & Downloads, Settings, Providers and Log out. Providers is shown to admins only. User accounts, password change, fullscreen and (where possible) *Install app* are under Settings; the admin-only items there are shown only to admins.
+
+Tap the same tile twice to expand it, and again to go back. The layout, channels and favorites are remembered per browser.
+
+## Rewind, recording and downloads
+
+- **Rewind.** Every channel that is open is also written to disk (the newest `REWIND_MINUTES`, default 60, are kept; the folder is `REWIND_DIR`, cleared at start and when the channel closes). The progress bar of a live channel runs from "up to an hour ago" to LIVE: drag it, or use back 10 s / forward 30 s, and that tile restarts from that moment (it then plays at normal speed, so it stays that far behind live). Pausing a live channel for more than a few seconds and pressing play continues from where you paused. Rewind needs the channel to have been open: it only goes back as far as it has been watched. Put `REWIND_DIR` on a fast disk; about 2 GB per hour per 4-5 Mbps channel (a 6-tile multiview is about 12 GB). `REWIND_MINUTES=0` switches it off.
+- **Recording.** *Options > Record*: to the end of the current programme (the stop time is shown, and it includes 60 minutes extra for overtime), or for 30 minutes / 1, 2 or 3 hours. In the programme guide, choosing a programme that has not started offers *Record it*: it starts 5 minutes early and ends 60 minutes late. Recordings are `.mp4` files (video copied as it came, audio re-encoded to AAC), playable while they are still being made, and are kept until you delete them (no size cap). A recording uses one provider connection (shared with anyone already watching that channel); if the provider is full when it is due to start the recording fails and says so on the Recordings & Downloads screen.
+- **Downloads.** *Options > Download* on a movie or episode: *to the server* (a background job; listed on Recordings & Downloads) or *to this device* (a normal browser download).
+- **Recordings & Downloads** (pull-out menu) lists everything with its status and size, and can play, download, stop, extend (+30 min) and delete. A viewer sees only their own; an admin sees all.
+- Files go to `REC_DIR` (default `<DATA_DIR>/recordings`): put it on a large, slow disk, separate from the app data and the rewind buffer. The stack file maps `/recordings` and `/rewind` to their own volumes (or folders via `REC_PATH` / `REWIND_PATH`).
+
+## Casting
+
+The cast icon (top right of the player controls) appears when Chrome finds a Chromecast or Google TV on the network. It offers *This channel* or *The whole multiview (as one picture)*. The TV fetches the picture straight from this server through a private link that is valid for 6 hours, so the server address must be reachable from the TV, and Chrome only offers casting on an **https** page (your Cloudflare hostname works, plain `http://192.168...` does not). The channel is passed on as H.264 with its audio re-encoded to AAC; a multiview uses the same server encoder as the shared screen. Mute the device you cast from to avoid an echo. The Android TV app does not cast.
+
+## Install as an app (PWA)
+
+Browsers can install IPTV Multiview on a phone, tablet or desktop: Settings > *Install app* (Chrome / Edge), or on iPhone/iPad Safari's Share > *Add to Home Screen*. Installing needs **https**, so it works through your Cloudflare hostname but not a plain LAN `http://` address. The installed app shows only a friendly offline page when the server cannot be reached; the service worker caches only the app's own page, script, styles and icons (never streams, API answers, recordings, casts or login pages), the cache name carries the app version, and a new version asks before it takes over ("A new version is ready - Update now") because updating restarts the streams. If you protect the site with Cloudflare Access, let `/manifest.webmanifest`, `/sw.js` and `/icons/*` through without a login, or the browser cannot install it.
 
 ## How the buffering works (and what to tune)
 
@@ -124,6 +152,9 @@ Tuning: `RING_MB` (default 32) is the relay buffer per channel, about a minute o
 | `DATA_PATH` | `iptv-data` volume | compose/stack only: what is mounted at `/data`. Set it to a host folder such as `/srv/iptv` (owned by uid 1000) to keep the data there, or leave it for the named volume |
 | `ADMIN_USER`, `ADMIN_PASSWORD` | none | creates the first admin account at start, only if no accounts exist yet |
 | `BASIC_AUTH` | none | optional extra `user:password` gate in front of everything (separate from the user logins above) |
+| `REC_DIR` | `<DATA_DIR>/recordings` | where recordings and downloads are saved (large, slow disk is fine). Kept until deleted |
+| `REWIND_DIR` | `<DATA_DIR>/rewind` | where the rewind buffer is kept (use a fast disk); emptied at start |
+| `REWIND_MINUTES` | 60 | how much of each open channel can be rewound (0 = off, max 240) |
 | `RING_MB` | 32 | relay buffer per channel in MB (about 1 minute of an HD channel). Needs raising for buffers longer than that |
 | `FFMPEG_PATH` | `ffmpeg` | ffmpeg binary used for capture cards |
 | `VAAPI_DEVICE` | `/dev/dri/renderD128` | render device used when a capture source selects the VAAPI encoder |
@@ -152,6 +183,6 @@ Your provider credentials stay on the server; the browser only sees channel ids.
 
 ## Tests
 
-`npm test` runs the relay, accounts, guide, movies, capture, SD-variant and shared-screen tests (Node only, a mock Xtream provider, and ffmpeg for the capture test; no packages). `test/ui.test.mjs` drives the page in Chromium and needs Playwright (dev only).
+`npm test` runs the relay, accounts, guide, movies, capture, SD-variant, shared-screen, rewind, recording, download and cast tests (Node only, a mock Xtream provider, and ffmpeg for the capture test; no packages). `test/ui.test.mjs` drives the page in Chromium and needs Playwright (dev only).
 
 Bundled: mpegts.js 1.8.2 (Apache-2.0, `public/vendor/`).

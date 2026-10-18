@@ -12,11 +12,14 @@ const { Readable } = require('stream');
 const { pipeline } = require('stream/promises');
 const { Relay, Client } = require('./relay');
 const { Compose, cleanSpec } = require('./compose');
+const { Recordings } = require('./recordings');
+const { Cast } = require('./cast');
 const xtream = require('./xtream');
 const { Users, Views } = require('./users');
 const { isUpgrade: isWsUpgrade, handshake: wsHandshake, WsSink } = require('./ws');
 
 const MB = 1024 * 1024;
+const log = (...a) => console.log(new Date().toISOString().slice(11, 19), ...a);
 const env = (k, d) => (process.env[k] !== undefined && process.env[k] !== '' ? process.env[k] : d);
 
 function createApp(options = {}) {
@@ -36,13 +39,23 @@ function createApp(options = {}) {
   }
   const streamsByUser = new Map(); // username -> Set<res>
   const failures = new Map();      // ip -> { n, until }
+  // Rewind buffer: the newest REWIND_MINUTES of every open channel, on disk in REWIND_DIR (put it on a fast disk).
+  const rewindMinutes = options.rewindMinutes !== undefined ? options.rewindMinutes : (Number.isFinite(Number(env('REWIND_MINUTES', 60))) ? Math.max(0, Math.min(240, Number(env('REWIND_MINUTES', 60)))) : 60);
+  const rewindDir = options.rewindDir || env('REWIND_DIR', path.join(dataDir, 'rewind'));
+  if (rewindMinutes > 0) { try { fs.rmSync(rewindDir, { recursive: true, force: true }); fs.mkdirSync(rewindDir, { recursive: true }); } catch (e) { console.error(`[rewind] cannot use ${rewindDir}: ${e.message}`); } }
   const relay = new Relay(config, lists, {
     ringBytes: Number(env('RING_MB', 32)) * MB,
+    rewindDir,
+    rewindMs: rewindMinutes * 60 * 1000,
     idleMs: Number(env('IDLE_SECONDS', 8)) * 1000,
     stallMs: Number(env('STALL_SECONDS', 15)) * 1000,
     ...(options.relay || {}),
   });
   const compose = new Compose(relay, { ...(options.compose || {}), idleMs: options.composeIdleMs !== undefined ? options.composeIdleMs : Number(env('COMPOSE_IDLE_SECONDS', 8)) * 1000 });
+  // Recordings and downloads live in REC_DIR (keep it on a large, slow disk). Kept until deleted.
+  const recDir = options.recDir || env('REC_DIR', path.join(dataDir, 'recordings'));
+  const recordings = new Recordings({ dir: recDir, dataDir, relay, config, lists, epg, tickMs: options.recTickMs || 10000 });
+  const cast = new Cast(relay, compose);
   const maxQueue = (options.maxClientQueueMB !== undefined ? options.maxClientQueueMB : Number(env('CLIENT_QUEUE_MB', 8))) * MB;
 
   const MIME = {
@@ -147,7 +160,7 @@ function createApp(options = {}) {
   }
 
   // Attach `sink` (an HTTP response or a WebSocket) to the shared upstream. Throws { deny } when refused.
-  async function runStream(me, providerId, sid, sink, { burst, failover, sd, begin }) {
+  async function runStream(me, providerId, sid, sink, { burst, failover, sd, begin, back = 0 }) {
     const denied = streamDenied(me, providerId, sid);
     if (denied) { const e = new Error(denied.message); e.deny = denied; throw e; }
     let mine = null;
@@ -175,6 +188,13 @@ function createApp(options = {}) {
     }
     if (gone) { up.unpend(); return; }
     begin(up);
+    if (back > 0 && up.rewind && up.rewind.available() > 1) {
+      // rewind: send the stored video from `back` seconds ago, then join the live stream without a gap
+      try {
+        await up.rewind.replay({ sink, back, info: up.info, gone: () => gone || sink.destroyed, attach() { if (gone) return; attached = true; up.attach(client, 0); } });
+      } catch (e) { log(`[rewind] ${up.key}: ${e.message}`); if (!sink.destroyed) sink.destroy(); }
+      return;
+    }
     attached = true;
     up.attach(client, burst);
   }
@@ -185,8 +205,10 @@ function createApp(options = {}) {
     const burst = Math.max(0, Math.min(300, Number(url.searchParams.get('buf')) || 0));
     const failover = url.searchParams.get('failover') !== '0';
     const sd = url.searchParams.get('q') === 'sd';
+    const back = Math.max(0, Math.min(14400, Number(url.searchParams.get('back')) || 0));
     try {
       await runStream(me, providerId, sid, res, {
+        back,
         burst,
         failover,
         sd,
@@ -295,6 +317,7 @@ function createApp(options = {}) {
     if (!up.ok) throw httpError(up.status === 404 ? 404 : 502, `${prov.name} answered HTTP ${up.status} for this title`);
     const out = { 'Content-Type': VOD_TYPES[fm[3]] || 'video/mp4', 'Cache-Control': 'no-store', 'Accept-Ranges': 'bytes' };
     for (const k of ['content-length', 'content-range']) if (up.headers.get(k)) out[k] = up.headers.get(k);
+    if (url.searchParams.get('dl') === '1') out['Content-Disposition'] = `attachment; filename="${(url.searchParams.get('name') || sid).replace(/[^A-Za-z0-9._ -]/g, '_').slice(0, 80)}.${fm[3]}"`;
     res.writeHead(up.status, out);
     await pipeline(Readable.fromWeb(up.body), res).catch(() => {});
   }
@@ -329,6 +352,7 @@ function createApp(options = {}) {
         burst: Math.max(0, Math.min(300, Number(url.searchParams.get('buf')) || 0)),
         failover: url.searchParams.get('failover') !== '0',
         sd: url.searchParams.get('q') === 'sd',
+        back: Math.max(0, Math.min(14400, Number(url.searchParams.get('back')) || 0)),
         begin() {},
       });
     } catch (e) {
@@ -427,6 +451,75 @@ function createApp(options = {}) {
     throw httpError(404, 'Not found');
   }
 
+  // ---- recordings and downloads
+  async function handleRecordingsApi(req, res, url, me) {
+    if (!me) throw httpError(401, 'Login required', 'login_required');
+    const p = url.pathname;
+    if (req.method === 'GET' && p === '/api/recordings') {
+      const u = recordings.usage();
+      return sendJson(req, res, 200, { items: recordings.list(me), usage: { bytes: u.bytes, free: u.free, dir: me.role === 'admin' ? u.dir : undefined } });
+    }
+    if (req.method === 'GET' && p === '/api/recordings/event') {
+      const ev = await recordings.eventNow(url.searchParams.get('p') || '', url.searchParams.get('sid') || '');
+      return sendJson(req, res, 200, { event: ev });
+    }
+    if (req.method === 'POST' && p === '/api/recordings') {
+      const body = await readJson(req);
+      const pid = String(body.p || '');
+      const sid = String(body.sid || '');
+      if (me.role !== 'admin' && !views.allows(me, pid, sid)) throw httpError(403, 'That title is not in a multiview shared with you', 'not_allowed');
+      return sendJson(req, res, 200, { item: await recordings.create(me, body) });
+    }
+    const m = /^\/api\/recordings\/([a-f0-9]{12})(?:\/(stop|update))?$/.exec(p);
+    if (!m) throw httpError(404, 'Not found');
+    const it = recordings.get(m[1], me);
+    if (!it) throw httpError(404, 'No such recording');
+    if (req.method === 'DELETE' && !m[2]) { recordings.remove(it.id); return sendJson(req, res, 200, { ok: true }); }
+    if (req.method === 'POST' && m[2] === 'stop') return sendJson(req, res, 200, { item: recordings.stop(it.id, 'done') });
+    if (req.method === 'POST' && m[2] === 'update') return sendJson(req, res, 200, { item: recordings.update(it.id, await readJson(req)) });
+    throw httpError(405, 'Not allowed');
+  }
+
+  // GET /recordings/<id>.mp4 (?dl=1 to download): a file with range support, playable while it is still growing
+  function handleRecordingFile(req, res, url, id, me) {
+    if (!me) throw httpError(401, 'Login required', 'login_required');
+    const it = recordings.get(id, me);
+    if (!it || !it.file) throw httpError(404, 'No such recording');
+    const file = recordings.pathOf(it);
+    let st;
+    try { st = fs.statSync(file); } catch { throw httpError(404, 'The file is gone'); }
+    const ext = path.extname(it.file).toLowerCase();
+    const type = ext === '.mp4' || ext === '.m4v' ? 'video/mp4' : ext === '.mkv' ? 'video/x-matroska' : ext === '.webm' ? 'video/webm' : 'application/octet-stream';
+    const headers = { 'Content-Type': type, 'Accept-Ranges': 'bytes', 'Cache-Control': 'no-store' };
+    if (url.searchParams.get('dl') === '1') headers['Content-Disposition'] = `attachment; filename="${it.file.replace(/[^A-Za-z0-9._ -]/g, '_')}"`;
+    let start = 0;
+    let end = st.size - 1;
+    let status = 200;
+    const rm = /^bytes=(\d*)-(\d*)$/.exec(req.headers.range || '');
+    if (rm && (rm[1] || rm[2])) {
+      if (rm[1]) { start = Number(rm[1]); if (rm[2]) end = Math.min(end, Number(rm[2])); } else { start = Math.max(0, st.size - Number(rm[2])); }
+      if (start > end || start >= st.size) { res.writeHead(416, { 'Content-Range': `bytes */${st.size}` }); return res.end(); }
+      status = 206;
+      headers['Content-Range'] = `bytes ${start}-${end}/${st.size}`;
+    }
+    headers['Content-Length'] = end - start + 1;
+    res.writeHead(status, headers);
+    if (req.method === 'HEAD') return res.end();
+    fs.createReadStream(file, { start, end }).on('error', () => res.destroy()).pipe(res);
+  }
+
+  async function handleCast(req, res, token) {
+    const entry = cast.get(token);
+    if (!entry) { res.writeHead(404, { 'Content-Type': 'text/plain' }); return res.end('This cast link has expired'); }
+    if (req.method === 'OPTIONS') { res.writeHead(204, { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': '*' }); return res.end(); }
+    try {
+      await cast.serve(req, res, entry);
+    } catch (e) {
+      if (res.headersSent) return res.destroy();
+      sendJson(req, res, e.status || 502, { error: e.code || 'cast_failed', message: e.message });
+    }
+  }
+
   async function handleApi(req, res, url, me) {
     const p = url.pathname;
     const handled = (await handleAuthApi(req, res, url, me)) !== null ? true : false;
@@ -453,6 +546,32 @@ function createApp(options = {}) {
       if (url.searchParams.get('desc') !== '1') for (const k of Object.keys(progs)) progs[k] = progs[k].map((x) => [x[0], x[1], x[2]]);
       const entry = epg.data.get(prov.id);
       return sendJson(req, res, 200, { from, to, available: !!(entry && entry.ok) || Object.values(progs).some((l) => l.length), programmes: progs });
+    }
+    if (/^\/api\/recordings(\/|$)/.test(p)) return handleRecordingsApi(req, res, url, me);
+    if (req.method === 'POST' && p === '/api/cast') {
+      if (!me) throw httpError(401, 'Login required', 'login_required');
+      const body = await readJson(req);
+      const owner = ownerOf(req, me);
+      if (body.mode === 'multiview') {
+        const spec = cleanSpec(body.spec);
+        for (const c of spec.cells) { const d = streamDenied(me, c.p, c.sid); if (d && d.error !== 'user_limit') throw httpError(d.status, d.message, d.error); }
+        compose.encoderFor(spec.kind);
+        const token = cast.create({ kind: 'multiview', spec, owner });
+        return sendJson(req, res, 200, { url: `/cast/${token}.mp4`, title: 'Multiview', contentType: 'video/mp4' });
+      }
+      const pid = String(body.p || '');
+      const sid = String(body.sid || '');
+      if (!config.get(pid) || !/^[A-Za-z0-9_:-]{1,40}$/.test(sid)) throw httpError(400, 'Bad channel');
+      const d = streamDenied(me, pid, sid);
+      if (d && d.error !== 'user_limit') throw httpError(d.status, d.message, d.error);
+      const token = cast.create({ kind: 'channel', p: pid, sid, owner });
+      return sendJson(req, res, 200, { url: `/cast/${token}.mp4`, title: lists.nameOf(pid, sid) || sid, contentType: 'video/mp4' });
+    }
+    const rw = /^\/api\/rewind\/([^/]+)\/([^/]+)$/.exec(p);
+    if (rw && req.method === 'GET') {
+      if (!me) throw httpError(401, 'Login required', 'login_required');
+      const up = relay.find(decodeURIComponent(rw[1]), decodeURIComponent(rw[2]));
+      return sendJson(req, res, 200, { seconds: up && up.rewind ? up.rewind.available() : 0, max: rewindMinutes * 60 });
     }
     if (req.method === 'POST' && p === '/api/compose') {
       if (!me) throw httpError(401, 'Login required', 'login_required');
@@ -561,6 +680,8 @@ function createApp(options = {}) {
     try {
       const url = new URL(req.url, 'http://localhost');
       if (url.pathname === '/healthz') { res.writeHead(200, { 'Content-Type': 'text/plain' }); return res.end('ok'); }
+      const castM = /^\/cast\/([A-Za-z0-9_-]{20,40})\.mp4$/.exec(url.pathname);
+      if (castM && (req.method === 'GET' || req.method === 'OPTIONS')) return await handleCast(req, res, castM[1]);
       if (!authorised(req)) {
         res.writeHead(401, { 'WWW-Authenticate': 'Basic realm="IPTV Multiview", charset="UTF-8"', 'Content-Type': 'text/plain' });
         return res.end('Login required');
@@ -570,6 +691,8 @@ function createApp(options = {}) {
       if (cm && req.method === 'GET') return await handleComposeStream(req, res, cm, me);
       const sm = /^\/stream\/([^/]+)\/([^/]+?)(?:\.ts)?$/.exec(url.pathname);
       if (sm && req.method === 'GET') return await handleStream(req, res, url, sm, me);
+      const rfm = /^\/recordings\/([a-f0-9]{12})\.[a-z0-9]{2,5}$/.exec(url.pathname);
+      if (rfm && (req.method === 'GET' || req.method === 'HEAD')) return handleRecordingFile(req, res, url, rfm[1], me);
       const vm = /^\/vod\/([^/]+)\/([^/]+)$/.exec(url.pathname);
       if (vm && req.method === 'GET') return await handleVod(req, res, url, vm, me);
       if (url.pathname.startsWith('/api/')) {
@@ -598,12 +721,13 @@ function createApp(options = {}) {
   function close() {
     users.flush();
     compose.closeAll();
+    recordings.closeAll();
     relay.closeAll();
     server.close();
     server.closeAllConnections();
   }
 
-  return { server, config, lists, relay, compose, users, views, epg, close };
+  return { server, config, lists, relay, compose, recordings, cast, users, views, epg, close };
 }
 
 module.exports = { createApp };

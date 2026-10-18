@@ -1,0 +1,24 @@
+{
+  "name": "IPTV Multiview",
+  "short_name": "Multiview",
+  "description": "Watch several IPTV channels at once from your own server, with recording, rewind and casting.",
+  "id": "/",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "display_override": ["window-controls-overlay", "standalone"],
+  "orientation": "any",
+  "background_color": "#000000",
+  "theme_color": "#000000",
+  "categories": ["entertainment", "video"],
+  "icons": [
+    { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" },
+    { "src": "/icons/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ],
+  "screenshots": [
+    { "src": "/screenshots/wide.png", "sizes": "1280x720", "type": "image/png", "form_factor": "wide", "label": "Several channels at once" },
+    { "src": "/screenshots/narrow.png", "sizes": "540x960", "type": "image/png", "form_factor": "narrow", "label": "Player controls on a phone" }
+  ]
+}
