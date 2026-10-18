@@ -44,3 +44,8 @@ Notes / questions: server download = background job into storage, listed in Reco
 Requested: 2026-10-18. Live video is recorded automatically for up to 1 hour so the viewer can rewind.
 Type: minor-to-major   Status: Pending
 Notes / questions: buffer only channels being watched, on disk not RAM (about 2 GB per hour for a 4-5 Mbps channel, so a 6-tile multiview is about 12 GB, more at 1080p). Decided 2026-10-18: a new environment variable sets its folder, separate from app data and downloads, so it can sit on a fast disk; cleanup on close; the progress bar and skip buttons in P-1 depend on it; overlaps the existing "Start playing after / Keep up to" cushion setting.
+
+### P-8 - Make the app an installable PWA
+Requested: 2026-10-18. Installable on phone and desktop.
+Type: minor   Status: Pending
+Notes / questions: there is no manifest, service worker or icons yet. Plan: web manifest (standalone, icons 192/512/maskable, wide and narrow screenshots), a service worker that caches only the app shell and never streams, API calls or login pages (cache name tied to the app version), offline page, "update available" prompt, an Install button in Settings (iOS: Add to Home Screen instructions). Installing needs HTTPS, so it works through your Cloudflare hostname but not the plain LAN http address (Cloudflare Access, if used, must let the manifest, service worker and icons through). Also fits P-3 casting, which needs HTTPS too. The new overlay (P-1) must work in installed standalone mode at phone and desktop sizes.
