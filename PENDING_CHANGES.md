@@ -49,3 +49,13 @@ Notes / questions: buffer only channels being watched, on disk not RAM (about 2 
 Requested: 2026-10-18. Installable on phone and desktop.
 Type: minor   Status: Built in 0.5.0
 Notes / questions: there is no manifest, service worker or icons yet. Plan: web manifest (standalone, icons 192/512/maskable, wide and narrow screenshots), a service worker that caches only the app shell and never streams, API calls or login pages (cache name tied to the app version), offline page, "update available" prompt, an Install button in Settings (iOS: Add to Home Screen instructions). Installing needs HTTPS, so it works through your Cloudflare hostname but not the plain LAN http address (Cloudflare Access, if used, must let the manifest, service worker and icons through). Also fits P-3 casting, which needs HTTPS too. The new overlay (P-1) must work in installed standalone mode at phone and desktop sizes.
+
+### P-9 - Mini player that floats over other apps
+Requested: 2026-10-18. A button at the top right of the overlay turns the current screen arrangement (single channel or the whole multiview) into a small floating player over other apps; it also starts by itself when the user closes or leaves the app.
+Type: minor   Status: Pending
+Notes / questions: what is possible differs by where it runs. Android TV / Android app: real system picture-in-picture of the whole page, so the arrangement is kept; it can start automatically on Home (needs a native change and a new APK). Desktop Chrome/Edge: Document Picture-in-Picture can float the whole arrangement, but only when the user presses the button (browsers do not allow it to start by itself on closing), and phone browsers and iOS only float one video. Proposed: button everywhere it works; automatic start in the Android app; in browsers, automatic only where the browser allows it, otherwise only the button. With the Shared screen on, the single combined picture can be floated as one video in any browser that supports picture-in-picture. The icon sits next to the cast icon (cast moves left of it). Confirm this plan, and whether the sound should stay on in the mini player.
+
+### P-10 - LIVE indicator in the overlay
+Requested: 2026-10-18. Top left of the overlay: a red box with the word LIVE while the stream is live; light grey and partly transparent while behind live. Tapping it jumps to live.
+Type: minor   Status: Pending
+Notes / questions: the top left already holds the change-channel button, so the indicator goes right next to it (before the title). It replaces the plain "LIVE" text at the end of the progress bar. "Behind live" means the tile is 3 seconds or more behind (rewound or paused). Movies and episodes have no live state, so it is hidden for them.
