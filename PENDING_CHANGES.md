@@ -13,7 +13,7 @@ Requested: 2026-10-18. Tap any screen (single view or multiview) to show a full-
 - bottom middle: progress bar; bottom left: mute button and volume bar
 - arrow under the progress bar (up; turns down when open) that expands a row of options, left to right: 1 Layout (shows the current layout icon; all layout choices live here), 2 Expand (magnifying glass; replaces "zoom this tile"; tapping the same tile twice also expands), 3 Quality (filled TV icon with the current quality as text), 4 Reload (circular arrow), 5 Favourite (outline / filled star), 6 Record (red dot with REC: "to end of current event" with the stop time shown, or a chosen length; see P-5), 7 Download (down arrow with line: to server or to device; see P-6). Tapping an option opens its sub-options in a menu that grows upward from that icon; the arrow closes the row.
 Type: minor-to-major (replaces the current top menu, tile menu and idle-hide behaviour)   Status: Pending
-Notes / questions: (a) which tile do the controls act on in a multiview - the selected one, and does tapping a tile select it first? (b) skip back/forward and the progress bar need the live buffer (P-7); skip amounts (10 s back / 30 s forward?) (c) keep the 5 s idle auto-hide for the overlay? (d) mouse/remote on the Android TV app still needs focus navigation.
+Decided 2026-10-18: controls act on the selected tile (a tap selects it first); skip back 10 s / forward 30 s; the 5 s idle auto-hide stays. Skip and progress bar rely on the live buffer (P-7). Open: remote/focus navigation on the Android TV app.
 
 ### P-2 - Left pull-out menu
 Requested: 2026-10-18. Options: Watch (closes the menu and the overlays), Multiviews, Recordings & Downloads, Settings, Providers, Logout. Admin options move under Settings and are shown only to admins.
@@ -23,7 +23,7 @@ Notes / questions: Recordings & Downloads is a new screen (list, play, delete, s
 ### P-3 - Cast to a Google device (Chromecast / Google TV)
 Requested: 2026-10-18. Cast icon in the overlay (P-1).
 Type: minor   Status: Pending
-Notes / questions: Chrome's Cast needs the page on HTTPS (your Cloudflare hostname works, plain LAN http does not) and the Cast receiver must be able to reach the stream URL, so the server needs a cast-friendly H.264/AAC stream (the Shared-screen composite is the natural way to cast a multiview; a single channel can cast its own stream if it is H.264/AAC). Android TV app: needs the Cast SDK. Which should cast: the selected channel, or the whole multiview as one picture?
+Notes / questions: Chrome's Cast needs the page on HTTPS (your Cloudflare hostname works, plain LAN http does not) and the Cast receiver must be able to reach the stream URL, so the server needs a cast-friendly H.264/AAC stream (the Shared-screen composite is the natural way to cast a multiview; a single channel can cast its own stream if it is H.264/AAC). Android TV app: needs the Cast SDK. Decided 2026-10-18: both are offered as options when casting (selected channel, or the whole multiview as one picture).
 
 ### P-4 - Local video capture source from the server's capture card
 Requested: 2026-10-18. Route video from the capture card in the server box as a channel.
@@ -33,14 +33,14 @@ Notes / questions: 0.3.0 already has Providers > Add capture card (V4L2 video + 
 ### P-5 - Record live and future events
 Requested: 2026-10-18. Record from the overlay (to end of current programme with stop time shown, or a set length) and schedule future programmes from the guide.
 Type: minor   Status: Pending
-Notes / questions: a recording holds a provider connection (shares the relay connection if the channel is already open); where files go (/files? size limit, retention), format (.ts as received or remux to .mp4/.mkv), padding before/after, what happens if the provider is full at the start time.
+Notes / questions: a recording holds a provider connection (shares the relay connection if the channel is already open); Decided 2026-10-18: files go to a folder set by a new environment variable in the deployment, separate from app data and the rewind buffer, so it can sit on a large slow disk (shared with P-6 downloads). Open: retention/size limit, format (.ts as received or remux to .mp4/.mkv), padding before/after, what happens if the provider is full at the start time.
 
 ### P-6 - Download movies and series for offline viewing
 Requested: 2026-10-18. Download to the server or to the device.
 Type: minor   Status: Pending
-Notes / questions: server download = background job into storage, listed in Recordings & Downloads and playable from the server; device download = browser download of the file (fine on phone/PC; the Android TV app has limited storage and no file picker). A download holds a provider connection while it runs. Same storage questions as P-5.
+Notes / questions: server download = background job into storage, listed in Recordings & Downloads and playable from the server; device download = browser download of the file (fine on phone/PC; the Android TV app has limited storage and no file picker). A download holds a provider connection while it runs. Decided 2026-10-18: server downloads use the same separate recordings/downloads folder as P-5. Open: retention.
 
 ### P-7 - Automatic 1-hour rewind buffer for live video
 Requested: 2026-10-18. Live video is recorded automatically for up to 1 hour so the viewer can rewind.
 Type: minor-to-major   Status: Pending
-Notes / questions: buffer only channels being watched, on disk not RAM (about 2 GB per hour for a 4-5 Mbps channel, so a 6-tile multiview is about 12 GB, more at 1080p); needs a /data or /files location and cleanup on close; the progress bar and skip buttons in P-1 depend on it; overlaps the existing "Start playing after / Keep up to" cushion setting.
+Notes / questions: buffer only channels being watched, on disk not RAM (about 2 GB per hour for a 4-5 Mbps channel, so a 6-tile multiview is about 12 GB, more at 1080p). Decided 2026-10-18: a new environment variable sets its folder, separate from app data and downloads, so it can sit on a fast disk; cleanup on close; the progress bar and skip buttons in P-1 depend on it; overlaps the existing "Start playing after / Keep up to" cushion setting.
