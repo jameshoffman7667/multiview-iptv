@@ -2,12 +2,17 @@ package app.iptvmultiview.tv;
 
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.app.PictureInPictureParams;
 import android.content.DialogInterface;
 import android.content.SharedPreferences;
+import android.content.pm.PackageManager;
+import android.content.res.Configuration;
 import android.graphics.Color;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
 import android.text.InputType;
+import android.util.Rational;
 import android.view.KeyEvent;
 import android.view.View;
 import android.view.ViewGroup;
@@ -40,6 +45,8 @@ public class MainActivity extends Activity {
     private WebChromeClient.CustomViewCallback customCallback;
     private AlertDialog dialog;
     private WebChromeClient chrome;
+    private boolean autoPip = false; // set by the page while something is playing
+    private boolean inPip = false;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -254,8 +261,49 @@ public class MainActivity extends Activity {
     @Override
     protected void onPause() {
         CookieManager.getInstance().flush();
-        web.onPause();
+        if (!inPip) web.onPause(); // keep playing inside the floating player
         super.onPause();
+    }
+
+    @Override
+    protected void onStop() {
+        if (inPip) web.onPause(); // the floating player was closed
+        super.onStop();
+    }
+
+    // ------------------------------------------------------------------ mini player (picture-in-picture)
+
+    private boolean pipSupported() {
+        return Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
+                && getPackageManager().hasSystemFeature(PackageManager.FEATURE_PICTURE_IN_PICTURE);
+    }
+
+    private void enterPip() {
+        if (!pipSupported() || isInPictureInPictureMode()) return;
+        inPip = true; // before the pause callback, so the web view keeps running
+        try {
+            enterPictureInPictureMode(new PictureInPictureParams.Builder().setAspectRatio(new Rational(16, 9)).build());
+        } catch (RuntimeException e) {
+            inPip = false;
+        }
+    }
+
+    /** Home / recent apps / another app: float the arrangement instead of stopping it. */
+    @Override
+    protected void onUserLeaveHint() {
+        super.onUserLeaveHint();
+        if (autoPip && customView == null) enterPip();
+    }
+
+    @Override
+    public void onPictureInPictureModeChanged(boolean isInPictureInPictureMode, Configuration newConfig) {
+        super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig);
+        inPip = isInPictureInPictureMode;
+        web.evaluateJavascript("window.__mvPip && window.__mvPip(" + isInPictureInPictureMode + ")", null);
+        if (!isInPictureInPictureMode) {
+            web.onResume();
+            immersive();
+        }
     }
 
     @Override
@@ -290,6 +338,26 @@ public class MainActivity extends Activity {
                     askServer(true);
                 }
             });
+        }
+
+        @JavascriptInterface
+        public boolean canPip() {
+            return pipSupported();
+        }
+
+        @JavascriptInterface
+        public void enterPip() {
+            runOnUiThread(new Runnable() {
+                @Override
+                public void run() {
+                    MainActivity.this.enterPip();
+                }
+            });
+        }
+
+        @JavascriptInterface
+        public void setAutoPip(boolean on) {
+            autoPip = on;
         }
 
         @JavascriptInterface

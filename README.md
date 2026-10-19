@@ -21,7 +21,7 @@ Open `http://<server-ip>:1234` on the PC, and the same address in the Android TV
 
 First run opens the **Providers** window: enter the server URL, username and password from your provider and press **Test**. It reads how many connections your plan allows and fills that in. Add as many providers as you like. Then pick a tile, press Enter (or click it) and choose a channel.
 
-**Dockhand / prebuilt image:** create a stack from `stack.yml` (it uses `mybadreligon/multiview-iptv:0.5.0` from Docker Hub). Add `ADMIN_USER` / `ADMIN_PASSWORD` under environment if the port is reachable beyond your LAN.
+**Dockhand / prebuilt image:** create a stack from `stack.yml` (it uses `mybadreligon/multiview-iptv:0.6.0` from Docker Hub). Add `ADMIN_USER` / `ADMIN_PASSWORD` under environment if the port is reachable beyond your LAN.
 
 Without Docker: `node src/server.js` (Node 20+, no packages to install). Settings are stored in the `/data` volume (`providers.json`, channel list cache).
 
@@ -103,7 +103,7 @@ Passwords are stored hashed (scrypt). Sessions last 30 days and are kept in the 
 
 **Player controls.** Tap (or click) any screen, single channel or multiview, and the controls come up over the whole screen; they act on the selected tile (the tap selects it first) and hide after 5 seconds without input.
 
-- Top left: the programme-guide button opens the change-channel screen. Top right: the cast icon (only when a Google device is available).
+- Top left: the programme-guide button opens the change-channel screen. Top right: the cast icon (only when a Google device is available) and the mini player button.
 - Middle: play/pause with back 10 s and forward 30 s either side. Right: channel up / down (inside the same category). Left edge: the arrow that pulls out the menu.
 - Bottom: mute and volume at the left, the progress bar across the middle. Under it an arrow (points up, turns down when open) shows the options row, left to right: **Layout** (shows the current layout; all layouts are here), **Expand** (magnifying glass; tapping the same tile twice does it too), **Quality** (shows the current quality), **Reload**, **Favourite** (outline / filled star), **Record** (red REC: to the end of the current programme, with the stop time shown, or a length) and **Download** (movies and episodes: to the server or to this device). Choosing an option opens its choices in a menu that grows upward from its icon.
 - Viewers (non-admin logins) get the same controls without layout, change channel, channel up/down and favourite.
@@ -119,6 +119,12 @@ Tap the same tile twice to expand it, and again to go back. The layout, channels
 - **Downloads.** *Options > Download* on a movie or episode: *to the server* (a background job; listed on Recordings & Downloads) or *to this device* (a normal browser download).
 - **Recordings & Downloads** (pull-out menu) lists everything with its status and size, and can play, download, stop, extend (+30 min) and delete. A viewer sees only their own; an admin sees all.
 - Files go to `REC_DIR` (default `<DATA_DIR>/recordings`): put it on a large, slow disk, separate from the app data and the rewind buffer. The stack file maps `/recordings` and `/rewind` to their own volumes (or folders via `REC_PATH` / `REWIND_PATH`).
+
+## Mini player and LIVE
+
+The button at the top right of the controls floats what you are watching over other apps. **Android app:** the whole screen arrangement (single channel or multiview) becomes a floating window, and it starts by itself when you press Home or switch apps (needs the 0.6.0 APK; Android 8+). **Desktop Chrome / Edge:** the whole arrangement moves into a small always-on-top window (button only; close it to bring it back). **Other browsers / phones:** the selected channel, or the shared screen, floats as one video. Sound stays on.
+
+Next to the progress bar, a red **LIVE** box means you are watching live; it turns light grey when you are 3 s or more behind (or paused). Tap it to jump back to live.
 
 ## Casting
 

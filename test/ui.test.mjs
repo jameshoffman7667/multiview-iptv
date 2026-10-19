@@ -1004,12 +1004,13 @@ describe('player overlay, pull-out menu, recordings, PWA', () => {
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
-  async function open(state, { viewport = { width: 1600, height: 900 }, sw = 'block' } = {}) {
+  async function open(state, { viewport = { width: 1600, height: 900 }, sw = 'block', init = '' } = {}) {
     const ctx = await browser.newContext({ viewport, serviceWorkers: sw });
     if (sw === 'block') {
       await ctx.route('**/vendor/mpegts.js', (route) => route.fulfill({ contentType: 'text/javascript', body: FAKE_MPEGTS }));
       await ctx.addInitScript(MEDIA_STUBS);
     }
+    if (init) await ctx.addInitScript(init);
     if (state) await ctx.addInitScript(`if (!localStorage.getItem('mv.state.v1')) localStorage.setItem('mv.state.v1', ${JSON.stringify(JSON.stringify(state))});`);
     const errors = [];
     const page = await ctx.newPage();
@@ -1115,10 +1116,12 @@ describe('player overlay, pull-out menu, recordings, PWA', () => {
     const { ctx, page, errors } = await open(one);
     await page.waitForFunction(() => window.__players.length === 1);
     await page.click('.tile[data-idx="0"]');
-    assert.equal(await page.textContent('#ov-time'), 'LIVE');
+    assert.equal(await page.evaluate(() => document.getElementById('ov-live').classList.contains('behind')), false, 'red LIVE while live');
+    assert.equal(await page.textContent('#ov-live'), 'LIVE');
     // pause a live channel
     await page.click('#ov-play');
     assert.equal(await page.evaluate(() => window.__mv.tiles[0].userPaused), true);
+    assert.equal(await page.evaluate(() => document.getElementById('ov-live').classList.contains('behind')), true, 'grey while paused');
     assert.equal(await page.evaluate(() => !!document.querySelector('#ov-play svg.ic-play')), true, 'shows play while paused');
     await page.click('#ov-play');
     assert.equal(await page.evaluate(() => window.__mv.tiles[0].userPaused), false);
@@ -1134,13 +1137,24 @@ describe('player overlay, pull-out menu, recordings, PWA', () => {
     await page.waitForFunction((k) => window.__players.length === k + 1, n0);
     assert.match(await page.evaluate(() => window.__players[window.__players.length - 1].ds.url), /&back=10$/);
     assert.match(await page.textContent('#ov-time'), /^-0:10$/);
+    assert.equal(await page.evaluate(() => document.getElementById('ov-live').classList.contains('behind')), true, 'grey when 10 s behind live');
     await page.click('#ov-fwd');   // forward 30 from 10 behind live: clamps to live
     await page.waitForFunction((k) => window.__players.length === k + 2, n0);
     assert.doesNotMatch(await page.evaluate(() => window.__players[window.__players.length - 1].ds.url), /back=/);
-    assert.equal(await page.textContent('#ov-time'), 'LIVE');
+    assert.equal(await page.textContent('#ov-time'), '');
+    assert.equal(await page.evaluate(() => document.getElementById('ov-live').classList.contains('behind')), false);
+    // tapping the grey LIVE box goes back to live
+    await page.evaluate(() => { window.__mv.tiles[0].back = 40; });
+    await page.evaluate(() => window.__mv.ovlShow());
+    await page.waitForFunction(() => document.getElementById('ov-live').classList.contains('behind'));
+    const nL = await page.evaluate(() => window.__players.length);
+    await page.click('#ov-live');
+    await page.waitForFunction((k) => window.__players.length === k + 1, nL);
+    assert.doesNotMatch(await page.evaluate(() => window.__players[window.__players.length - 1].ds.url), /back=/);
+    assert.equal(await page.evaluate(() => document.getElementById('ov-live').classList.contains('behind')), false);
     // dragging the bar to 100 s behind live
     await page.evaluate(() => { const s = document.getElementById('ov-seek'); s.value = String(300 - 100); s.dispatchEvent(new Event('change')); });
-    await page.waitForFunction((k) => window.__players.length === k + 3, n0);
+    await page.waitForFunction((k) => window.__players.length === k + 4, n0);
     assert.match(await page.evaluate(() => window.__players[window.__players.length - 1].ds.url), /&back=100$/);
     // paused for a while: resuming continues from where the viewer left off
     await page.evaluate(() => window.__mv.tiles[0].reload());
@@ -1306,7 +1320,7 @@ describe('player overlay, pull-out menu, recordings, PWA', () => {
     await page.keyboard.press('ArrowLeft'); await page.keyboard.press('ArrowLeft'); assert.equal(await active(), 'ov-back');
     await page.keyboard.press('ArrowRight');
     await page.keyboard.press('ArrowDown');
-    assert.ok(['ov-mute', 'ov-seek', 'ov-vol', 'ov-arrow'].includes(await active()), await active());
+    assert.ok(['ov-mute', 'ov-seek', 'ov-live', 'ov-vol', 'ov-arrow'].includes(await active()), await active());
     // reach the arrow and open the row with OK
     for (let i = 0; i < 6 && (await active()) !== 'ov-arrow'; i++) await page.keyboard.press('ArrowDown');
     assert.equal(await active(), 'ov-arrow');
@@ -1365,6 +1379,41 @@ describe('player overlay, pull-out menu, recordings, PWA', () => {
     await page.goBack();
     await page.waitForFunction(() => !window.__mv.ovl.shown);
     assert.equal(page.url(), url0);
+    assert.deepEqual(errors, []);
+    await ctx.close();
+  });
+
+  test('mini player: button right of the cast icon floats the selected video in a browser', async () => {
+    const { ctx, page, errors } = await open(two, { init: `Object.defineProperty(window, 'documentPictureInPicture', { value: undefined, configurable: true }); window.__pipCalls = []; HTMLVideoElement.prototype.requestPictureInPicture = function () { window.__pipCalls.push(this.id || this.className); return Promise.resolve({}); }; Object.defineProperty(document, 'pictureInPictureEnabled', { value: true });` });
+    await page.waitForFunction(() => window.__players.length === 2);
+    await page.click('.tile[data-idx="1"]');
+    await page.waitForFunction(() => window.__mv.ovl.shown);
+    await page.evaluate(() => { window.__mv.castState.avail = true; window.__mv.ovlShow(); });
+    await page.waitForFunction(() => !document.getElementById('ov-cast').hidden);
+    assert.equal(await vis(page, '#ov-pip'), true);
+    const a = await centre(page, '#ov-cast');
+    const b = await centre(page, '#ov-pip');
+    assert.ok(b.x > a.x && b.x > 1500 && b.y < 100, 'mini player top right, cast to its left');
+    await page.click('#ov-pip');
+    await page.waitForFunction(() => window.__pipCalls.length === 1);
+    assert.deepEqual(errors, []);
+    await ctx.close();
+  });
+
+  test('mini player in the Android app: native call, auto-start flag, page chrome hides while floating', async () => {
+    const { ctx, page, errors } = await open(two, { init: `window.__app = []; window.MVApp = { canPip: function () { return true; }, enterPip: function () { window.__app.push('enter'); }, setAutoPip: function (on) { window.__app.push('auto:' + on); }, changeServer: function () {} };` });
+    await page.waitForFunction(() => window.__players.length === 2);
+    await page.click('.tile[data-idx="0"]');
+    await page.waitForFunction(() => window.__mv.ovl.shown);
+    assert.equal(await vis(page, '#ov-pip'), true);
+    assert.ok((await page.evaluate(() => window.__app)).includes('auto:true'), 'the app is told something is playing');
+    await page.click('#ov-pip');
+    assert.ok((await page.evaluate(() => window.__app)).includes('enter'));
+    await page.evaluate(() => window.__mvPip(true));
+    assert.equal(await vis(page, '#ovl'), false, 'controls hidden while floating');
+    assert.equal(await page.evaluate(() => window.__mv.ovl.shown), false);
+    await page.evaluate(() => window.__mvPip(false));
+    assert.equal(await page.evaluate(() => document.body.classList.contains('pip')), false);
     assert.deepEqual(errors, []);
     await ctx.close();
   });

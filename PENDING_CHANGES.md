@@ -4,7 +4,7 @@ Requests logged here are not built yet. Say "build" to fold them into a new vers
 (version number goes up, CHANGELOG.md is updated, this list is cleared), and "push" to upload to GitHub.
 With every push, say whether the compose/stack file must change or whether pulling the new image is enough.
 
-Current released version: 0.4.1 (0.5.0 built and tested, not yet pushed)
+Current released version: 0.5.0 (0.6.0 built and tested, being pushed)
 
 ### P-1 - Rebuild the on-screen menu as a traditional video player overlay
 Requested: 2026-10-18. Tap any screen (single view or multiview) to show a full-screen overlay over everything:
@@ -52,10 +52,10 @@ Notes / questions: there is no manifest, service worker or icons yet. Plan: web 
 
 ### P-9 - Mini player that floats over other apps
 Requested: 2026-10-18. A button at the top right of the overlay turns the current screen arrangement (single channel or the whole multiview) into a small floating player over other apps; it also starts by itself when the user closes or leaves the app.
-Type: minor   Status: Pending
+Type: minor   Status: Built in 0.6.0
 Notes / questions: what is possible differs by where it runs. Android TV / Android app: real system picture-in-picture of the whole page, so the arrangement is kept; it can start automatically on Home (needs a native change and a new APK). Desktop Chrome/Edge: Document Picture-in-Picture can float the whole arrangement, but only when the user presses the button (browsers do not allow it to start by itself on closing), and phone browsers and iOS only float one video. Proposed: button everywhere it works; automatic start in the Android app; in browsers, automatic only where the browser allows it, otherwise only the button. With the Shared screen on, the single combined picture can be floated as one video in any browser that supports picture-in-picture. The icon sits next to the cast icon (cast moves left of it). Decided 2026-10-18: plan confirmed as proposed; sound stays on in the mini player.
 
 ### P-10 - LIVE indicator in the overlay
 Requested: 2026-10-18 (first asked for top left). Red box with the word LIVE while the stream is live; light grey and partly transparent while behind live. Tapping it jumps to live.
-Type: minor   Status: Pending
+Type: minor   Status: Built in 0.6.0
 Notes / questions: Decided 2026-10-18: it stays next to the progress bar, where the plain "LIVE" / "-0:10" text is now (that text becomes this indicator; while behind live the time behind can show beside it). "Behind live" means 3 seconds or more behind (rewound or paused). Hidden for movies and episodes.

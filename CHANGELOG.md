@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.6.0 - 2026-10-18
+Mini player and a LIVE indicator.
+- **LIVE indicator (next to the progress bar).** A red LIVE box while watching live; light grey and partly transparent when you are 3 s or more behind live or paused. Tap it to jump back to live. The time behind shows beside it (`-1:30`, or `Paused`). Not shown for movies and episodes.
+- **Mini player.** New button at the top right of the overlay (the cast icon moved left of it). In the Android app it turns the whole screen arrangement into a floating window (system picture-in-picture) and starts by itself when you press Home or switch apps while something is playing; the page hides its controls while floating and sound stays on. In desktop Chrome / Edge the button moves the whole arrangement into a small always-on-top window (closing it puts it back). In other browsers it floats the selected channel (or the shared screen) as one video; browsers that allow it also start it when you leave the tab.
+- Android app: needs the new APK (`supportsPictureInPicture`, native bridge `enterPip` / `setAutoPip`); the page part works without it.
+- Tests: LIVE states and tap-to-live, mini player button placement, browser and app paths.
+
+**Upgrading from 0.5.0:** pulling the new image is enough; no stack or compose change. Install the new APK on the TV/phone for the automatic floating player.
+
 ## 0.5.0 - 2026-10-18
 A new player overlay and side menu, rewind, recording, downloads, casting and an installable app.
 - **Player overlay (replaces the top menu and the tile menu).** Tap any screen, single channel or multiview, and the controls come up over the whole screen; they act on the selected tile and hide after 5 s idle. Top left: change channel (opens the programme guide); top right: cast (only when a device is available); middle: play/pause with back 10 s / forward 30 s; right: channel up/down in the same category; left edge: pull-out menu arrow; bottom: mute and volume, progress bar, and an arrow that opens the options row: Layout (all layouts live here), Expand (also: tap the same tile twice), Quality, Reload, Favourite, Record, Download. Each option opens its choices in a menu that grows up from its icon. Every control can be reached with the remote (arrows + OK, Back closes sub-menu, row, controls).

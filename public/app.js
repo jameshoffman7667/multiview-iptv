@@ -946,7 +946,8 @@
     download: { d: 'M12 3v12 M7 10l5 5 5-5 M5 20h14' },
     tv: { d: 'M3 5h18v12H3z M8 21h8 M12 17v4', fill: true, text: '', dark: true },
     rec: { d: 'M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18z', fill: true, red: true, text: 'REC' },
-    menu: { d: 'M4 6h16 M4 12h16 M4 18h16' }
+    menu: { d: 'M4 6h16 M4 12h16 M4 18h16' },
+    pip: { d: 'M3 5h18v14H3z M12 12h8v6h-8z', fill: false }
   };
   function icon(name, label) {
     var def = ICONS[name];
@@ -1004,6 +1005,8 @@
     o.title = h('span', { id: 'view-title', class: 'ov-title' });
     o.cast = obtn('ov-cast', 'cast', 'Cast to a Google device', openCast);
     o.cast.hidden = true;
+    o.pip = obtn('ov-pip', 'pip', 'Mini player (keeps playing over other apps)', pipEnter);
+    o.pip.hidden = !pipMode();
     o.pull = obtn('ov-pull', 'chevR', 'Menu', function () { sideToggle(); }, 'ov-pull');
     o.back = obtn('ov-back', 'back', 'Back 10 seconds', function () { skip(-10); }, 'big');
     o.play = obtn('ov-play', 'pause', 'Play / pause', togglePlay, 'huge');
@@ -1024,7 +1027,9 @@
     o.seek = h('input', { id: 'ov-seek', class: 'ovrange seek', type: 'range', min: '0', max: '1', step: '1', value: '0', 'aria-label': 'Position' });
     o.seek.addEventListener('input', function () { ovl.dragging = true; activity(); o.time.textContent = seekLabel(Number(o.seek.value)); });
     o.seek.addEventListener('change', function () { ovl.dragging = false; seekTo(Number(o.seek.value)); });
-    o.time = h('span', { id: 'ov-time', class: 'ov-time', text: 'LIVE' });
+    o.time = h('span', { id: 'ov-time', class: 'ov-time', text: '' });
+    o.live = h('button', { id: 'ov-live', class: 'ov-live', type: 'button', title: 'Live', 'aria-label': 'Live', text: 'LIVE' });
+    o.live.addEventListener('click', function (e) { e.stopPropagation(); userGesture(); activity(); goLive(); });
     o.arrow = obtn('ov-arrow', 'up', 'More options', function () { optsToggle(); }, 'ov-arrow');
     // the seven options, left to right
     o.opts = h('div', { id: 'ov-opts', class: 'ov-opts' });
@@ -1045,10 +1050,10 @@
     o.opt.fav.btn.appendChild(icon('star'));
     o.opt.rec.btn.appendChild(icon('rec'));
     o.opt.dl.btn.appendChild(icon('download'));
-    var top = h('div', { class: 'ov-top' }, o.guide, o.title, h('span', { class: 'spacer' }), o.cast);
+    var top = h('div', { class: 'ov-top' }, o.guide, o.title, h('span', { class: 'spacer' }), o.cast, o.pip);
     var mid = h('div', { class: 'ov-mid' }, o.back, o.play, o.fwd);
     var right = h('div', { class: 'ov-right' }, o.up, o.down);
-    var bar = h('div', { class: 'ov-bar' }, h('div', { class: 'ov-vols' }, o.mute, o.vol), h('div', { class: 'ov-prog' }, o.seek, o.time));
+    var bar = h('div', { class: 'ov-bar' }, h('div', { class: 'ov-vols' }, o.mute, o.vol), h('div', { class: 'ov-prog' }, o.seek, o.live, o.time));
     var bottom = h('div', { class: 'ov-bottom' }, o.opts, bar, h('div', { class: 'ov-arrowrow' }, o.arrow));
     ovl.el = h('div', { id: 'ovl', class: 'ovl', 'aria-label': 'Player controls' }, top, o.pull, mid, right, bottom);
     ovl.el.addEventListener('pointerdown', function (e) { e.stopPropagation(); activity(); }, true);
@@ -1226,7 +1231,17 @@
     if (!t || !t.cfg) return '';
     if (t.cfg.vod) return fmtDur(v) + ' / ' + fmtDur(t.video.duration || 0);
     var back = (t.avail || 0) - v;
-    return back < 3 ? 'LIVE' : '-' + fmtDur(back);
+    return back < 3 ? '' : '-' + fmtDur(back);
+  }
+  // behind live = rewound by 3 s or more, or paused
+  function isBehind(t) { return !!t && !!t.cfg && !t.cfg.vod && (!!t.userPaused || (t.back || 0) >= 3); }
+  function goLive() {
+    var t = curTile();
+    if (!t || !t.cfg || t.cfg.vod || sharedOn() || !isBehind(t)) return;
+    t.back = 0;
+    t.userPaused = false;
+    t.start();
+    ovlSync();
   }
   function liveSeek(t, back) {
     var avail = t.avail || 0;
@@ -1312,7 +1327,11 @@
       o.seek.max = String(avail);
       if (!ovl.dragging) o.seek.value = String(Math.max(0, avail - ((t && t.back) || 0)));
     }
-    if (!ovl.dragging) o.time.textContent = c ? seekLabel(Number(o.seek.value)) : '';
+    if (!ovl.dragging) o.time.textContent = c ? (c.vod || !t.userPaused || (t.back || 0) >= 3 ? seekLabel(Number(o.seek.value)) : 'Paused') : '';
+    var behind = isBehind(t) && !shared;
+    o.live.hidden = !c || !!c.vod;
+    o.live.classList.toggle('behind', behind);
+    o.live.title = behind ? 'Go to live' : 'Watching live';
     if (t && t.cfg && !t.cfg.vod && ovl.shown) fetchAvail(t);
     // options
     var many = visibleCount() > 1;
@@ -1334,8 +1353,80 @@
     oo.rec.btn.disabled = !c || !!(c && c.vod);
     oo.dl.btn.disabled = !c;
     o.cast.hidden = !castState.avail;
+    o.pip.hidden = !pipMode();
+    pipNote(!!c);
     o.pull.classList.toggle('open', side.open);
   }
+
+  // ---------------------------------------------------------------- mini player (floats over other apps)
+  // Android app: the whole screen arrangement becomes a floating window (system picture-in-picture).
+  // Desktop Chrome / Edge: the whole arrangement moves into a small always-on-top window.
+  // Other browsers: the selected channel (or the shared screen) floats as a single video.
+  var pipWin = null;
+  var pipNoted = null;
+  function pipMode() {
+    if (window.MVApp && window.MVApp.enterPip) return !window.MVApp.canPip || window.MVApp.canPip() ? 'app' : '';
+    if (window.documentPictureInPicture && window.documentPictureInPicture.requestWindow) return 'doc';
+    if (document.pictureInPictureEnabled && typeof HTMLVideoElement !== 'undefined' && HTMLVideoElement.prototype.requestPictureInPicture) return 'video';
+    return '';
+  }
+  function pipNote(on) {
+    if (pipNoted === on || !(window.MVApp && window.MVApp.setAutoPip)) return;
+    pipNoted = on;
+    try { window.MVApp.setAutoPip(on); } catch (e) { /* older app */ }
+  }
+  function pipVideo() {
+    if (sharedOn() && shared.video) return shared.video;
+    var t = curTile();
+    return t && t.cfg ? t.video : null;
+  }
+  function pipEnter() {
+    var m = pipMode();
+    var grid = document.getElementById('grid');
+    if (m === 'app') { try { window.MVApp.enterPip(); } catch (e) { /* ignore */ } return Promise.resolve(); }
+    if (m === 'doc' && !pipWin && grid) {
+      var r = grid.getBoundingClientRect();
+      var w = Math.max(320, Math.min(640, Math.round(r.width / 2) || 480));
+      var hh = Math.max(180, Math.round(w * (r.height && r.width ? r.height / r.width : 9 / 16)));
+      return window.documentPictureInPicture.requestWindow({ width: w, height: hh }).then(function (win) {
+        pipWin = win;
+        try {
+          Array.prototype.forEach.call(document.querySelectorAll('link[rel=stylesheet]'), function (l) {
+            var n = win.document.createElement('link');
+            n.rel = 'stylesheet';
+            n.href = l.href;
+            win.document.head.appendChild(n);
+          });
+          win.document.body.className = 'pipwin';
+          win.document.body.style.margin = '0';
+          win.document.body.style.background = '#000';
+          win.document.body.appendChild(grid);
+        } catch (e) { /* ignore */ }
+        win.addEventListener('pagehide', function () {
+          pipWin = null;
+          document.body.insertBefore(grid, document.body.firstChild);
+          applyAudio();
+        });
+      }, function () { return pipVideoOnly(); });
+    }
+    if (pipWin) { try { pipWin.close(); } catch (e) { /* ignore */ } return Promise.resolve(); }
+    return pipVideoOnly();
+  }
+  function pipVideoOnly() {
+    var v = pipVideo();
+    if (!v || !v.requestPictureInPicture) { banner('Mini player is not available in this browser', 3000); return Promise.resolve(); }
+    if (document.pictureInPictureElement === v) return document.exitPictureInPicture().catch(noop);
+    return v.requestPictureInPicture().then(noop, function (e) { banner('Could not start the mini player' + (e && e.message ? ': ' + e.message : ''), 3500); });
+  }
+  // called by the Android app when the system window shrinks to / grows from the floating player
+  window.__mvPip = function (on) {
+    document.body.classList.toggle('pip', !!on);
+    if (on) { ovlHide(); sideClose(); }
+  };
+  // browsers that allow it start the mini player by themselves when the viewer leaves the tab
+  try {
+    if (navigator.mediaSession && pipMode() && !window.MVApp) navigator.mediaSession.setActionHandler('enterpictureinpicture', function () { pipEnter(); });
+  } catch (e) { /* action not supported */ }
 
   // ---------------------------------------------------------------- pull-out menu
   function buildSide() {
@@ -2576,6 +2667,10 @@
           applyAudio();
           saveSoon();
           return;
+        }
+        if (t.id === 'ov-arrow' && key === 'ArrowUp' && ovl.optsOpen) {
+          var firstOpt = focusables(ovl.p.opts)[0];
+          if (firstOpt) { firstOpt.focus(); return; }
         }
         if (!ovlNav(t, key) && key === 'ArrowDown' && tiles[S.sel]) tiles[S.sel].el.focus();
         return;

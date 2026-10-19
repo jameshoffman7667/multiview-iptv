@@ -237,6 +237,9 @@ body.shared .tile { background: transparent; }
 .ov-vols { display: flex; align-items: center; gap: 4px; flex: none; }
 .ov-prog { flex: 1; display: flex; align-items: center; gap: 12px; min-width: 0; }
 .ov-time { flex: none; min-width: 64px; font-size: 13px; color: #fff; text-shadow: 0 1px 3px #000; text-align: right; font-variant-numeric: tabular-nums; }
+.ov-live { flex: none; border: 0; border-radius: 4px; padding: 3px 8px; font-weight: 700; font-size: 12px; line-height: 1.2; font-family: inherit; letter-spacing: .06em; color: #fff; background: #d62828; cursor: default; }
+.ov-live.behind { background: rgba(220,224,232,.55); color: #111; cursor: pointer; }
+.ov-live:focus { box-shadow: 0 0 0 3px rgba(77,163,255,.6); outline: none; }
 .ovrange { -webkit-appearance: none; appearance: none; height: 6px; border-radius: 3px; background: rgba(255,255,255,.3); outline: none; margin: 0; }
 .ovrange::-webkit-slider-thumb { -webkit-appearance: none; width: 16px; height: 16px; border-radius: 50%; background: #fff; border: 0; }
 .ovrange::-moz-range-thumb { width: 16px; height: 16px; border-radius: 50%; background: #fff; border: 0; }
@@ -284,3 +287,5 @@ body.ovl-on .tile .speaker { opacity: 0; }
 .ovb svg:not(.ic) { width: 60%; height: 60%; }
 .ovb svg:not(.ic) rect { fill: #fff; }
 .ovb svg:not(.ic) rect.big { fill: #9ccbff; }
+
+body.pip #ovl, body.pip .side, body.pip .banner, body.pip .hint { display: none !important; }
