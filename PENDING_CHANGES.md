@@ -4,7 +4,7 @@ Requests logged here are not built yet. Say "build" to fold them into a new vers
 (version number goes up, CHANGELOG.md is updated, this list is cleared), and "push" to upload to GitHub.
 With every push, say whether the compose/stack file must change or whether pulling the new image is enough.
 
-Current released version: 0.5.0 (0.6.0 built and tested, being pushed)
+Current released version: 0.6.1
 
 ### P-1 - Rebuild the on-screen menu as a traditional video player overlay
 Requested: 2026-10-18. Tap any screen (single view or multiview) to show a full-screen overlay over everything:
@@ -62,5 +62,5 @@ Notes / questions: Decided 2026-10-18: it stays next to the progress bar, where 
 
 ### P-11 - Rewind folder cannot be a mount point (bug)
 Requested: 2026-10-19. `src/server.js` (startup) and `src/rewind.js` (per-channel folder) remove the rewind directory itself with `fs.rmSync(dir, {recursive:true})` and recreate it. When `REWIND_DIR` is the root of a bind or volume mount (as in stack.yml's `/rewind`), removing the mount point fails with EBUSY/EACCES and rewind is silently disabled.
-Type: patch (bug fix)   Status: Pending
+Type: patch (bug fix)   Status: Built in 0.6.1
 Notes / questions: fix = empty the directory's contents (keep the directory), create it if missing, in both places; add a test that uses a pre-existing directory which cannot be removed; log a visible error instead of failing silently if emptying fails. Confirmed in the code on 2026-10-19. Same check to do for `REC_DIR`.

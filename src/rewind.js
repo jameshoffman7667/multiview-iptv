@@ -11,6 +11,12 @@ const FLUSH_BYTES = 512 * 1024;
 const READ_CHUNK = 256 * 1024;
 const HEAD_MS = 20000;
 
+// Empties a directory but keeps the directory itself (it may be a bind or volume mount, which cannot be removed).
+function emptyDir(dir) {
+  fs.mkdirSync(dir, { recursive: true });
+  for (const name of fs.readdirSync(dir)) fs.rmSync(path.join(dir, name), { recursive: true, force: true });
+}
+
 class Rewind {
   constructor(dir, { segMs = 10000, maxMs = 60 * 60 * 1000 } = {}) {
     this.dir = dir;
@@ -26,8 +32,7 @@ class Rewind {
     this.dead = false;
     this.total = 0;
     try {
-      fs.rmSync(dir, { recursive: true, force: true });
-      fs.mkdirSync(dir, { recursive: true });
+      emptyDir(dir);
     } catch (e) { this.fail(e); }
   }
 
@@ -178,4 +183,4 @@ class Rewind {
   }
 }
 
-module.exports = { Rewind };
+module.exports = { Rewind, emptyDir };

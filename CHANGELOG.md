@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.6.1 - 2026-10-19
+Fix: the rewind folder can now be a bind or volume mount.
+- The rewind folder was removed and recreated at start; on a mount point that fails (EBUSY/EACCES) and rewind was silently switched off. It is now emptied but kept, in the server start-up and in the per-channel buffer.
+
+**Upgrading from 0.6.0:** pulling the new image is enough; no stack or compose change.
+
 ## 0.6.0 - 2026-10-18
 Mini player and a LIVE indicator.
 - **LIVE indicator (next to the progress bar).** A red LIVE box while watching live; light grey and partly transparent when you are 3 s or more behind live or paused. Tap it to jump back to live. The time behind shows beside it (`-1:30`, or `Paused`). Not shown for movies and episodes.

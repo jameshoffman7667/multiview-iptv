@@ -214,3 +214,31 @@ describe('installable app files', () => {
     assert.match(sw, /req\.method !== 'GET'/);
   });
 });
+
+describe('rewind folder that is a mount point', () => {
+  test('the folder is emptied but never removed, so a bind/volume mount root works', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'mv-mnt-'));
+    const rw = path.join(root, 'rewind');
+    fs.mkdirSync(path.join(rw, 'old-channel'), { recursive: true });
+    fs.writeFileSync(path.join(rw, 'old-channel', '0.ts'), 'x');
+    fs.writeFileSync(path.join(rw, 'stray.ts'), 'x');
+    const ino = fs.statSync(rw).ino;
+    const real = fs.rmSync;
+    fs.rmSync = (p, o) => { if (path.resolve(p) === rw) { const e = new Error('EBUSY: resource busy'); e.code = 'EBUSY'; throw e; } return real(p, o); }; // a mount point cannot be removed
+    let app;
+    try {
+      app = createApp({ dataDir: root, basicAuth: '', rewindDir: rw, rewindMinutes: 5 });
+      assert.deepEqual(fs.readdirSync(rw), [], 'stale files are gone');
+      assert.equal(fs.statSync(rw).ino, ino, 'same directory');
+      const { Rewind } = require('../src/rewind');
+      fs.writeFileSync(path.join(rw, 'later.ts'), 'x');
+      const r = new Rewind(rw);
+      assert.equal(r.dead, false, 'a per-channel buffer can use the mount root');
+      assert.deepEqual(fs.readdirSync(rw), []);
+    } finally {
+      fs.rmSync = real;
+      if (app) app.close();
+      real(root, { recursive: true, force: true });
+    }
+  });
+});

@@ -11,6 +11,7 @@ const capture = require('./capture');
 const { Readable } = require('stream');
 const { pipeline } = require('stream/promises');
 const { Relay, Client } = require('./relay');
+const { emptyDir } = require('./rewind');
 const { Compose, cleanSpec } = require('./compose');
 const { Recordings } = require('./recordings');
 const { Cast } = require('./cast');
@@ -42,7 +43,7 @@ function createApp(options = {}) {
   // Rewind buffer: the newest REWIND_MINUTES of every open channel, on disk in REWIND_DIR (put it on a fast disk).
   const rewindMinutes = options.rewindMinutes !== undefined ? options.rewindMinutes : (Number.isFinite(Number(env('REWIND_MINUTES', 60))) ? Math.max(0, Math.min(240, Number(env('REWIND_MINUTES', 60)))) : 60);
   const rewindDir = options.rewindDir || env('REWIND_DIR', path.join(dataDir, 'rewind'));
-  if (rewindMinutes > 0) { try { fs.rmSync(rewindDir, { recursive: true, force: true }); fs.mkdirSync(rewindDir, { recursive: true }); } catch (e) { console.error(`[rewind] cannot use ${rewindDir}: ${e.message}`); } }
+  if (rewindMinutes > 0) { try { emptyDir(rewindDir); } catch (e) { console.error(`[rewind] cannot use ${rewindDir}: ${e.message}`); } }
   const relay = new Relay(config, lists, {
     ringBytes: Number(env('RING_MB', 32)) * MB,
     rewindDir,
