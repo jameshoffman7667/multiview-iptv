@@ -59,3 +59,8 @@ Notes / questions: what is possible differs by where it runs. Android TV / Andro
 Requested: 2026-10-18 (first asked for top left). Red box with the word LIVE while the stream is live; light grey and partly transparent while behind live. Tapping it jumps to live.
 Type: minor   Status: Built in 0.6.0
 Notes / questions: Decided 2026-10-18: it stays next to the progress bar, where the plain "LIVE" / "-0:10" text is now (that text becomes this indicator; while behind live the time behind can show beside it). "Behind live" means 3 seconds or more behind (rewound or paused). Hidden for movies and episodes.
+
+### P-11 - Rewind folder cannot be a mount point (bug)
+Requested: 2026-10-19. `src/server.js` (startup) and `src/rewind.js` (per-channel folder) remove the rewind directory itself with `fs.rmSync(dir, {recursive:true})` and recreate it. When `REWIND_DIR` is the root of a bind or volume mount (as in stack.yml's `/rewind`), removing the mount point fails with EBUSY/EACCES and rewind is silently disabled.
+Type: patch (bug fix)   Status: Pending
+Notes / questions: fix = empty the directory's contents (keep the directory), create it if missing, in both places; add a test that uses a pre-existing directory which cannot be removed; log a visible error instead of failing silently if emptying fails. Confirmed in the code on 2026-10-19. Same check to do for `REC_DIR`.
