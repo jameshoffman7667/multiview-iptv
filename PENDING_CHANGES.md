@@ -73,6 +73,6 @@ Decided 2026-10-19: visible to all logged-in users. Sound is the publisher's (th
 Decided 2026-10-19: when no shared-screen slot is free, viewers get a message and are offered the published layout instead (opens with their own tiles, no slot used).
 
 ### P-13 - Tap behaviour with the overlay up (bug)
-Requested: 2026-10-19. (1) Overlay hidden: a tap on any screen brings up the overlay (and selects that screen). (2) Overlay shown: a tap on the active screen (red box, has the sound) zooms it; a tap on an inactive screen makes it active but does not zoom. Currently a tap on any tile zooms it while the overlay is up.
+Requested: 2026-10-19. (1) Overlay hidden: a tap on any screen only brings up the overlay; it does NOT select that screen (changed 2026-10-19: to pick another screen, tap once anywhere to bring up the overlay, then tap the screen). (2) Overlay shown: a tap on the active screen (red box, has the sound) zooms it; a tap on an inactive screen makes it active but does not zoom. Currently a tap on any tile zooms it while the overlay is up.
 Type: patch (bug fix)   Status: Pending
 Notes / questions: likely cause (to confirm when building): a tile takes focus on mouse/touch down and that already selects it, so by the time the click is handled the page thinks the tile was already active and zooms. Fix: remember which tile was active at the moment of the press and decide on that. The same rule applies to the remote's OK button and to taps while the overlay is shown on a multiview.
