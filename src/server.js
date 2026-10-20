@@ -439,7 +439,7 @@ function createApp(options = {}) {
     if (req.method === 'GET' && !id) {
       const admin = me.role === 'admin';
       return sendJson(req, res, 200, {
-        views: views.visible(me).map((v) => ({ id: v.id, name: v.name, layout: v.layout, tiles: v.tiles, rev: v.rev, updated: v.updated, users: admin ? v.users : undefined })),
+        views: views.visible(me).map((v) => ({ id: v.id, name: v.name, layout: v.layout, tiles: v.tiles, mode: v.mode || 'layout', stream: v.stream || undefined, rev: v.rev, updated: v.updated, users: admin ? v.users : undefined })),
       });
     }
     needAdmin(me);

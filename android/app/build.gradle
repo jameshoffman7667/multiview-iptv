@@ -2,7 +2,7 @@ plugins {
     id 'com.android.application'
 }
 
-// The release workflow passes the version (-PappVersion=0.6.1 -PappVersionCode=601).
+// The release workflow passes the version (-PappVersion=0.7.0 -PappVersionCode=700).
 def appVersion = (project.findProperty('appVersion') ?: '0.0.0').toString()
 def appVersionCode = (project.findProperty('appVersionCode') ?: '1').toString().toInteger()
 

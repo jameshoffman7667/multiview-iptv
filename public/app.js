@@ -264,6 +264,8 @@
     this.avail = 0;         // seconds of rewind available
     this.availAt = 0;
     this.el.addEventListener('pointerdown', function (e) { self.touch = e.pointerType === 'touch'; });
+    // remember which tile was active at the moment of the press: pressing a tile gives it focus, and focus selects it
+    this.el.addEventListener('mousedown', function (e) { self.pressSel = S.sel; if (!ovl.shown && S.sel !== self.idx) e.preventDefault(); }, true);
     this.el.addEventListener('click', function () { tileClick(self); });
     this.el.addEventListener('contextmenu', function (e) { e.preventDefault(); select(self.idx); if (self.cfg) ovlShow(); });
     this.el.addEventListener('focus', function () { if (S.sel !== self.idx) select(self.idx, true); });
@@ -603,9 +605,13 @@
   // For weak devices: the server combines the visible tiles into ONE video stream and this page only plays that.
   // The tiles stay on screen (transparent) so selection, names, the sound marker and menus work as usual.
   var shared = { msg: null, player: null, gen: 0, sig: '', spec: null, timer: null, retry: 0, failed: false, lastTime: -1, lastAt: 0, video: null };
-  function sharedOn() { return !!S.shared && !shared.failed; }
+  // A multiview published "as one stream" is always played as the server's combined picture, as published.
+  function viewStream() { return !!(curView && curView.mode === 'stream' && curView.spec); }
+  function sharedOn() { return (!!S.shared || viewStream()) && !shared.failed; }
 
-  function sharedSpec() {
+  // forPublish: describe the whole screen for publishing (ignores zoom and the Shared screen setting)
+  function sharedSpec(forPublish, pubRes) {
+    if (!forPublish && viewStream()) return JSON.parse(JSON.stringify(curView.spec));
     var L = layout();
     var cells = [];
     var audio = -1;
@@ -618,11 +624,14 @@
     }
     var cols = L.cols;
     var rows = L.rows;
-    if (zoom >= 0 && zoom < L.cells.length) { cols = 1; rows = 1; add(zoom, 1, 1, 1, 1, false); }
+    if (!forPublish && zoom >= 0 && zoom < L.cells.length) { cols = 1; rows = 1; add(zoom, 1, 1, 1, 1, false); }
     else L.cells.forEach(function (c, i) { add(i, c[0], c[1], c[2], c[3], L.cells.length > 1 && (c[2] * c[3]) / (L.cols * L.rows) <= 1 / 6); });
     // The picture is drawn in the same shape as the area the tiles occupy, so tile N sits exactly where its picture is.
     var g = $('#grid');
     var aspect = g && g.clientWidth > 0 && g.clientHeight > 0 ? Math.round((g.clientWidth / g.clientHeight) * 50) / 50 : 16 / 9;
+    if (forPublish) {
+      return cells.length ? { res: Number(pubRes) || Number(S.shared) || 720, cols: cols, rows: rows, cells: cells, audio: audio >= 0 ? audio : 0, aspect: 16 / 9, fit: S.fit === 'cover' ? 'cover' : 'contain' } : null;
+    }
     return cells.length ? { res: Number(S.shared) || 720, cols: cols, rows: rows, cells: cells, audio: audio, aspect: aspect, fit: S.fit === 'cover' ? 'cover' : 'contain' } : null;
   }
 
@@ -638,7 +647,8 @@
     shared.failed = true;
     sharedStopPlayer();
     clearTimeout(shared.timer);
-    sharedMessage('Shared screen unavailable: ' + msg + ' - showing the tiles directly. Choose the setting again in Settings to retry.');
+    if (viewStream()) { sharedMessage(''); banner('The one-picture version of "' + curView.name + '" is not available (' + msg + ') - showing its layout with your own tiles. Open it again from Multiviews to retry.', 9000); }
+    else sharedMessage('Shared screen unavailable: ' + msg + ' - showing the tiles directly. Choose the setting again in Settings to retry.');
     sharedApply();
   }
 
@@ -691,7 +701,7 @@
       if (pr && pr.catch) pr.catch(noop);
     }, function (e) {
       if (gen !== shared.gen) return;
-      if (e.status && [400, 401, 403, 404].indexOf(e.status) >= 0 || e.code === 'needs_gpu' || e.code === 'compose_disabled') { sharedFallback(e.message); return; }
+      if (e.status && [400, 401, 403, 404].indexOf(e.status) >= 0 || e.code === 'needs_gpu' || e.code === 'compose_disabled' || (e.code === 'compose_limit' && viewStream())) { sharedFallback(e.message); return; }
       sharedRetry(e.message);
     });
   }
@@ -713,7 +723,7 @@
   // called after anything that changes the picture; restarts the shared stream only when its description changed
   function sharedSync() {
     if (sharedOn()) sharedEnsureVideo();
-    if (!sharedOn()) { if (shared.sig || shared.player) { clearTimeout(shared.timer); sharedStopPlayer(); shared.sig = ''; } if (!S.shared) sharedMessage(''); return; }
+    if (!sharedOn()) { if (shared.sig || shared.player) { clearTimeout(shared.timer); sharedStopPlayer(); shared.sig = ''; } if (!S.shared && !viewStream()) sharedMessage(''); return; }
     var spec = sharedSpec();
     var sig = spec ? JSON.stringify(spec) : '';
     if (sig === shared.sig) return;
@@ -816,10 +826,18 @@
   // Tap a tile: it is selected and the player controls come up; tap the same tile again to expand it (or go back to the grid).
   function tileClick(t) {
     userGesture();
-    var was = S.sel === t.idx;
+    var before = t.pressSel !== undefined ? t.pressSel : S.sel; // which tile was active before this press
+    t.pressSel = undefined;
+    var was = before === t.idx;
+    if (!ovl.shown) {
+      // controls hidden: a tap only brings the controls up (an inactive screen is not selected; tap it again once they are up)
+      if (!was) { if (document.activeElement === t.el && S.sel !== before) { /* focus already moved the selection */ select(before, true); } ovlShow(); return; }
+      if (!t.cfg) { if (isAdmin()) openPicker(t.idx); return; }
+      ovlShow();
+      return;
+    }
     if (!was) select(t.idx);
     if (!t.cfg) { if (was && isAdmin()) openPicker(t.idx); return; }
-    if (!ovl.shown) { ovlShow(); return; }
     if (was && visibleCount() > 1) toggleZoom(t.idx); else ovlSync();
   }
 
@@ -844,6 +862,7 @@
   }
 
   function toggleZoom(idx) {
+    if (viewStream() && !shared.failed) return; // the published picture is fixed
     zoom = zoom === idx ? -1 : idx;
     renderGrid();
     if (zoom >= 0) select(idx);
@@ -2788,6 +2807,42 @@
     inp.select();
   }
 
+  // Name, how it is published (layout only / one picture) and, for one picture, the quality.
+  function publishDialog(init, cb) {
+    var inp = h('input', { type: 'text', value: init.name || '', autocomplete: 'off', maxlength: '60' });
+    var msg = h('div');
+    var rLayout = h('input', { type: 'radio', name: 'pubmode', id: 'pub-layout', value: 'layout' });
+    var rStream = h('input', { type: 'radio', name: 'pubmode', id: 'pub-stream', value: 'stream' });
+    rLayout.checked = init.mode !== 'stream';
+    rStream.checked = init.mode === 'stream';
+    var resSel = h('select', { id: 'pub-res' }, h('option', { value: '480', text: '480p' }), h('option', { value: '720', text: '720p' }), h('option', { value: '1080', text: '1080p' }));
+    resSel.value = String(init.res || 720);
+    var resField = field('Picture quality', resSel);
+    function sync() { resField.style.display = rStream.checked ? '' : 'none'; }
+    rLayout.addEventListener('change', sync);
+    rStream.addEventListener('change', sync);
+    sync();
+    var m = openModal({
+      title: init.title,
+      body: [
+        field('Name (what people will see)', inp),
+        h('label', { class: 'check' }, rLayout, h('span', { text: 'Layout only: viewers get the same channels and arrangement, and their own device plays each tile.' })),
+        h('label', { class: 'check' }, rStream, h('span', { text: 'Screen as one stream: the server combines it into one picture (with the sound of the selected tile) and viewers just play that. Fixed as published. Uses server CPU/GPU only while someone watches.' })),
+        resField, msg
+      ],
+      foot: [closeBtn({ close: function () { m.close(); } }, 'Cancel'), h('button', { class: 'btn primary', type: 'button', text: init.ok, onclick: go })]
+    });
+    function go() {
+      var name = inp.value.trim();
+      if (!name) { msg.textContent = ''; msg.appendChild(h('div', { class: 'msg bad', text: 'Enter a name' })); return; }
+      m.close();
+      cb({ name: name, mode: rStream.checked ? 'stream' : 'layout', res: Number(resSel.value) });
+    }
+    inp.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); go(); } });
+    inp.focus();
+    inp.select();
+  }
+
   // ---- viewing a shared multiview
   var viewsCache = [];
   var curView = null; // { id, rev, name }
@@ -2800,7 +2855,9 @@
   function sameCfg(a, b) { return (!a && !b) || !!(a && b && a.p === b.p && String(a.sid) === String(b.sid)); }
 
   function applyView(v) {
-    curView = { id: v.id, rev: v.rev, name: v.name };
+    var sameView = curView && curView.id === v.id && curView.rev === v.rev;
+    curView = { id: v.id, rev: v.rev, name: v.name, mode: v.mode === 'stream' && v.stream ? 'stream' : 'layout', spec: v.mode === 'stream' ? v.stream : null };
+    if (!sameView) { shared.failed = false; shared.retry = 0; shared.sig = ''; }
     S.layout = LAYOUTS[v.layout] ? v.layout : '3x3';
     zoom = -1;
     var changed = [];
@@ -2823,6 +2880,7 @@
     }
     renderGrid();
     changed.forEach(function (x) { if (x.was && tiles[x.i].visible) tiles[x.i].start(); });
+    if (viewStream() || document.body.classList.contains('shared')) sharedApply();
     ovlSync();
     try { localStorage.setItem('mv.lastview', v.id); } catch (e) { /* ignore */ }
     saveSoon();
@@ -2832,6 +2890,7 @@
 
   function clearGrid() {
     curView = null;
+    if (document.body.classList.contains('shared') && !S.shared) sharedApply();
     ovlSync();
     S.tiles = S.tiles.map(function () { return null; });
     tiles.forEach(function (t) { t.stop(); t.cfg = null; t.render(); });
@@ -2865,12 +2924,13 @@
       if (admin) body.push(h('div', { class: 'note', text: 'Arrange tiles on the main screen, then publish the layout here. People with a login see it in their list and can just click it. Clicking a name here loads it onto your own screen so you can change it. Changes you save reach people who are already watching within about 15 seconds.' }));
       if (!viewsCache.length) body.push(h('div', { class: 'note', text: admin ? 'Nothing published yet.' : 'No multiviews have been shared with you yet. Ask the person who runs this server.' }));
       viewsCache.forEach(function (v) {
-        var info = layoutName(v.layout) + '  ·  ' + countTiles(v) + ' channel' + (countTiles(v) === 1 ? '' : 's') + (admin ? '  ·  ' + (v.users && v.users.length ? v.users.join(', ') : 'everyone') : '');
+        var info = layoutName(v.layout) + '  ·  ' + countTiles(v) + ' channel' + (countTiles(v) === 1 ? '' : 's') + (v.mode === 'stream' ? '  ·  one picture' : '') + (admin ? '  ·  ' + (v.users && v.users.length ? v.users.join(', ') : 'everyone') : '');
         var open = h('button', { class: 'view-open', type: 'button', onclick: function () { m.close(); if (admin) loadIntoGrid(v); else applyView(v); } },
           h('b', { text: v.name }), h('small', { text: info }), curView && curView.id === v.id ? h('i', { text: 'now showing' }) : null);
         if (!admin) { body.push(h('div', { class: 'viewrow' }, open)); return; }
         body.push(h('div', { class: 'viewrow adm' }, open, h('div', { class: 'viewbtns' },
-          h('button', { class: 'btn', type: 'button', text: 'Update from my screen', title: 'Replace this multiview with the layout and channels on your main screen', onclick: function () { updateFromGrid(v); } }),
+          h('button', { class: 'btn', type: 'button', text: 'Watch', title: 'Watch it the way viewers do', onclick: function () { m.close(); applyView(v); } }),
+          h('button', { class: 'btn', type: 'button', text: 'Edit and update from my screen...', title: 'Replace this multiview with the layout and channels on your main screen, and choose how it is published', onclick: function () { updateFromGrid(v); } }),
           h('button', { class: 'btn', type: 'button', text: 'Who can see it', onclick: function () { editAccess(v); } }),
           h('button', { class: 'btn', type: 'button', text: 'Rename', onclick: function () { askText('Rename multiview', 'Name', v.name, 'Save', function (n) { saveView(v.id, { name: n }); }); } }),
           h('button', { class: 'btn danger', type: 'button', text: 'Delete', onclick: function () { deleteView(v); } }))));
@@ -2887,14 +2947,21 @@
       var n = layout().cells.length;
       var used = S.tiles.slice(0, n).filter(function (t) { return t; }).length;
       if (!used) { banner('Add at least one channel to the screen first', 3000); return; }
-      askText('Publish multiview', 'Name (what people will see)', '', 'Publish', function (name) {
-        api('/api/views', { method: 'POST', body: { name: name, layout: S.layout, tiles: tilesForPublish() } }).then(function () { banner('Published "' + name + '"', 3000); openViews(); }).catch(function (e) { banner(e.message, 4000); });
+      publishDialog({ title: 'Publish multiview', name: '', mode: 'layout', res: 720, ok: 'Publish' }, function (o) {
+        var body = { name: o.name, layout: S.layout, tiles: tilesForPublish(), mode: o.mode };
+        if (o.mode === 'stream') body.stream = sharedSpec(true, o.res);
+        api('/api/views', { method: 'POST', body: body }).then(function () { banner('Published "' + o.name + '"', 3000); openViews(); }).catch(function (e) { banner(e.message, 4000); });
       });
       m.close();
     }
     function updateFromGrid(v) {
-      confirmBox('Replace "' + v.name + '" with what is on your screen now?', 'Replace', function () {
-        saveView(v.id, { layout: S.layout, tiles: tilesForPublish() }, 'Updated "' + v.name + '"');
+      var n = layout().cells.length;
+      if (!S.tiles.slice(0, n).some(function (t) { return t; })) { banner('Add at least one channel to the screen first', 3000); return; }
+      m.close();
+      publishDialog({ title: 'Replace "' + v.name + '" with what is on your screen now', name: v.name, mode: v.mode === 'stream' ? 'stream' : 'layout', res: v.stream ? v.stream.res : 720, ok: 'Replace' }, function (o) {
+        var patch = { name: o.name, layout: S.layout, tiles: tilesForPublish(), mode: o.mode };
+        if (o.mode === 'stream') patch.stream = sharedSpec(true, o.res);
+        api('/api/views/' + encodeURIComponent(v.id), { method: 'PUT', body: patch }).then(function () { banner('Updated "' + o.name + '"', 3000); openViews(); }).catch(function (e) { banner(e.message, 4000); });
       });
     }
     function saveView(id, patch, okMsg) {
@@ -2946,6 +3013,8 @@
 
   // copy a published multiview onto the admin's own screen to edit it
   function loadIntoGrid(v) {
+    var wasStream = viewStream();
+    curView = null;
     S.layout = LAYOUTS[v.layout] ? v.layout : '3x3';
     zoom = -1;
     for (var i = 0; i < SLOTS; i++) {
@@ -2961,6 +3030,7 @@
     tiles.forEach(function (t, i) { if (was[i] && t.visible) t.start(); });
     saveSoon();
     updateHint();
+    if (wasStream && !S.shared) sharedApply();
     banner('Loaded "' + v.name + '" onto your screen. Change it, then use Update from my screen.', 5000);
   }
 

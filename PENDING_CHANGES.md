@@ -4,7 +4,7 @@ Requests logged here are not built yet. Say "build" to fold them into a new vers
 (version number goes up, CHANGELOG.md is updated, this list is cleared), and "push" to upload to GitHub.
 With every push, say whether the compose/stack file must change or whether pulling the new image is enough.
 
-Current released version: 0.6.1
+Current released version: 0.7.0 (being pushed)
 
 ### P-1 - Rebuild the on-screen menu as a traditional video player overlay
 Requested: 2026-10-18. Tap any screen (single view or multiview) to show a full-screen overlay over everything:
@@ -67,12 +67,12 @@ Notes / questions: fix = empty the directory's contents (keep the directory), cr
 
 ### P-12 - Publish a multiview for other clients to watch
 Requested: 2026-10-19 (James: "a proper watch someone else's screen ... an option when publishing the multiview, whether just to publish the layout or the screen as one stream").
-Type: minor (new feature)   Status: Pending
+Type: minor (new feature)   Status: Built in 0.7.0
 Notes / questions: when publishing a multiview, choose (1) Layout only: other clients see it in their Multiviews list and open it, each decoding its own tiles; or (2) Screen as one stream: the server keeps one composite (shared screen) encode running and other clients just play that single picture. Questions before building: (a) who can see published multiviews: all logged-in users, or chosen users? (b) does a viewer of the one-stream version get sound, and from which tile (the publisher's selected tile follows the publisher, or a fixed one)? (c) does the stream follow the publisher live (layout and channel changes) or is it a fixed snapshot? (d) does it keep running when the publisher leaves, and who can stop it (publisher, admin)? (e) each stream holds provider connections and one of the COMPOSE_MAX slots (default 2): what should viewers see when none is free? (f) a stop/unpublish button and a "Published" list with viewer counts. Related: the cast link already serves a private composite picture for 6 h without login; this would be the logged-in, in-app version.
 Decided 2026-10-19: visible to all logged-in users. Sound is the publisher's (the tile that had the sound when published, fixed). Fixed as published (a snapshot, not following later changes). The published layout is kept indefinitely; connections and encoding run only while someone is watching. Provider connections: one per distinct channel in use, shared by everyone watching it (so 5 viewers of one 4-tile published stream use 4). Open: what viewers see when no shared-screen slot is free (see chat).
 Decided 2026-10-19: when no shared-screen slot is free, viewers get a message and are offered the published layout instead (opens with their own tiles, no slot used).
 
 ### P-13 - Tap behaviour with the overlay up (bug)
 Requested: 2026-10-19. (1) Overlay hidden: a tap on any screen only brings up the overlay; it does NOT select that screen (changed 2026-10-19: to pick another screen, tap once anywhere to bring up the overlay, then tap the screen). (2) Overlay shown: a tap on the active screen (red box, has the sound) zooms it; a tap on an inactive screen makes it active but does not zoom. Currently a tap on any tile zooms it while the overlay is up.
-Type: patch (bug fix)   Status: Pending
+Type: patch (bug fix)   Status: Built in 0.7.0
 Notes / questions: likely cause (to confirm when building): a tile takes focus on mouse/touch down and that already selects it, so by the time the click is handled the page thinks the tile was already active and zooms. Fix: remember which tile was active at the moment of the press and decide on that. The same rule applies to the remote's OK button and to taps while the overlay is shown on a multiview.

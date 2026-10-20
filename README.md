@@ -21,7 +21,7 @@ Open `http://<server-ip>:1234` on the PC, and the same address in the Android TV
 
 First run opens the **Providers** window: enter the server URL, username and password from your provider and press **Test**. It reads how many connections your plan allows and fills that in. Add as many providers as you like. Then pick a tile, press Enter (or click it) and choose a channel.
 
-**Dockhand / prebuilt image:** create a stack from `stack.yml` (it uses `mybadreligon/multiview-iptv:0.6.1` from Docker Hub). Add `ADMIN_USER` / `ADMIN_PASSWORD` under environment if the port is reachable beyond your LAN.
+**Dockhand / prebuilt image:** create a stack from `stack.yml` (it uses `mybadreligon/multiview-iptv:0.7.0` from Docker Hub). Add `ADMIN_USER` / `ADMIN_PASSWORD` under environment if the port is reachable beyond your LAN.
 
 Without Docker: `node src/server.js` (Node 20+, no packages to install). Settings are stored in the `/data` volume (`providers.json`, channel list cache).
 
@@ -83,7 +83,7 @@ Out of the box there are no logins: anyone who can open the page is an admin. To
 - **Admin** - everything: providers, channel picking, users, publishing.
 - **Viewer** - sees only the multiviews published for them. They can mute, zoom, change the buffer and go fullscreen, but cannot change channels or layout.
 
-To publish: set up a layout and channels on your own screen, then **Multiviews > Publish my current screen**. Name it. Under **Who can see it** choose everyone with a viewer login or specific people. A viewer who has just one multiview lands straight in it after logging in; with several they get a list. If you change a published multiview (**Update from my screen**), people who are watching switch over within about 15 seconds. Clicking a multiview's name as admin loads it onto your screen for editing.
+To publish: set up a layout and channels on your own screen, then **Multiviews > Publish my current screen**. Name it and choose how: **Layout only** (viewers' devices play each tile) or **Screen as one stream** (the server combines the screen into one picture, with the sound of the tile selected when you published, at 480p/720p/1080p; viewers just play that, it is fixed as published, and it uses server CPU/GPU only while someone watches; everyone watching it shares one encode and the same provider connections; if no shared-screen slot is free, `COMPOSE_MAX`, the viewer gets the layout instead). Under **Who can see it** choose everyone with a viewer login or specific people. A viewer who has just one multiview lands straight in it after logging in; with several they get a list. If you change a published multiview (**Edit and update from my screen...**, which also lets you change the type), people who are watching switch over within about 15 seconds. Clicking a multiview's name as admin loads it onto your screen for editing; **Watch** shows it the way viewers see it.
 
 Each user has **Max streams**, the number of tiles they can play at once (default 9 for viewers). Remember that every distinct channel uses one connection at your provider; several people watching the *same* channel share one. All viewers draw from the same provider connections, so the total is still capped by your plans. Disabling or deleting a user, or changing their password, signs them out and cuts off their streams immediately.
 

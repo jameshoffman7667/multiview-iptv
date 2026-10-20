@@ -4,6 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const { httpError } = require('./config');
+const { cleanSpec } = require('./compose');
 
 const SESSION_MS = 30 * 24 * 3600 * 1000;
 const SLOTS = 9;
@@ -178,7 +179,20 @@ class Views {
     }
     const users = body.users !== undefined ? body.users : (old && old.users) || [];
     if (!Array.isArray(users)) throw httpError(400, 'users must be a list');
-    return { name, layout, tiles, users: [...new Set(users.map((u) => String(u)).filter(Boolean))].slice(0, 500) };
+    // How it is published: 'layout' (each viewer plays the tiles) or 'stream' (the server combines the screen into one picture).
+    const mode = body.mode !== undefined ? body.mode : (old && old.mode) || 'layout';
+    if (mode !== 'layout' && mode !== 'stream') throw httpError(400, 'Publish as layout or stream');
+    let stream = null;
+    if (mode === 'stream') {
+      const raw = body.stream !== undefined ? body.stream : old && old.stream;
+      if (!raw) throw httpError(400, 'The one-picture version needs the screen description');
+      stream = cleanSpec({ ...raw, kind: 'compose' });
+      delete stream.id; // clients ask for it through /api/compose, which derives the id
+      for (const c of stream.cells) {
+        if (!tiles.some((t) => t && t.p === c.p && t.sid === c.sid)) throw httpError(400, 'The picture contains a channel that is not in the multiview');
+      }
+    }
+    return { name, layout, tiles, mode, stream, users: [...new Set(users.map((u) => String(u)).filter(Boolean))].slice(0, 500) };
   }
 
   create(body) {
@@ -219,6 +233,7 @@ class Views {
     for (const v of this.views) {
       let changed = false;
       v.tiles = v.tiles.map((t) => { if (t && t.p === id) { changed = true; return null; } return t; });
+      if (changed && v.stream) { v.stream = null; v.mode = 'layout'; }
       if (changed) { v.rev++; any = true; }
     }
     if (any) this.save();

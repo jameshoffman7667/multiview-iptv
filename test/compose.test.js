@@ -341,3 +341,40 @@ describe('the composite survives bad inputs', { skip: needReal }, () => {
     app.close(); fs.rmSync(dd, { recursive: true, force: true });
   });
 });
+
+describe('multiview published as one stream', () => {
+  test('published screen description is stored, validated and handed to viewers; mode can go back to layout', async () => {
+    const dd = fs.mkdtempSync(path.join(os.tmpdir(), 'mv-pub-'));
+    const app = createApp({ dataDir: dd, basicAuth: '', composeIdleMs: 400, relay: { idleMs: 300 } });
+    await new Promise((r) => app.server.listen(0, '127.0.0.1', r));
+    const base = `http://127.0.0.1:${app.server.address().port}`;
+    const tiles = [{ p: 'a', sid: 'c1', name: 'One' }, { p: 'a', sid: 'c2', name: 'Two' }];
+    const stream = { res: 720, cols: 2, rows: 1, aspect: 16 / 9, fit: 'contain', audio: 1, cells: [{ x: 1, y: 1, w: 1, h: 1, p: 'a', sid: 'c1', sd: false }, { x: 2, y: 1, w: 1, h: 1, p: 'a', sid: 'c2', sd: true }] };
+    let r = await request(base, '/api/views', { method: 'POST', body: { name: 'Two up', layout: '2x2', tiles, mode: 'stream', stream } });
+    assert.equal(r.status, 200);
+    const v = json(r).view;
+    assert.equal(v.mode, 'stream');
+    assert.equal(v.stream.audio, 1);
+    assert.equal(v.stream.id, undefined);
+    // viewers post the stored description to /api/compose and all get the same job
+    const listed = json(await request(base, '/api/views')).views[0];
+    assert.equal(listed.mode, 'stream');
+    assert.equal(cleanSpec(listed.stream).id, cleanSpec(stream).id);
+    // a channel that is not in the multiview is refused
+    r = await request(base, '/api/views', { method: 'POST', body: { name: 'bad', layout: '2x2', tiles, mode: 'stream', stream: { ...stream, cells: [{ ...stream.cells[0], sid: 'zzz' }] } } });
+    assert.equal(r.status, 400);
+    r = await request(base, '/api/views', { method: 'POST', body: { name: 'bad', layout: '2x2', tiles, mode: 'stream' } });
+    assert.equal(r.status, 400);
+    r = await request(base, '/api/views', { method: 'POST', body: { name: 'bad', layout: '2x2', tiles, mode: 'zip' } });
+    assert.equal(r.status, 400);
+    // layout-only views carry no picture
+    r = await request(base, '/api/views/' + v.id, { method: 'PUT', body: { mode: 'layout' } });
+    assert.equal(json(r).view.mode, 'layout');
+    assert.equal(json(r).view.stream, null);
+    // a view published before this existed is a layout
+    app.views.views.push({ id: 'old', name: 'Old', layout: '1', tiles: tiles.concat(Array(7).fill(null)), users: [], rev: 1 });
+    assert.equal(json(await request(base, '/api/views')).views.find((x) => x.id === 'old').mode, 'layout');
+    app.close();
+    fs.rmSync(dd, { recursive: true, force: true });
+  });
+});

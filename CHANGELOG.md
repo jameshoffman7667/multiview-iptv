@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.7.0 - 2026-10-19
+Publish a multiview as one stream, and a fix for taps on the screens.
+- **Publish as layout or as one stream (P-12).** *Publish my current screen...* now asks how: *Layout only* (as before: viewers get the channels and arrangement and their own device plays each tile) or *Screen as one stream* (with a picture quality of 480p / 720p / 1080p): the server combines the screen into one picture, with the sound of the tile that was selected when you published, and viewers simply play that. The picture is fixed as published; it follows the multiview only when you update it (*Edit and update from my screen...*, which also lets you change the type). The published layout is kept indefinitely; the server connects to the channels and encodes only while someone is watching, and everyone watching the same published screen shares one encode and one provider connection per channel (5 viewers of a 4-tile stream use 4 connections and 1 shared-screen slot). Visible to everyone with a login, or only the people you pick (as before). The list shows *one picture* on such entries; admins get a *Watch* button to see it as viewers do. When no shared-screen slot is free (`COMPOSE_MAX`), the viewer is told and gets the published layout with their own tiles instead. API: `GET /api/views` entries now have `mode` (`layout` | `stream`) and, for streams, `stream` (the picture description that clients post to `/api/compose`); `POST`/`PUT /api/views` accept `mode` and `stream`. Multiviews published before this are layouts.
+- **Tap behaviour (P-13).** With the controls hidden, a tap on any screen only brings the controls up (it no longer selects that screen). With the controls up, a tap on the active screen (red box, has the sound) zooms it, and a tap on an inactive screen makes it active without zooming. To pick another screen: tap once to bring the controls up, then tap the screen. Also: Arrow Up from the options arrow goes to the first option.
+- Tests: published stream description and validation, the viewer playing the fixed picture, the no-free-slot fallback, the publish dialog and the tap rules.
+
+**Upgrading from 0.6.1:** pulling the new image is enough; no stack or compose change (`views.json` gains two fields for new entries and older entries keep working).
+
 ## 0.6.1 - 2026-10-19
 Fix: the rewind folder can now be a bind or volume mount.
 - The rewind folder was removed and recreated at start; on a mount point that fails (EBUSY/EACCES) and rewind was silently switched off. It is now emptied but kept, in the server start-up and in the per-channel buffer.

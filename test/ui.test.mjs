@@ -80,6 +80,7 @@ describe('browser', () => {
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
+  const vis2 = (page, sel) => page.evaluate((q) => { const e = document.querySelector(q); return !!e && !e.hidden && e.offsetParent !== null; }, sel);
   async function openPage({ fake = true, state, viewport = { width: 1920, height: 1080 } } = {}) {
     const ctx = await browser.newContext({ viewport, serviceWorkers: 'block' });
     const errors = [];
@@ -257,7 +258,7 @@ describe('browser', () => {
 
   test('zoom a tile, make main, mute, stats toggle', async () => {
     const { ctx, page, errors } = await openPage({ state: { layout: '3x3', tiles: [{ p: 'p1', sid: '1', name: 'ESPN' }, { p: 'p1', sid: '2', name: 'CNN' }] } });
-    await page.click('.tile[data-idx="1"]');
+    await page.click('.tile[data-idx="1"]'); await page.click('.tile[data-idx="1"]'); // first tap brings the controls up, second selects it
     await page.keyboard.press('z');
     await page.evaluate(() => window.__mv.ovlHide());
     let r = await rects(page);
@@ -576,6 +577,69 @@ describe('browser', () => {
     await page.waitForFunction(() => window.__players.filter((p) => !p.destroyed).length === 2, null, { timeout: 5000 });
     assert.equal(await page.evaluate(() => document.body.classList.contains('shared')), false);
     assert.deepEqual(errors.filter((e) => !/503|Service Unavailable/.test(e)), []);
+    await ctx.close();
+  });
+
+  const publishedView = { id: 'v1', rev: 1, name: 'Game day', layout: '2x2', mode: 'stream',
+    tiles: [{ p: 'p1', sid: '1', name: 'ESPN' }, { p: 'p1', sid: '2', name: 'CNN' }, null, null, null, null, null, null, null],
+    stream: { res: 720, cols: 2, rows: 2, aspect: 16 / 9, fit: 'contain', audio: 1, cells: [{ x: 1, y: 1, w: 1, h: 1, p: 'p1', sid: '1', sd: false }, { x: 2, y: 1, w: 1, h: 1, p: 'p1', sid: '2', sd: false }] } };
+
+  test('published as one stream: the viewer plays the single picture exactly as published and cannot zoom it', async () => {
+    const { ctx, page, errors } = await openPage({ state: { layout: '2x2', tiles: [null, null, null, null] } });
+    await page.evaluate((v) => window.__mv.applyView(v), publishedView);
+    await page.waitForFunction(() => window.__players.length === 1, null, { timeout: 5000 });
+    assert.match(await page.evaluate(() => window.__players[0].ds.url), /\/ws\/compose\/[0-9a-f]{16}$/);
+    assert.equal(await page.evaluate(() => document.body.classList.contains('shared')), true);
+    // the picture is fixed: selecting the other tile does not restart it, zoom is ignored
+    await page.evaluate(() => window.__mv.select(0));
+    await page.evaluate(() => window.__mv.toggleZoom(0));
+    await page.waitForTimeout(1500);
+    assert.equal(await page.evaluate(() => window.__players.length), 1);
+    assert.equal(await page.evaluate(() => window.__mv.zoom), -1);
+    // a layout-only version of the same multiview plays the tiles on their own
+    await page.evaluate((v) => window.__mv.applyView(Object.assign({}, v, { rev: 2, mode: 'layout', stream: undefined })), publishedView);
+    await page.waitForFunction(() => window.__players.filter((p) => !p.destroyed && /\/stream\/p1\/[12]\.ts/.test(p.ds.url)).length === 2, null, { timeout: 5000 });
+    assert.equal(await page.evaluate(() => document.body.classList.contains('shared')), false);
+    assert.deepEqual(errors.filter((e) => !/503|Service Unavailable/.test(e)), []);
+    await ctx.close();
+  });
+
+  test('published as one stream: with no free slot the viewer is told and gets the layout with their own tiles', async () => {
+    const ctx = await browser.newContext({ viewport: { width: 1920, height: 1080 }, serviceWorkers: 'block' });
+    await ctx.route('**/vendor/mpegts.js', (route) => route.fulfill({ contentType: 'text/javascript', body: FAKE_MPEGTS }));
+    await ctx.addInitScript(MEDIA_STUBS);
+    await ctx.route('**/api/compose', (route) => route.request().method() !== 'POST' ? route.continue() : route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ error: 'compose_limit', message: 'Already composing 2 shared screen(s) (limit 2)' }) }));
+    const page = await ctx.newPage();
+    await page.goto(base);
+    await page.waitForFunction(() => window.__mv && window.__mv.tiles.length === 9 && window.__mv.ME);
+    await page.evaluate((v) => window.__mv.applyView(v), publishedView);
+    await page.waitForFunction(() => /not available/.test(document.getElementById('banner').textContent), null, { timeout: 8000 });
+    assert.match(await page.textContent('#banner'), /showing its layout with your own tiles/);
+    await page.waitForFunction(() => window.__players.filter((p) => !p.destroyed && /\/stream\/p1\/[12]\.ts/.test(p.ds.url)).length === 2, null, { timeout: 5000 });
+    assert.equal(await page.evaluate(() => document.body.classList.contains('shared')), false);
+    await ctx.close();
+  });
+
+  test('publish dialog offers layout only or the screen as one stream, and stores the picture description', async () => {
+    const { ctx, page, errors } = await openPage({ state: { layout: '2x2', sel: 1, tiles: [{ p: 'p1', sid: '1', name: 'ESPN' }, { p: 'p1', sid: '2', name: 'CNN' }, null, null] } });
+    const before = app.views.views.length;
+    await menu(page, 'views');
+    await page.click('text=Publish my current screen...');
+    await page.waitForSelector('#pub-stream');
+    assert.equal(await vis2(page, '#pub-res'), false, 'quality only matters for the one-stream version');
+    await page.fill('.modal input[type=text]', 'One picture');
+    await page.check('#pub-stream');
+    assert.equal(await vis2(page, '#pub-res'), true);
+    await page.selectOption('#pub-res', '480');
+    await page.click('.modal .btn.primary');
+    await page.waitForFunction(() => /Published/.test(document.getElementById('banner').textContent));
+    const v = app.views.views[app.views.views.length - 1];
+    assert.equal(app.views.views.length, before + 1);
+    assert.equal(v.mode, 'stream');
+    assert.equal(v.stream.res, 480);
+    assert.equal(v.stream.cells.length, 2);
+    assert.equal(v.stream.audio, 1, 'the sound of the selected tile at publishing time');
+    assert.deepEqual(errors, []);
     await ctx.close();
   });
 
@@ -941,7 +1005,7 @@ describe('browser: picker remembers its place', () => {
         await page.reload();
         await page.waitForFunction(() => window.__mv && window.__mv.ME);
       }
-      await page.click('.tile[data-idx="1"]');   // an empty tile opens the picker
+      await page.evaluate(() => window.__mv.select(1)); await page.click('.tile[data-idx="1"]');   // an empty tile opens the picker
       await page.waitForSelector('.chlist .ch .pick');
       assert.equal(await page.inputValue('select[aria-label="Category"]'), 'UK', 'category remembered');
       await page.waitForFunction(() => document.activeElement && document.activeElement.getAttribute('data-key') === 'big:1520');
@@ -1025,13 +1089,38 @@ describe('player overlay, pull-out menu, recordings, PWA', () => {
   const vis = (page, sel) => page.evaluate((s) => { const e = document.querySelector(s); return !!e && !e.hidden && e.offsetParent !== null && getComputedStyle(e).visibility !== 'hidden'; }, sel);
   const centre = (page, sel) => page.$eval(sel, (e) => { const r = e.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; });
 
+  test('tap rules: hidden controls just come up; then the active screen zooms and an inactive one only becomes active', async () => {
+    const { ctx, page, errors } = await open(two);
+    await page.waitForFunction(() => window.__players.length === 2);
+    const sel = () => page.evaluate(() => window.__mv.S.sel);
+    const zoom = () => page.evaluate(() => window.__mv.zoom);
+    await page.click('.tile[data-idx="1"]');
+    await page.waitForFunction(() => window.__mv.ovl.shown);
+    assert.equal(await sel(), 0, 'controls were hidden: the tap did not select');
+    assert.equal(await zoom(), -1);
+    await page.click('.tile[data-idx="1"]');
+    assert.equal(await sel(), 1, 'controls up: tapping an inactive screen makes it active');
+    assert.equal(await zoom(), -1, '... without zooming');
+    await page.click('.tile[data-idx="1"]');
+    await page.waitForFunction(() => window.__mv.zoom === 1);
+    await page.mouse.click(300, 300); // away from the controls in the middle
+    await page.waitForFunction(() => window.__mv.zoom === -1);
+    // hide the controls: tapping the active screen only brings them up
+    await page.evaluate(() => window.__mv.ovlHide());
+    await page.click('.tile[data-idx="1"]');
+    await page.waitForFunction(() => window.__mv.ovl.shown);
+    assert.equal(await zoom(), -1);
+    assert.deepEqual(errors, []);
+    await ctx.close();
+  });
+
   test('tapping a screen brings up the controls where the design says they go', async () => {
     const { ctx, page, errors } = await open(two);
     await page.waitForFunction(() => window.__players.length === 2);
     assert.equal(await vis(page, '#ov-play'), false, 'hidden until tapped');
     await page.click('.tile[data-idx="1"]');
     await page.waitForFunction(() => window.__mv.ovl.shown);
-    assert.equal(await page.evaluate(() => window.__mv.S.sel), 1, 'the tap selected the tile');
+    assert.equal(await page.evaluate(() => window.__mv.S.sel), 0, 'the first tap only brought the controls up, it did not select the other screen');
     for (const id of ['#ov-guide', '#ov-pull', '#ov-back', '#ov-play', '#ov-fwd', '#ov-up', '#ov-down', '#ov-mute', '#ov-vol', '#ov-seek', '#ov-arrow']) assert.equal(await vis(page, id), true, id);
     assert.equal(await vis(page, '#ov-cast'), false, 'no cast icon when no cast device is around');
     const pos = {};
@@ -1080,7 +1169,10 @@ describe('player overlay, pull-out menu, recordings, PWA', () => {
     await page.click('.tile[data-idx="1"]');
     await page.waitForFunction(() => window.__mv.ovl.shown);
     const box = await page.$eval('.tile[data-idx="1"]', (e) => { const r = e.getBoundingClientRect(); return { x: r.x + 20, y: r.y + 20 }; });
-    await page.mouse.click(box.x, box.y);
+    await page.mouse.click(box.x, box.y);    // controls up: an inactive tile only becomes active
+    await page.waitForFunction(() => window.__mv.S.sel === 1);
+    assert.equal(await page.evaluate(() => window.__mv.zoom), -1);
+    await page.mouse.click(box.x, box.y);    // the active tile expands
     await page.waitForFunction(() => window.__mv.zoom === 1);
     await page.mouse.click(300, 300);
     await page.waitForFunction(() => window.__mv.zoom === -1);
