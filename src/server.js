@@ -677,10 +677,12 @@ function createApp(options = {}) {
     });
   }
 
+  // {"status":"ok","version":"<image tag>"}: public, nothing private, no outside checks
+  const healthBody = JSON.stringify({ status: 'ok', version: require('../package.json').version });
   const server = http.createServer(async (req, res) => {
     try {
       const url = new URL(req.url, 'http://localhost');
-      if (url.pathname === '/healthz') { res.writeHead(200, { 'Content-Type': 'text/plain' }); return res.end('ok'); }
+      if (url.pathname === '/healthz') { res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }); return res.end(healthBody); }
       const castM = /^\/cast\/([A-Za-z0-9_-]{20,40})\.mp4$/.exec(url.pathname);
       if (castM && (req.method === 'GET' || req.method === 'OPTIONS')) return await handleCast(req, res, castM[1]);
       if (!authorised(req)) {

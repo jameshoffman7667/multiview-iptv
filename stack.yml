@@ -2,9 +2,16 @@
 # Change the tag to upgrade (see CHANGELOG.md). Settings are kept in the iptv-data volume.
 services:
   iptv-multiview:
-    image: mybadreligon/multiview-iptv:0.7.0
+    image: mybadreligon/multiview-iptv:0.7.1
     container_name: iptv-multiview
     restart: unless-stopped
+    # Same check as the image: the app answers GET /healthz with {"status":"ok","version":"..."} (no login, no private data).
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:$${PORT}/healthz || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
     ports:
       - "1234:1234"
     environment:

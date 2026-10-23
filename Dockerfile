@@ -13,7 +13,7 @@ COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh && mkdir -p /data && chown -R node:node /data
 VOLUME /data
 EXPOSE 1234
-HEALTHCHECK --interval=30s --timeout=5s --start-period=10s \
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s \
   CMD wget -qO- http://127.0.0.1:${PORT}/healthz || exit 1
 ENTRYPOINT ["docker-entrypoint.sh"]
 CMD ["node", "src/server.js"]

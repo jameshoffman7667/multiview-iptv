@@ -285,7 +285,11 @@ describe('relay server', () => {
   });
 
   test('static page and health check', async () => {
-    assert.equal((await request(base, '/healthz')).status, 200);
+    const hz = await request(base, '/healthz');
+    assert.equal(hz.status, 200);
+    assert.match(hz.headers['content-type'], /application\/json/);
+    // exactly status and version, and the version is the one in package.json (= the image tag)
+    assert.deepEqual(json(hz), { status: 'ok', version: require('../package.json').version });
     const idx = await request(base, '/');
     assert.equal(idx.status, 200);
     assert.match(idx.headers['content-type'], /text\/html/);
@@ -416,6 +420,13 @@ describe('accounts and shared multiviews', () => {
       assert.equal(x.status, 403, `${m} ${p}`);
     }
     assert.ok(!(await request(base, '/api/users', as(admin))).buf.toString().match(/hash|salt/), 'no hashes returned');
+  });
+
+  test('/healthz needs no login even with accounts on and shows nothing private', async () => {
+    const r = await request(base, '/healthz');
+    assert.equal(r.status, 200);
+    assert.deepEqual(Object.keys(json(r)).sort(), ['status', 'version']);
+    assert.equal(json(r).status, 'ok');
   });
 
   let viewId;

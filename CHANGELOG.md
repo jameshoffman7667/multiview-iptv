@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.7.1 - 2026-10-22
+Health check: `/healthz` now reports the version.
+- `GET /healthz` answers `{"status":"ok","version":"<version>"}` (JSON, `Cache-Control: no-store`) on the app's port, with no login, no private data and no checks of outside services. The version is the one in `package.json`, which equals the image tag.
+- The image's HEALTHCHECK has a 30 s start period (was 10 s), and `stack.yml` / `docker-compose.yml` now carry the same check (`wget` to `127.0.0.1:$PORT/healthz`, every 30 s, 5 s timeout, 3 retries, 30 s start period).
+- Tests: JSON body with exactly `status` and `version`, equal to `package.json`; reachable without a login when accounts or basic auth are on.
+
+**Upgrading from 0.7.0:** pulling the new image is enough to run it (the image carries its own health check). To get the check in your stack too, update the stack from `stack.yml` (new `healthcheck:` block, new image tag).
+
 ## 0.7.0 - 2026-10-19
 Publish a multiview as one stream, and a fix for taps on the screens.
 - **Publish as layout or as one stream (P-12).** *Publish my current screen...* now asks how: *Layout only* (as before: viewers get the channels and arrangement and their own device plays each tile) or *Screen as one stream* (with a picture quality of 480p / 720p / 1080p): the server combines the screen into one picture, with the sound of the tile that was selected when you published, and viewers simply play that. The picture is fixed as published; it follows the multiview only when you update it (*Edit and update from my screen...*, which also lets you change the type). The published layout is kept indefinitely; the server connects to the channels and encodes only while someone is watching, and everyone watching the same published screen shares one encode and one provider connection per channel (5 viewers of a 4-tile stream use 4 connections and 1 shared-screen slot). Visible to everyone with a login, or only the people you pick (as before). The list shows *one picture* on such entries; admins get a *Watch* button to see it as viewers do. When no shared-screen slot is free (`COMPOSE_MAX`), the viewer is told and gets the published layout with their own tiles instead. API: `GET /api/views` entries now have `mode` (`layout` | `stream`) and, for streams, `stream` (the picture description that clients post to `/api/compose`); `POST`/`PUT /api/views` accept `mode` and `stream`. Multiviews published before this are layouts.

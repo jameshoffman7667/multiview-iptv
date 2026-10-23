@@ -5,7 +5,7 @@ Requests logged here are not built yet. Say "build" to fold them into a new vers
 With every push, say whether the compose/stack file must change or whether pulling the new image is enough.
 Every build rewrites deploy/RELEASE.md with a fixed `Update:` line: `Update: now` only when the user said "build, push and update" for that release, otherwise `Update: later`.
 
-Current released version: 0.7.0 (being pushed)
+Current released version: 0.7.1 (being pushed)
 
 ### P-1 - Rebuild the on-screen menu as a traditional video player overlay
 Requested: 2026-10-18. Tap any screen (single view or multiview) to show a full-screen overlay over everything:
@@ -80,5 +80,5 @@ Notes / questions: likely cause (to confirm when building): a tile takes focus o
 
 ### P-14 - /healthz returns JSON with the version; matching healthchecks
 Requested: 2026-10-22. GET /healthz on $PORT must answer `{"status":"ok","version":"<same as the image tag>"}`: no login, no private data, no checks of outside services. Add a matching HEALTHCHECK to the image and the compose file, 30 s start period.
-Type: patch (small change)   Status: Pending
+Type: patch (small change)   Status: Built in 0.7.1
 Notes / questions: today /healthz already exists, is public and answers plain text `ok`; the Dockerfile already has a HEALTHCHECK (start period 10 s) and stack.yml / docker-compose.yml have none. Plan: return JSON with the version from package.json (equals the image tag; tests already tie package.json, the service worker and the tag together), `Content-Type: application/json`, `Cache-Control: no-store`; image HEALTHCHECK start period 30 s; add the same check to stack.yml and docker-compose.yml (wget to 127.0.0.1:${PORT}, interval 30 s, timeout 5 s, retries 3, start_period 30 s); test that it needs no login even with logins on, contains nothing but status and version, and that its version equals package.json. Nothing else (providers, ffmpeg, disk) is checked.
