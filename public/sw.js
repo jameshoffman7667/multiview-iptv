@@ -2,7 +2,7 @@
 // Service worker: keeps only the app shell (page, script, styles, icons) so the installed app opens quickly and shows a
 // friendly page when the server cannot be reached. It never stores video, API answers, recordings, casts or login pages.
 // The cache name carries the app version (a test keeps it equal to package.json), so a new version starts a fresh cache.
-const VERSION = '0.7.1';
+const VERSION = '0.7.2';
 const CACHE = 'mv-shell-' + VERSION;
 const SHELL = ['/', '/styles.css', '/app.js', '/vendor/mpegts.js', '/manifest.webmanifest', '/offline.html', '/icons/icon-192.png', '/icons/icon-512.png', '/icons/icon.svg'];
 const NEVER = /^\/(api|stream|ws|vod|recordings|cast)(\/|$)|^\/(healthz|sw\.js)$/;

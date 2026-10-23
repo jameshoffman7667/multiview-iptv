@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.7.2 - 2026-10-22
+Releases no longer need a tag push. No change to the app itself.
+- The release workflow now runs on a push to `main` that changes the version in `package.json`: it fails if the tag `vX.Y.Z` already exists or the CHANGELOG entry is missing or empty, builds and pushes `X.Y.Z`, `X.Y` and `latest`, then `gh release create vX.Y.Z --target $GITHUB_SHA` creates the release and the tag. The Android app is attached to that release afterwards. Pushes to `main` that do not change the version build nothing.
+- A tag pushed by hand still works as a fallback (refused when the release already exists); runs are queued so the two cannot both release a version.
+- README: new *Releasing* section.
+
+**Upgrading from 0.7.1:** pulling the new image is enough; no stack or compose change other than the image tag.
+
 ## 0.7.1 - 2026-10-22
 Health check: `/healthz` now reports the version.
 - `GET /healthz` answers `{"status":"ok","version":"<version>"}` (JSON, `Cache-Control: no-store`) on the app's port, with no login, no private data and no checks of outside services. The version is the one in `package.json`, which equals the image tag.

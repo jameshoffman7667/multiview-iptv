@@ -21,7 +21,7 @@ Open `http://<server-ip>:1234` on the PC, and the same address in the Android TV
 
 First run opens the **Providers** window: enter the server URL, username and password from your provider and press **Test**. It reads how many connections your plan allows and fills that in. Add as many providers as you like. Then pick a tile, press Enter (or click it) and choose a channel.
 
-**Dockhand / prebuilt image:** create a stack from `stack.yml` (it uses `mybadreligon/multiview-iptv:0.7.1` from Docker Hub). Add `ADMIN_USER` / `ADMIN_PASSWORD` under environment if the port is reachable beyond your LAN.
+**Dockhand / prebuilt image:** create a stack from `stack.yml` (it uses `mybadreligon/multiview-iptv:0.7.2` from Docker Hub). Add `ADMIN_USER` / `ADMIN_PASSWORD` under environment if the port is reachable beyond your LAN.
 
 Without Docker: `node src/server.js` (Node 20+, no packages to install). Settings are stored in the `/data` volume (`providers.json`, channel list cache).
 
@@ -190,5 +190,14 @@ Your provider credentials stay on the server; the browser only sees channel ids.
 ## Tests
 
 `npm test` runs the relay, accounts, guide, movies, capture, SD-variant, shared-screen, rewind, recording, download and cast tests (Node only, a mock Xtream provider, and ffmpeg for the capture test; no packages). `test/ui.test.mjs` drives the page in Chromium and needs Playwright (dev only).
+
+## Releasing
+
+A release is a commit pushed to `main` that changes the `version` in **`package.json`** (the one version file; `public/sw.js`, `stack.yml`, this README and the Android build follow it and a test checks them). No tag has to be pushed.
+
+1. Put the new version in `package.json`, add `## X.Y.Z - YYYY-MM-DD` with text to `CHANGELOG.md`, and push to `main`.
+2. The *Build and push image* workflow (`.github/workflows/docker.yml`) reads X.Y.Z and **fails** if the tag `vX.Y.Z` already exists or the CHANGELOG entry is missing or empty. A push to `main` that does not change the version is not a release and builds nothing.
+3. It runs the tests, builds and pushes `mybadreligon/multiview-iptv:X.Y.Z`, `:X.Y` and `:latest`, then runs `gh release create vX.Y.Z --target $GITHUB_SHA`, which creates the release **and the tag** at the pushed commit, using the workflow's own token. Last, it builds the Android app and attaches the APK to that release.
+4. Fallback: pushing a tag `vX.Y.Z` by hand also runs the workflow, only if package.json says X.Y.Z and no release for it exists. Runs are queued one at a time (`concurrency: release`), so a tag and a push for the same version can never both release it. A failed run can be re-run from the Actions page (*Re-run failed jobs*). *Run workflow* (manual) only rebuilds the Android app when *Only build and attach the Android app* is ticked.
 
 Bundled: mpegts.js 1.8.2 (Apache-2.0, `public/vendor/`).

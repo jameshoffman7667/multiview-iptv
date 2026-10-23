@@ -1,8 +1,14 @@
 name: Build and push image
 
+# A release is a push to main that changes the version in package.json. The workflow reads X.Y.Z, checks that tag vX.Y.Z
+# and its CHANGELOG entry are fine, builds and pushes the image (X.Y.Z, X.Y, latest), then `gh release create` makes the
+# GitHub release and the tag vX.Y.Z at the pushed commit. Nothing needs a tag push.
+# A tag v*.*.* pushed by hand is only a fallback; it is refused when the release already exists.
 on:
   push:
     branches: [main]
+    paths: [package.json]
+    tags: ["v*.*.*"]
   workflow_dispatch:
     inputs:
       android_only:
@@ -10,16 +16,40 @@ on:
         type: boolean
         default: false
 
+# One release run at a time, so a push and a hand-pushed tag for the same version cannot both release it.
 concurrency:
-  group: image-${{ github.ref }}
-  cancel-in-progress: true
+  group: release
+  cancel-in-progress: false
+
+permissions:
+  contents: read
 
 env:
   IMAGE: mybadreligon/multiview-iptv
 
 jobs:
+  meta:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.m.outputs.version }}
+      release: ${{ steps.m.outputs.release }}
+      source: ${{ steps.m.outputs.source }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: m
+        env:
+          EVENT: ${{ github.event_name }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+          BEFORE: ${{ github.event.before }}
+          GH_TOKEN: ${{ github.token }}
+        run: .github/scripts/release-meta.sh
+
   test:
-    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.android_only) }}
+    needs: meta
+    if: ${{ needs.meta.outputs.release == 'true' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -31,15 +61,15 @@ jobs:
       - run: npm test
 
   image:
-    needs: test
-    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.android_only) }}
+    needs: [meta, test]
+    if: ${{ needs.meta.outputs.release == 'true' }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    env:
+      VERSION: ${{ needs.meta.outputs.version }}
     steps:
       - uses: actions/checkout@v4
-      - id: ver
-        run: echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
@@ -51,8 +81,8 @@ jobs:
         with:
           images: ${{ env.IMAGE }}
           tags: |
-            type=semver,pattern={{version}},value=${{ steps.ver.outputs.version }}
-            type=semver,pattern={{major}}.{{minor}},value=${{ steps.ver.outputs.version }}
+            type=semver,pattern={{version}},value=${{ needs.meta.outputs.version }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ needs.meta.outputs.version }}
             type=raw,value=latest
       - uses: docker/build-push-action@v6
         with:
@@ -63,15 +93,24 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
-      - name: Tag the release in git
+      - name: GitHub release (this also creates the tag when it does not exist yet)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE: ${{ needs.meta.outputs.source }}
         run: |
-          git tag "v${{ steps.ver.outputs.version }}" 2>/dev/null || exit 0
-          git push origin "v${{ steps.ver.outputs.version }}" || true
+          awk -v v="$VERSION" '$0 ~ "^## " v " " {f=1; next} /^## / {f=0} f' CHANGELOG.md > notes.md
+          [ -s notes.md ] || echo "IPTV Multiview $VERSION" > notes.md
+          if [ "$SOURCE" = tag ]; then
+            gh release create "v$VERSION" --verify-tag --title "v$VERSION" --notes-file notes.md
+          else
+            gh release create "v$VERSION" --target "$GITHUB_SHA" --title "v$VERSION" --notes-file notes.md
+          fi
+          echo "Release: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/tag/v$VERSION" >> "$GITHUB_STEP_SUMMARY"
 
   # Android TV / Nvidia Shield app. Built after the image is published so a problem here never blocks the Docker release.
   android:
-    needs: image
-    if: ${{ always() && (needs.image.result == 'success' || needs.image.result == 'skipped') }}
+    needs: [meta, image]
+    if: ${{ always() && (needs.image.result == 'success' || (github.event_name == 'workflow_dispatch' && inputs.android_only)) }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
