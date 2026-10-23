@@ -3,6 +3,7 @@
 Requests logged here are not built yet. Say "build" to fold them into a new version
 (version number goes up, CHANGELOG.md is updated, this list is cleared), and "push" to upload to GitHub.
 With every push, say whether the compose/stack file must change or whether pulling the new image is enough.
+Every build rewrites deploy/RELEASE.md with a fixed `Update:` line: `Update: now` only when the user said "build, push and update" for that release, otherwise `Update: later`.
 
 Current released version: 0.7.0 (being pushed)
 
