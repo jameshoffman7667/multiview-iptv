@@ -3,7 +3,7 @@
 Requests logged here are not built yet. Say "build" to fold them into a new version
 (version number goes up, CHANGELOG.md is updated, this list is cleared), and "push" to upload to GitHub.
 With every push, say whether the compose/stack file must change or whether pulling the new image is enough.
-Every build rewrites deploy/RELEASE.md with a fixed `Update:` line: `Update: now` only when the user said "build, push and update" for that release, otherwise `Update: later`.
+Every build rewrites deploy/RELEASE.md using the FULL template of the app spec (section 8: Update, Image, Short, Long, Release commit, Type, Port, Public hostname, env vars, Data, Resources, Healthcheck, Verify, PWA, Docker build, Rollback naming the exact previous tag, Known issues, Backup tier). Server tests use `wget` (no curl on vm101). The server's real stack file is the homelab repo's stacks/multiview-iptv/compose.yaml (stack.yml here is only a reference); never tell anyone to update the Dockhand stack. Fixed `Update:` line: `Update: now` only when the user said "build, push and update" for that release, otherwise `Update: later`.
 
 Current released version: 0.7.2 (being pushed)
 
