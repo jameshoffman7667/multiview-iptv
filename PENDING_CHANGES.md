@@ -108,3 +108,28 @@ Requested: 2026-11-01 (James: "why can't casting work in the app like other Andr
 Type: minor   Status: Pending
 Notes / questions: the web page's cast uses Chrome's Cast SDK, which does not exist inside an Android WebView, so the app hides the cast icon. Plan: add the native Google Cast sender (Cast framework + a cast button in the app's top strip) using the default media receiver, and have the page ask the app to cast the link that POST /api/cast returns (/cast/<token>.mp4). Needs Google Play services, so phones and tablets; Android TV / Shield boxes are not cast senders. A native sender does not need an https page, so a LAN address works as long as the Chromecast can reach the server. Later idea: with local mode, send the provider URL to the Chromecast directly. Needs a new APK.
 Decided 2026-11-01 (P-18): one APK for TV and phones (no separate builds). The app checks at run time whether casting is possible (Google Play services present and the device is not a TV box) and hides the cast button otherwise; separate TV / phone build flavours only if that ever causes trouble.
+
+### P-19 - Login hardening (spec v1.9 gap)
+Requested: 2026-11-05 (James: "gap analysis against the app development spec").
+Type: patch   Status: Pending
+Notes / questions: no rate limiting or lockout on POST /api/login; no Content-Security-Policy, X-Frame-Options / frame-ancestors headers on the page (only nosniff and no-referrer). Plan: per-IP and per-user failed-login delay/lockout, security headers that still allow the app's own scripts, blob: video, websockets and the cast/PiP features.
+
+### P-20 - Clean shutdown proof (spec v1.9 gap)
+Requested: 2026-11-05 (gap analysis).
+Type: patch   Status: Pending
+Notes / questions: a SIGTERM handler exists, but there is no init process (tini or compose `init: true`) and no test that the app exits cleanly and fast (under 10 s) with ffmpeg children running. Plan: add tini to the image, make shutdown stop ffmpeg children and the rewind/compose jobs, and add a test.
+
+### P-21 - Healthcheck body check and tests (spec v1.9 gap)
+Requested: 2026-11-05 (gap analysis).
+Type: patch   Status: Pending
+Notes / questions: the image healthcheck only needs an HTTP 200; make it also require `"status":"ok"`. Add tests: /healthz sets no cookie and needs no login, the healthcheck follows $PORT, the manifest and icon sizes are valid, and the release workflow trigger/version checks.
+
+### P-22 - Light / dark theme (spec v1.9 gap)
+Requested: 2026-11-05 (gap analysis).
+Type: minor   Status: Pending
+Notes / questions: styles.css has no prefers-color-scheme handling (dark only). Question: keep dark only (sensible for video), or follow the system with a setting?
+
+### P-23 - Repo docs layout (spec v1.9 gap)
+Requested: 2026-11-05 (gap analysis).
+Type: docs   Status: Pending
+Notes / questions: no docs/functional-spec.md; the pending log is PENDING_CHANGES.md in the repo root, not docs/pending-changes.md; deploy/ holds only RELEASE.md (compose files are in the repo root as docker-compose.yml and stack.yml, no deploy/compose.yaml or deploy/.env.example); CHANGELOG headings have no `v` prefix and no Short/Long lines. Question: which of these should move to the spec's layout, given the push-to-main flow already in use?
