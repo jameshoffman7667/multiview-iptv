@@ -124,10 +124,10 @@ Requested: 2026-11-05 (gap analysis).
 Type: patch   Status: Pending
 Notes / questions: the image healthcheck only needs an HTTP 200; make it also require `"status":"ok"`. Add tests: /healthz sets no cookie and needs no login, the healthcheck follows $PORT, the manifest and icon sizes are valid, and the release workflow trigger/version checks.
 
-### P-22 - Light / dark theme (spec v1.9 gap)
-Requested: 2026-11-05 (gap analysis).
-Type: minor   Status: Pending
-Notes / questions: styles.css has no prefers-color-scheme handling (dark only). Question: keep dark only (sensible for video), or follow the system with a setting?
+### P-22 - Light theme that follows the system setting (spec v1.9 gap)
+Requested: 2026-11-05 (James: "include a light mode, default to system setting").
+Type: minor (new setting)   Status: Pending (ready to build)
+Notes / questions: add a light theme; the default follows the device's light/dark setting (prefers-color-scheme), with a Theme setting (System / Light / Dark) stored per device. Also covers the PWA theme-color, the Android app's bars, and the video/overlay controls staying readable on both.
 
 ### P-23 - Repo docs layout (spec v1.9 gap)
 Requested: 2026-11-05 (gap analysis).
