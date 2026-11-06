@@ -133,3 +133,5 @@ Notes / questions: add a light theme; the default follows the device's light/dar
 Requested: 2026-11-05 (gap analysis).
 Type: docs   Status: Pending
 Notes / questions: no docs/functional-spec.md; the pending log is PENDING_CHANGES.md in the repo root, not docs/pending-changes.md; deploy/ holds only RELEASE.md (compose files are in the repo root as docker-compose.yml and stack.yml, no deploy/compose.yaml or deploy/.env.example); CHANGELOG headings have no `v` prefix and no Short/Long lines. Question: which of these should move to the spec's layout, given the push-to-main flow already in use?
+Decided 2026-11-05 (James: "go with your recommendations"): (1) write docs/functional-spec.md; (2) move the pending log to docs/pending-changes.md and update references; (3) add deploy/compose.yaml and deploy/.env.example (README paths updated; root docker-compose.yml / stack.yml kept as references or pointed at deploy/); (4) keep push-to-main releases (no switch back to tag pushes); (5) keep amd64 + arm64; (6) CHANGELOG: leave the format as is (no Short/Long lines) unless James asks later.
+Status: Pending (ready to build).
