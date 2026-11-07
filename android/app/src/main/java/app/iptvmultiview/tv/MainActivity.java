@@ -47,6 +47,8 @@ public class MainActivity extends Activity {
     private WebChromeClient chrome;
     private boolean autoPip = false; // set by the page while something is playing
     private boolean inPip = false;
+    private LocalPlayer local;   // local mode: native player behind the page
+    private CastHelper cast;     // Google Cast sender (phones and tablets)
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -55,9 +57,17 @@ public class MainActivity extends Activity {
         root = new FrameLayout(this);
         root.setBackgroundColor(Color.BLACK);
         web = new WebView(this);
-        web.setBackgroundColor(Color.BLACK);
+        web.setBackgroundColor(Color.TRANSPARENT); // see-through while local mode plays behind the page (the page paints its own black)
         root.addView(web, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         setContentView(root);
+        cast = new CastHelper(this);
+        cast.supported(); // checks Play services once, on the UI thread
+        local = new LocalPlayer(this, root, new LocalPlayer.Events() {
+            @Override
+            public void onEvent(String name, String message) {
+                tellPage("window.__mvLocal&&window.__mvLocal('" + js(name) + "','" + js(message) + "')");
+            }
+        });
         configure();
         immersive();
 
@@ -268,10 +278,32 @@ public class MainActivity extends Activity {
     @Override
     protected void onStop() {
         if (inPip) web.onPause(); // the floating player was closed
+        if (local != null) local.onHostStop();
         super.onStop();
     }
 
     // ------------------------------------------------------------------ mini player (picture-in-picture)
+
+    /** Runs a line of JavaScript in the page (on the UI thread). */
+    private void tellPage(final String script) {
+        runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                if (web != null) web.evaluateJavascript(script, null);
+            }
+        });
+    }
+
+    private static String js(String s) {
+        if (s == null) return "";
+        return s.replace("\\", "\\\\").replace("'", "\\'").replace("\n", " ").replace("\r", " ");
+    }
+
+    @Override
+    protected void onStart() {
+        super.onStart();
+        if (local != null) local.onHostStart();
+    }
 
     private boolean pipSupported() {
         return Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
@@ -317,6 +349,7 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        if (local != null) local.release();
         if (dialog != null) dialog.dismiss();
         root.removeAllViews();
         web.destroy();
@@ -358,6 +391,88 @@ public class MainActivity extends Activity {
         @JavascriptInterface
         public void setAutoPip(boolean on) {
             autoPip = on;
+        }
+
+        // ---- local mode (admins; the page decides when to use it)
+        @JavascriptInterface
+        public boolean localSupported() {
+            return true;
+        }
+
+        @JavascriptInterface
+        public void localPlay(final String url, final String userAgent, final double x, final double y, final double w, final double h) {
+            runOnUiThread(new Runnable() {
+                @Override
+                public void run() {
+                    local.play(url, userAgent, x, y, w, h);
+                }
+            });
+        }
+
+        @JavascriptInterface
+        public void localBounds(final double x, final double y, final double w, final double h) {
+            runOnUiThread(new Runnable() {
+                @Override
+                public void run() {
+                    local.bounds(x, y, w, h);
+                }
+            });
+        }
+
+        @JavascriptInterface
+        public void localPause(final boolean paused) {
+            runOnUiThread(new Runnable() {
+                @Override
+                public void run() {
+                    local.setPaused(paused);
+                }
+            });
+        }
+
+        @JavascriptInterface
+        public void localVolume(final double volume) {
+            runOnUiThread(new Runnable() {
+                @Override
+                public void run() {
+                    local.setVolume((float) volume);
+                }
+            });
+        }
+
+        @JavascriptInterface
+        public void localStop() {
+            runOnUiThread(new Runnable() {
+                @Override
+                public void run() {
+                    local.release();
+                }
+            });
+        }
+
+        // ---- casting (Google Cast sender; phones and tablets)
+        @JavascriptInterface
+        public boolean castSupported() {
+            return cast.supported();
+        }
+
+        @JavascriptInterface
+        public void castStart(final String url, final String title) {
+            runOnUiThread(new Runnable() {
+                @Override
+                public void run() {
+                    cast.start(url, title);
+                }
+            });
+        }
+
+        @JavascriptInterface
+        public void castStop() {
+            runOnUiThread(new Runnable() {
+                @Override
+                public void run() {
+                    cast.stop();
+                }
+            });
         }
 
         @JavascriptInterface

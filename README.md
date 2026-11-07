@@ -21,7 +21,7 @@ Open `http://<server-ip>:1234` on the PC, and the same address in the Android TV
 
 First run opens the **Providers** window: enter the server URL, username and password from your provider and press **Test**. It reads how many connections your plan allows and fills that in. Add as many providers as you like. Then pick a tile, press Enter (or click it) and choose a channel.
 
-**Dockhand / prebuilt image:** create a stack from `stack.yml` (it uses `mybadreligon/multiview-iptv:0.8.0` from Docker Hub). Add `ADMIN_USER` / `ADMIN_PASSWORD` under environment if the port is reachable beyond your LAN.
+**Dockhand / prebuilt image:** create a stack from `stack.yml` (it uses `mybadreligon/multiview-iptv:0.9.0` from Docker Hub). Add `ADMIN_USER` / `ADMIN_PASSWORD` under environment if the port is reachable beyond your LAN.
 
 Without Docker: `node src/server.js` (Node 20+, no packages to install). Settings are stored in the `/data` volume (`providers.json`, channel list cache).
 
@@ -33,7 +33,7 @@ Each release has an APK on the GitHub releases page (`iptv-multiview.apk`): a fu
 2. Open Downloader and enter `https://github.com/jameshoffman7667/multiview-iptv/releases/latest/download/iptv-multiview.apk`, then Install.
 3. Start *IPTV Multiview*. The first time it asks for the address of your server (for example `192.168.1.20:1234`, the machine running the container). It is remembered. To change it later: Settings in the app > *Server address (TV app)*, or press Menu on a remote that has one.
 
-The remote works like a keyboard: arrows move between tiles, OK opens the tile menu, Back closes windows (and exits at the top level). You log in on the TV once and it stays logged in.
+The remote works like a keyboard: arrows move between tiles, OK brings up the controls on the selected screen, Back closes windows (and exits at the top level). You log in on the TV once and it stays logged in.
 
 Things to know: the app uses the Shield's Chromium web view for decoding, which handles H.264 video and AAC audio but **not AC-3/E-AC-3 or MP2 audio** (those channels would play without sound); a native-player version would be the fix and is not built yet. Updates install over the old app only if the release was signed with the same key; the build uses a stable key when the repository secrets `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS` and `ANDROID_KEY_PASSWORD` exist (see *Building the app* below), otherwise uninstall the old app first. If you use the app on a phone or tablet it also works; there is no touch-specific layout beyond the web page itself.
 
@@ -45,6 +45,11 @@ keytool -genkeypair -v -keystore release.keystore -alias iptv -keyalg RSA -keysi
 base64 -w0 release.keystore      # paste into the secret ANDROID_KEYSTORE_BASE64
 ```
 Then add `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS` (`iptv`) and `ANDROID_KEY_PASSWORD`. Keep a copy of the keystore: losing it means users must uninstall to update.
+
+### Local mode and casting in the app
+
+- **Local mode** (admins, off by default): Settings > *Local mode*. The selected screen plays straight from your provider in the app's native player, skipping the server (handy away from home with a slow upload). One screen at a time, its own provider connection, no rewind / recording / cast for it; if it fails it falls back to the server by itself. Also plays AC-3 / E-AC-3 audio.
+- **Cast** from phones and tablets with Google Play services: the cast button lists your Cast devices and plays the server's cast link on the one you pick (the Cast device must be able to reach the server address). Hidden on TV boxes.
 
 ## Programme guide, movies and series
 

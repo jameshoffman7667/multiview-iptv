@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.9.0 - 2026-11-07
+The player controls now live inside each screen, plus local mode and casting in the Android app.
+- **Controls inside each screen** (P-16): tap a screen and the controls come up on *that* screen (they cover only it, with smaller buttons on small screens), nothing is selected yet. Tap it again: a screen that is not selected becomes selected and the controls stay on it. Tap once more on the selected screen: a playing screen zooms, an empty screen opens the channel selection, and tapping a zoomed screen goes back to the grid. Tapping a different screen while the controls are up selects it and moves the controls there. The menu arrow, cast and mini-player buttons stay at the page edges. Changing a playing screen's channel is still the guide / change-channel button in its controls.
+- **Local mode** (P-17, Android app, admins only): Settings > *Local mode* (shown only in the app, per device, off by default). The selected screen then plays straight from your provider in the app's own native player, so the picture no longer goes provider -> server -> your connection; useful away from home on a slow upload. The server only hands out the direct address to admins (`GET /api/direct`). It does one screen at a time (the selected or zoomed one), uses its own provider connection (it counts against your provider's connection limit), and has no rewind, recording, cast or shared screen. If the direct stream fails, that screen switches back to the server on its own. It also plays AC-3 / E-AC-3 audio where the device can decode it.
+- **Casting from the app** (P-18, phones and tablets with Google Play services): the cast button now works inside the Android app with a native Google Cast sender (default media receiver). It lists the Cast devices on the network, then plays the server's cast link on the one you pick. It is hidden on TV boxes and on devices without Play services. Chrome's own cast is unchanged.
+- Server: `GET /api/direct?p=&sid=` (admin only); new tests for it and for the app's bridge / manifest wiring; UI tests updated and extended for the new tap rules and the controls inside each screen.
+
+**Upgrading from 0.8.0:** pulling the new image is enough (no compose change). Local mode and app casting need the new APK from the release page (`iptv-multiview.apk`); they were compiled by the release workflow but could not be run on a device before release, so try local mode on the Shield / phone and switch it off in Settings if the picture is wrong.
+
 ## 0.8.0 - 2026-11-07
 Light theme that follows the device, harder logins, clean shutdown and the repo docs the app spec asks for.
 - **Theme** (P-22): Settings > Theme with System (the default, follows the device's light or dark setting), Light and Dark. It changes menus, dialogs, lists and the pull-out menu; the video area stays black. The setting is per device.

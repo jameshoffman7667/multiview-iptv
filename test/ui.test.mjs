@@ -43,6 +43,22 @@ const MEDIA_STUBS = `
   Object.defineProperty(proto, 'buffered', { get: function () { var a = this.__ahead || 0; var ct = this.__ct || 0; return { length: a > 0 ? 1 : 0, start: function () { return 0; }, end: function () { return ct + a; } }; }, configurable: true });
 })();`;
 
+// Tap a screen away from the controls that sit in its middle, top and edges (the controls live inside the screen now).
+const tap = async (page, idx) => {
+  const b = await page.locator(`.tile[data-idx="${idx}"]`).boundingBox();
+  if (!b) return page.click(`.tile[data-idx="${idx}"]`);
+  await page.mouse.click(b.x + b.width * 0.2, b.y + b.height * 0.33);
+};
+
+// Controls up, screen selected, then the third tap on an empty screen opens the channel selection.
+const tapPicker = async (page, idx) => {
+  for (let i = 0; i < 3; i++) {
+    if (await page.locator('.modal h2').count()) return;
+    await tap(page, idx);
+    await page.waitForTimeout(60);
+  }
+};
+const near = (a, b, tol = 2.5) => Math.abs(a - b) <= tol;
 describe('browser', () => {
   let browser;
   let app;
@@ -137,7 +153,7 @@ describe('browser', () => {
   test('picker: search across providers, choose, persists across reload, stream URL carries buffer', async () => {
     const { ctx, page, errors } = await openPage();
     await page.evaluate(() => window.__mv.setLayout('1+7'));
-    await page.click('.tile[data-idx="0"]');   // an empty tile opens the picker
+    await tapPicker(page, 0);   // tap an empty screen up to the third tap: the controls, select, then the channel selection
     await page.waitForSelector('.modal h2');
     assert.match(await page.textContent('.modal h2'), /Choose channel for tile 1/);
     await page.waitForFunction(() => document.querySelectorAll('.ch .pick').length === 5);
@@ -258,7 +274,7 @@ describe('browser', () => {
 
   test('zoom a tile, make main, mute, stats toggle', async () => {
     const { ctx, page, errors } = await openPage({ state: { layout: '3x3', tiles: [{ p: 'p1', sid: '1', name: 'ESPN' }, { p: 'p1', sid: '2', name: 'CNN' }] } });
-    await page.click('.tile[data-idx="1"]'); await page.click('.tile[data-idx="1"]'); // first tap brings the controls up, second selects it
+    await tap(page, 1); await tap(page, 1); // first tap brings the controls up, second selects it
     await page.keyboard.press('z');
     await page.evaluate(() => window.__mv.ovlHide());
     let r = await rects(page);
@@ -378,7 +394,7 @@ describe('browser', () => {
   test('guide: grid with programmes, pick from it, "now" shows under the channel name, programme search', async () => {
     const { ctx, page, errors } = await openPage({ viewport: { width: 1600, height: 1000 } });
     await page.evaluate(() => window.__mv.setLayout('1'));
-    await page.click('.tile[data-idx="0"]');   // an empty tile opens the picker
+    await tapPicker(page, 0);   // tap an empty screen up to the third tap: the controls, select, then the channel selection
     await page.waitForSelector('.modal .tabs');
     await page.selectOption('select[aria-label="Provider"]', 'p1');
     await page.click('.tab:has-text("Guide")');
@@ -411,7 +427,7 @@ describe('browser', () => {
   test('movies and series: lists, categories, a movie goes to a tile as a file, episodes by season', async () => {
     const { ctx, page, errors } = await openPage();
     await page.evaluate(() => window.__mv.setLayout('1'));
-    await page.click('.tile[data-idx="0"]');   // an empty tile opens the picker
+    await tapPicker(page, 0);   // tap an empty screen up to the third tap: the controls, select, then the channel selection
     await page.waitForSelector('.modal .tabs');
     await page.click('.tab:has-text("Movies")');
     await page.waitForFunction(() => document.querySelectorAll('.chlist .pick').length === 2);
@@ -818,8 +834,8 @@ describe('logins and shared multiviews (browser)', () => {
     assert.equal(await v.page.evaluate(() => document.getElementById('ov-guide').hidden), true, 'no channel guide for viewers');
     assert.equal(await v.page.evaluate(() => document.getElementById('sm-providers').hidden), true, 'no providers for viewers');
     assert.equal(await v.page.evaluate(() => document.getElementById('sm-recs').hidden), false, 'recordings are for everyone');
-    await v.page.click('.tile[data-idx="2"]');
-    await v.page.click('.tile[data-idx="2"]');
+    await v.tap(page, 2);
+    await v.tap(page, 2);
     assert.equal(await v.page.$('.modal'), null, 'empty tiles do not open a picker for viewers');
     await v.page.keyboard.press('c');
     assert.equal(await v.page.$('.modal'), null);
@@ -930,7 +946,7 @@ describe('real player, many streams, picker categories', () => {
     const page = await ctx.newPage();
     await page.goto(base);
     await page.waitForFunction(() => window.__mv && window.__mv.ME);
-    await page.click('.tile[data-idx="0"]');   // an empty tile opens the picker
+    await tapPicker(page, 0);   // tap an empty screen up to the third tap: the controls, select, then the channel selection
     await page.waitForSelector('.chlist .ch');
     const opts = await page.$$eval('select[aria-label="Category"] option', (o) => o.map((x) => x.textContent));
     assert.equal(await page.$eval('select[aria-label="Category"]', (s) => s.disabled), false);
@@ -948,7 +964,7 @@ describe('real player, many streams, picker categories', () => {
     const page2 = await ctx2.newPage();
     await page2.goto(base);
     await page2.waitForFunction(() => window.__mv && window.__mv.ME);
-    await page2.click('.tile[data-idx="0"]');   // an empty tile opens the picker
+    await tapPicker(page2, 0);   // third tap on an empty screen opens the channel selection
     await page2.waitForSelector('.chlist .ch');
     const opts2 = await page2.$$eval('select[aria-label="Category"] option', (o) => o.map((x) => x.textContent));
     assert.deepEqual(opts2, ['All categories', 'Other', 'UK', 'US']);
@@ -986,7 +1002,7 @@ describe('browser: picker remembers its place', () => {
 
   test('category, search, rows expanded and the chosen channel are restored (also after a reload)', async () => {
     const { ctx, page } = await page1();
-    await page.click('.tile[data-idx="0"]');   // an empty tile opens the picker
+    await tapPicker(page, 0);   // tap an empty screen up to the third tap: the controls, select, then the channel selection
     await page.waitForSelector('.chlist .ch');
     await page.selectOption('select[aria-label="Category"]', 'UK');
     for (let i = 0; i < 2; i++) {
@@ -1006,7 +1022,7 @@ describe('browser: picker remembers its place', () => {
         await page.reload();
         await page.waitForFunction(() => window.__mv && window.__mv.ME);
       }
-      await page.evaluate(() => window.__mv.select(1)); await page.click('.tile[data-idx="1"]');   // an empty tile opens the picker
+      await page.evaluate(() => window.__mv.select(1)); await tapPicker(page, 1);   // tap an empty screen up to the third tap: the controls, select, then the channel selection
       await page.waitForSelector('.chlist .ch .pick');
       assert.equal(await page.inputValue('select[aria-label="Category"]'), 'UK', 'category remembered');
       await page.waitForFunction(() => document.activeElement && document.activeElement.getAttribute('data-key') === 'big:1520');
@@ -1019,7 +1035,7 @@ describe('browser: picker remembers its place', () => {
 
   test('closing without choosing keeps filters and scroll; Reset filters clears them', async () => {
     const { ctx, page } = await page1();
-    await page.click('.tile[data-idx="0"]');   // an empty tile opens the picker
+    await tapPicker(page, 0);   // tap an empty screen up to the third tap: the controls, select, then the channel selection
     await page.waitForSelector('.chlist .ch');
     await page.fill('.search', 'Chan 07');
     await page.waitForFunction(() => document.querySelectorAll('.chlist .pick').length === 16);
@@ -1087,7 +1103,7 @@ describe('player overlay, pull-out menu, recordings, PWA', () => {
   }
   const two = { layout: '2x2', sel: 0, tiles: [{ p: 'p1', sid: '1', name: 'ESPN' }, { p: 'p1', sid: '2', name: 'CNN' }, null, null] };
   const one = { layout: '1', sel: 0, tiles: [{ p: 'p1', sid: '1', name: 'ESPN' }] };
-  const vis = (page, sel) => page.evaluate((s) => { const e = document.querySelector(s); return !!e && !e.hidden && e.offsetParent !== null && getComputedStyle(e).visibility !== 'hidden'; }, sel);
+  const vis = (page, sel) => page.evaluate((s) => { const e = document.querySelector(s); return !!e && !e.hidden && (e.offsetParent !== null || getComputedStyle(e).position === 'fixed') && getComputedStyle(e).visibility !== 'hidden'; }, sel);
   const centre = (page, sel) => page.$eval(sel, (e) => { const r = e.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; });
 
   test('tap rules: hidden controls just come up; then the active screen zooms and an inactive one only becomes active', async () => {
@@ -1095,20 +1111,20 @@ describe('player overlay, pull-out menu, recordings, PWA', () => {
     await page.waitForFunction(() => window.__players.length === 2);
     const sel = () => page.evaluate(() => window.__mv.S.sel);
     const zoom = () => page.evaluate(() => window.__mv.zoom);
-    await page.click('.tile[data-idx="1"]');
+    await tap(page, 1);
     await page.waitForFunction(() => window.__mv.ovl.shown);
     assert.equal(await sel(), 0, 'controls were hidden: the tap did not select');
     assert.equal(await zoom(), -1);
-    await page.click('.tile[data-idx="1"]');
+    await tap(page, 1);
     assert.equal(await sel(), 1, 'controls up: tapping an inactive screen makes it active');
     assert.equal(await zoom(), -1, '... without zooming');
-    await page.click('.tile[data-idx="1"]');
+    await tap(page, 1);
     await page.waitForFunction(() => window.__mv.zoom === 1);
     await page.mouse.click(300, 300); // away from the controls in the middle
     await page.waitForFunction(() => window.__mv.zoom === -1);
     // hide the controls: tapping the active screen only brings them up
     await page.evaluate(() => window.__mv.ovlHide());
-    await page.click('.tile[data-idx="1"]');
+    await tap(page, 1);
     await page.waitForFunction(() => window.__mv.ovl.shown);
     assert.equal(await zoom(), -1);
     assert.deepEqual(errors, []);
@@ -1119,20 +1135,20 @@ describe('player overlay, pull-out menu, recordings, PWA', () => {
     const { ctx, page, errors } = await open(two);
     await page.waitForFunction(() => window.__players.length === 2);
     assert.equal(await vis(page, '#ov-play'), false, 'hidden until tapped');
-    await page.click('.tile[data-idx="1"]');
+    await tap(page, 0);
     await page.waitForFunction(() => window.__mv.ovl.shown);
-    assert.equal(await page.evaluate(() => window.__mv.S.sel), 0, 'the first tap only brought the controls up, it did not select the other screen');
+    assert.equal(await page.evaluate(() => window.__mv.ovl.idx), 0, 'the controls are on the tapped screen');
     for (const id of ['#ov-guide', '#ov-pull', '#ov-back', '#ov-play', '#ov-fwd', '#ov-up', '#ov-down', '#ov-mute', '#ov-vol', '#ov-seek', '#ov-arrow']) assert.equal(await vis(page, id), true, id);
     assert.equal(await vis(page, '#ov-cast'), false, 'no cast icon when no cast device is around');
     const pos = {};
     for (const id of ['guide', 'pull', 'back', 'play', 'fwd', 'up', 'down', 'mute', 'seek', 'arrow']) pos[id] = await centre(page, '#ov-' + id);
     assert.ok(pos.guide.x < 200 && pos.guide.y < 100, 'change-channel button top left');
-    assert.ok(pos.pull.x < 60 && Math.abs(pos.pull.y - 450) < 60, 'pull-out arrow on the left side');
-    assert.ok(pos.back.x < pos.play.x && pos.play.x < pos.fwd.x && Math.abs(pos.play.x - 800) < 5 && Math.abs(pos.play.y - 450) < 5, 'play in the middle, skip back and forward either side');
-    assert.ok(pos.up.x > 1500 && pos.down.x > 1500 && pos.up.y < pos.down.y, 'channel up and down on the right');
-    assert.ok(pos.mute.x < 200 && pos.mute.y > 800, 'mute bottom left');
-    assert.ok(pos.seek.y > 800 && pos.seek.x > pos.mute.x, 'progress bar along the bottom');
-    assert.ok(pos.arrow.y > pos.seek.y - 5 && Math.abs(pos.arrow.x - 800) < 5, 'options arrow below the progress bar');
+    assert.ok(pos.pull.x < 60 && Math.abs(pos.pull.y - pos.play.y) < 60, 'pull-out arrow on the left side of the page, level with the controls');
+    assert.ok(pos.back.x < pos.play.x && pos.play.x < pos.fwd.x && Math.abs(pos.play.x - 400) < 5 && Math.abs(pos.play.y - 225) < 5, 'play in the middle of the screen, skip back and forward either side');
+    assert.ok(pos.up.x > 650 && pos.down.x > 650 && pos.up.y < pos.down.y, 'channel up and down on the right');
+    assert.ok(pos.mute.x < 200 && pos.mute.y > 380, 'mute bottom left');
+    assert.ok(pos.seek.y > 380 && pos.seek.x > pos.mute.x, 'progress bar along the bottom');
+    assert.ok(pos.arrow.y > pos.seek.y - 5 && Math.abs(pos.arrow.x - 400) < 5, 'options arrow below the progress bar');
     assert.equal(await vis(page, '#ov-o-layout'), false, 'options are folded away');
     assert.equal(await page.evaluate(() => !!document.querySelector('#ov-arrow svg.ic-up')), true, 'arrow points up');
     await page.click('#ov-arrow');
@@ -1153,7 +1169,7 @@ describe('player overlay, pull-out menu, recordings, PWA', () => {
 
   test('the layout option holds every layout; expand is the magnifying glass and a second tap on the same tile does it too', async () => {
     const { ctx, page, errors } = await open(two);
-    await page.click('.tile[data-idx="0"]');
+    await tap(page, 0);
     await page.click('#ov-arrow');
     await page.click('#ov-o-layout');
     assert.equal(await page.locator('#ov-o-layout ~ .ov-sub .ovitem.lay').count(), 5);
@@ -1167,13 +1183,12 @@ describe('player overlay, pull-out menu, recordings, PWA', () => {
     assert.equal(await page.evaluate(() => window.__mv.zoom), -1);
     // tapping the already-selected tile again expands it (the controls are already up, so the first tap only selected)
     await page.evaluate(() => window.__mv.ovlHide());
-    await page.click('.tile[data-idx="1"]');
+    await tap(page, 1);
     await page.waitForFunction(() => window.__mv.ovl.shown);
-    const box = await page.$eval('.tile[data-idx="1"]', (e) => { const r = e.getBoundingClientRect(); return { x: r.x + 20, y: r.y + 20 }; });
-    await page.mouse.click(box.x, box.y);    // controls up: an inactive tile only becomes active
+    await tap(page, 1);    // controls up on it, it is not selected yet: the next tap only selects it
     await page.waitForFunction(() => window.__mv.S.sel === 1);
     assert.equal(await page.evaluate(() => window.__mv.zoom), -1);
-    await page.mouse.click(box.x, box.y);    // the active tile expands
+    await tap(page, 1);    // the selected tile expands
     await page.waitForFunction(() => window.__mv.zoom === 1);
     await page.mouse.click(300, 300);
     await page.waitForFunction(() => window.__mv.zoom === -1);
@@ -1184,7 +1199,7 @@ describe('player overlay, pull-out menu, recordings, PWA', () => {
   test('quality, reload, favourite', async () => {
     const { ctx, page, errors } = await open(one);
     await page.waitForFunction(() => window.__players.length === 1);
-    await page.click('.tile[data-idx="0"]');
+    await tap(page, 0);
     await page.click('#ov-arrow');
     await page.click('#ov-o-quality');
     assert.equal(await page.locator('#ov-o-quality ~ .ov-sub .ovitem').count(), 4);
@@ -1208,7 +1223,7 @@ describe('player overlay, pull-out menu, recordings, PWA', () => {
   test('play/pause, skip, progress bar and volume act on the selected tile; rewind restarts the stream behind live', async () => {
     const { ctx, page, errors } = await open(one);
     await page.waitForFunction(() => window.__players.length === 1);
-    await page.click('.tile[data-idx="0"]');
+    await tap(page, 0);
     assert.equal(await page.evaluate(() => document.getElementById('ov-live').classList.contains('behind')), false, 'red LIVE while live');
     assert.equal(await page.textContent('#ov-live'), 'LIVE');
     // pause a live channel
@@ -1271,7 +1286,7 @@ describe('player overlay, pull-out menu, recordings, PWA', () => {
 
   test('channel up and down stay inside the category; guide button opens the change channel screen on the guide', async () => {
     const { ctx, page, errors } = await open(one);
-    await page.click('.tile[data-idx="0"]');
+    await tap(page, 0);
     await page.click('#ov-down');
     await page.waitForFunction(() => window.__mv.S.tiles[0].sid === '2');
     await page.click('#ov-down');   // category US has two channels in this list: wraps to the first
@@ -1279,11 +1294,84 @@ describe('player overlay, pull-out menu, recordings, PWA', () => {
     assert.equal(await page.evaluate(() => window.__mv.S.tiles[0].sid), '1');
     await page.click('#ov-up');
     await page.waitForFunction(() => window.__mv.S.tiles[0].sid === '2');
-    await page.click('.tile[data-idx="0"]');
+    await tap(page, 0);
     await page.waitForFunction(() => window.__mv.ovl.shown);
     await page.click('#ov-guide');
     await page.waitForSelector('.modal .tabs .tab.on');
     assert.equal(await page.evaluate(() => document.querySelector('.tab.on').textContent.trim()), 'Guide');
+    assert.deepEqual(errors, []);
+    await ctx.close();
+  });
+
+  test('controls sit inside the tapped screen: tap 1 opens them there, tap 2 selects, tap 3 zooms, a zoomed screen un-zooms', async () => {
+    const { ctx, page, errors } = await open(two);
+    const state = () => page.evaluate(() => ({ sel: window.__mv.S.sel, shown: window.__mv.ovl.shown, idx: window.__mv.ovl.idx, zoomed: document.body.classList.contains('single') }));
+    const box = (sel) => page.evaluate((q) => { const r = document.querySelector(q).getBoundingClientRect(); return { x: r.x, y: r.y, w: r.width, h: r.height }; }, sel);
+    // tap 1 on the second screen (not selected): the controls come up on it, nothing is selected
+    await tap(page, 1);
+    await page.waitForFunction(() => window.__mv.ovl.shown);
+    let st = await state();
+    assert.deepEqual([st.sel, st.shown, st.idx], [0, true, 1]);
+    const t1 = await box('.tile[data-idx="1"]');
+    const o = await box('#ovl');
+    assert.ok(near(o.x, t1.x, 2) && near(o.y, t1.y, 2) && near(o.w, t1.w, 2) && near(o.h, t1.h, 2), 'the controls cover exactly that screen');
+    assert.match(await page.textContent('#view-title'), /CNN/, 'the controls show that screen\'s channel');
+    // the menu arrow stays at the page edge, the cast / mini player strip at the top right, whichever screen it is on
+    assert.ok((await box('#ov-pull')).x < 60, 'menu arrow at the page edge');
+    assert.ok((await box('#ov-pip')).x + (await box('#ov-pip')).w > 1500, 'mini player at the page edge');
+    // tap 2: the screen is selected and the controls stay on it
+    await tap(page, 1);
+    st = await state();
+    assert.deepEqual([st.sel, st.shown, st.idx, st.zoomed], [1, true, 1, false]);
+    // tap 3: zoom; the controls follow the zoomed screen
+    await tap(page, 1);
+    st = await state();
+    assert.equal(st.zoomed, true);
+    const full = await box('#ovl');
+    assert.ok(full.w > 1500 && full.h > 800, 'zoomed screen: controls cover the page');
+    // tapping the zoomed screen goes back to the grid
+    await tap(page, 1);
+    st = await state();
+    assert.equal(st.zoomed, false);
+    // moving to another screen with the controls up selects it and moves them (no zoom)
+    await tap(page, 0);
+    st = await state();
+    assert.deepEqual([st.sel, st.idx, st.zoomed], [0, 0, false]);
+    const t0 = await box('.tile[data-idx="0"]');
+    const o0 = await box('#ovl');
+    assert.ok(near(o0.x, t0.x, 2) && near(o0.w, t0.w, 2), 'controls moved to the selected screen');
+    assert.deepEqual(errors, []);
+    await ctx.close();
+  });
+
+  test('an empty screen: tap 3 opens the channel selection (tap 1 only brings the controls up)', async () => {
+    const { ctx, page, errors } = await open(two);
+    await tap(page, 2);
+    assert.equal(await page.locator('.modal h2').count(), 0, 'tap 1: no picker yet');
+    assert.equal(await page.evaluate(() => window.__mv.ovl.idx), 2);
+    await tap(page, 2);
+    assert.equal(await page.evaluate(() => window.__mv.S.sel), 2);
+    assert.equal(await page.locator('.modal h2').count(), 0, 'tap 2: selected, still no picker');
+    await tap(page, 2);
+    await page.waitForSelector('.modal h2');
+    assert.match(await page.textContent('.modal h2'), /Choose channel for tile 3/);
+    assert.deepEqual(errors, []);
+    await ctx.close();
+  });
+
+  test('small screens get compact controls that fit inside them', async () => {
+    const { ctx, page, errors } = await open({ layout: '3x3', sel: 0, tiles: [{ p: 'p1', sid: '1', name: 'ESPN' }] }, { viewport: { width: 1280, height: 720 } });
+    await tap(page, 0);
+    await page.waitForFunction(() => window.__mv.ovl.shown);
+    assert.equal(await page.evaluate(() => document.getElementById('ovl').classList.contains('compact')), true);
+    const fits = await page.evaluate(() => {
+      const o = document.getElementById('ovl').getBoundingClientRect();
+      return ['ov-play', 'ov-back', 'ov-fwd', 'ov-up', 'ov-down', 'ov-seek', 'ov-mute', 'ov-guide'].every((id) => {
+        const r = document.getElementById(id).getBoundingClientRect();
+        return r.left >= o.left - 1 && r.right <= o.right + 1 && r.top >= o.top - 1 && r.bottom <= o.bottom + 1;
+      });
+    });
+    assert.equal(fits, true, 'every control is inside the screen');
     assert.deepEqual(errors, []);
     await ctx.close();
   });
@@ -1293,7 +1381,7 @@ describe('player overlay, pull-out menu, recordings, PWA', () => {
     const bodyBg = (page) => page.evaluate(() => getComputedStyle(document.body).backgroundColor);
     const lum = (rgb) => { const m = rgb.match(/\d+/g).map(Number); return (m[0] + m[1] + m[2]) / 3; };
     const openSettings = async (page) => {
-      await page.click('.tile[data-idx="0"]');
+      await tap(page, 0);
       await page.click('#ov-pull');
       await page.click('#sm-settings');
       await page.waitForSelector('.modal h2');
@@ -1321,7 +1409,7 @@ describe('player overlay, pull-out menu, recordings, PWA', () => {
 
   test('pull-out menu: Watch, Multiviews, Recordings & Downloads, Settings, Providers, Log out', async () => {
     const { ctx, page, errors } = await open(one);
-    await page.click('.tile[data-idx="0"]');
+    await tap(page, 0);
     await page.click('#ov-pull');
     await page.waitForFunction(() => window.__mv.side.open);
     const items = await page.$$eval('#side .sideitem:not([hidden])', (b) => b.map((x) => x.textContent.trim().replace(/\s+/g, ' ')));
@@ -1333,7 +1421,7 @@ describe('player overlay, pull-out menu, recordings, PWA', () => {
     assert.equal(items.length, 5, 'no Log out while logins are off');
     await page.click('#sm-watch');
     assert.equal(await page.evaluate(() => window.__mv.side.open || window.__mv.ovl.shown), false, 'Watch closes the menu and the overlays');
-    await page.click('.tile[data-idx="0"]');
+    await tap(page, 0);
     await page.click('#ov-pull');
     await page.click('#sm-settings');
     await page.waitForSelector('.modal h2');
@@ -1343,13 +1431,13 @@ describe('player overlay, pull-out menu, recordings, PWA', () => {
     assert.equal(await vis(page, '#set-full'), true);
     assert.equal(await vis(page, '#set-install-box'), true);
     await page.keyboard.press('Escape');
-    await page.click('.tile[data-idx="0"]');
+    await tap(page, 0);
     await page.click('#ov-pull');
     await page.click('#sm-recs');
     await page.waitForSelector('.modal h2:has-text("Recordings")');
     await page.keyboard.press('Escape');
     // a tap outside closes it
-    await page.click('.tile[data-idx="0"]');
+    await tap(page, 0);
     await page.click('#ov-pull');
     await page.mouse.click(1200, 400);
     await page.waitForFunction(() => !window.__mv.side.open);
@@ -1359,7 +1447,7 @@ describe('player overlay, pull-out menu, recordings, PWA', () => {
 
   test('record: to the end of the event (with the stop time shown) or for a length; the Recordings screen lists, plays and deletes', async () => {
     const { ctx, page, errors } = await open(one);
-    await page.click('.tile[data-idx="0"]');
+    await tap(page, 0);
     await page.click('#ov-arrow');
     await page.click('#ov-o-rec');
     await page.waitForSelector('#ov-o-rec ~ .ov-sub .ovitem');
@@ -1391,7 +1479,7 @@ describe('player overlay, pull-out menu, recordings, PWA', () => {
   test('download a movie to the server or to the device; a live channel offers recording instead', async () => {
     const vod = { layout: '1', sel: 0, tiles: [{ p: 'p1', sid: 'movie:501', name: 'Big Movie', vod: 'movie', ext: 'mp4' }] };
     const { ctx, page, errors } = await open(vod);
-    await page.click('.tile[data-idx="0"]');
+    await tap(page, 0);
     assert.equal(await vis(page, '#ov-fwd'), true);
     await page.click('#ov-arrow');
     assert.equal(await page.evaluate(() => document.getElementById('ov-o-rec').disabled), true, 'a movie cannot be recorded');
@@ -1415,7 +1503,7 @@ describe('player overlay, pull-out menu, recordings, PWA', () => {
 
   test('a programme that has not started in the guide can be scheduled for recording', async () => {
     const { ctx, page, errors } = await open({ layout: '1', sel: 0, tiles: [null] });
-    await page.click('.tile[data-idx="0"]');   // empty tile -> picker
+    await tapPicker(page, 0);   // tap an empty screen up to the third tap: the controls, select, then the channel selection
     await page.waitForSelector('.modal .tabs');
     await page.selectOption('select[aria-label="Provider"]', 'p1');
     await page.click('.tab:has-text("Guide")');
@@ -1482,7 +1570,7 @@ describe('player overlay, pull-out menu, recordings, PWA', () => {
   test('the Back button (history) closes the side menu, then the controls, instead of leaving the app', async () => {
     const { ctx, page, errors } = await open(one);
     const url0 = page.url();
-    await page.click('.tile[data-idx="0"]');
+    await tap(page, 0);
     await page.click('#ov-pull');
     await page.waitForFunction(() => window.__mv.side.open);
     await page.goBack();
@@ -1492,7 +1580,7 @@ describe('player overlay, pull-out menu, recordings, PWA', () => {
     await page.waitForFunction(() => !window.__mv.ovl.shown);
     assert.equal(page.url(), url0, 'Back stayed in the app');
     // an opened row and sub-menu close one step at a time
-    await page.click('.tile[data-idx="0"]');
+    await tap(page, 0);
     await page.click('#ov-arrow');
     await page.click('#ov-o-quality');
     await page.goBack();
@@ -1510,7 +1598,7 @@ describe('player overlay, pull-out menu, recordings, PWA', () => {
   test('mini player: button right of the cast icon floats the selected video in a browser', async () => {
     const { ctx, page, errors } = await open(two, { init: `Object.defineProperty(window, 'documentPictureInPicture', { value: undefined, configurable: true }); window.__pipCalls = []; HTMLVideoElement.prototype.requestPictureInPicture = function () { window.__pipCalls.push(this.id || this.className); return Promise.resolve({}); }; Object.defineProperty(document, 'pictureInPictureEnabled', { value: true });` });
     await page.waitForFunction(() => window.__players.length === 2);
-    await page.click('.tile[data-idx="1"]');
+    await tap(page, 1);
     await page.waitForFunction(() => window.__mv.ovl.shown);
     await page.evaluate(() => { window.__mv.castState.avail = true; window.__mv.ovlShow(); });
     await page.waitForFunction(() => !document.getElementById('ov-cast').hidden);
@@ -1527,7 +1615,7 @@ describe('player overlay, pull-out menu, recordings, PWA', () => {
   test('mini player in the Android app: native call, auto-start flag, page chrome hides while floating', async () => {
     const { ctx, page, errors } = await open(two, { init: `window.__app = []; window.MVApp = { canPip: function () { return true; }, enterPip: function () { window.__app.push('enter'); }, setAutoPip: function (on) { window.__app.push('auto:' + on); }, changeServer: function () {} };` });
     await page.waitForFunction(() => window.__players.length === 2);
-    await page.click('.tile[data-idx="0"]');
+    await tap(page, 0);
     await page.waitForFunction(() => window.__mv.ovl.shown);
     assert.equal(await vis(page, '#ov-pip'), true);
     assert.ok((await page.evaluate(() => window.__app)).includes('auto:true'), 'the app is told something is playing');
@@ -1544,7 +1632,7 @@ describe('player overlay, pull-out menu, recordings, PWA', () => {
 
   test('cast icon appears only when a Google device can be cast to; both ways of casting are offered', async () => {
     const { ctx, page, errors } = await open(two);
-    await page.click('.tile[data-idx="0"]');
+    await tap(page, 0);
     assert.equal(await vis(page, '#ov-cast'), false);
     await page.evaluate(() => { window.__mv.castState.avail = true; });
     await page.waitForFunction(() => !document.getElementById('ov-cast').hidden);
@@ -1561,7 +1649,7 @@ describe('player overlay, pull-out menu, recordings, PWA', () => {
   test('viewers get the controls without layout, guide, channel keys or favourites', async () => {
     const { ctx, page } = await open(one);
     await page.evaluate(() => { window.__mv.ME.admin = false; });
-    await page.click('.tile[data-idx="0"]');
+    await tap(page, 0);
     await page.click('#ov-arrow');
     const hidden = await page.evaluate(() => ['ov-guide', 'ov-up', 'ov-down'].map((i) => document.getElementById(i).hidden).concat(['layout', 'fav'].map((k) => document.getElementById('ov-o-' + k).closest('.ov-opt').hidden)));
     assert.deepEqual(hidden, [true, true, true, true, true]);

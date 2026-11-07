@@ -8,6 +8,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
 const { createApp } = require('../src/server');
+const { MockProvider } = require('./mock-xtream');
 
 const root = path.join(__dirname, '..');
 const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
@@ -167,5 +168,60 @@ describe('image, compose and release files', () => {
     assert.match(read('stack.yml'), new RegExp(`mybadreligon/multiview-iptv:${pkg.version.replace(/\./g, '\\.')}`));
     assert.match(read('android/app/build.gradle'), new RegExp(`-PappVersion=${pkg.version.replace(/\./g, '\\.')} `));
     assert.match(read('CHANGELOG.md'), new RegExp(`^## ${pkg.version.replace(/\./g, '\\.')} - `, 'm'));
+  });
+});
+
+describe('local mode: /api/direct is for admins only', () => {
+  let app;
+  let base;
+  let dir;
+  let prov;
+  let admin;
+  let viewer;
+  const cookieOf = (r) => (r.headers['set-cookie'] || [''])[0].split(';')[0];
+  before(async () => {
+    prov = await new MockProvider({ user: 'u1', pass: 'pw1', max: 3, kbps: 1000 }).listen();
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mv-direct-'));
+    app = createApp({ dataDir: dir, basicAuth: '', adminUser: 'boss', adminPassword: 'hunter22' });
+    await new Promise((r) => app.server.listen(0, '127.0.0.1', r));
+    base = `http://127.0.0.1:${app.server.address().port}`;
+    admin = cookieOf(await login(base, 'boss', 'hunter22'));
+    await get(base, '/api/providers', { method: 'PUT', headers: { Cookie: admin }, body: { providers: [{ id: 'p1', name: 'One', url: prov.url, username: 'u1', password: 'pw1', maxConnections: 3 }] } });
+    app.users.create({ username: 'alice', password: 'alicepw1', role: 'viewer' });
+    viewer = cookieOf(await login(base, 'alice', 'alicepw1'));
+  });
+  after(async () => {
+    app.close();
+    await prov.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  test('an admin gets the provider address for a channel; viewers and visitors do not', async () => {
+    const ok = await get(base, '/api/direct?p=p1&sid=1', { headers: { Cookie: admin } });
+    assert.equal(ok.status, 200);
+    const j = JSON.parse(ok.text);
+    assert.equal(j.url, `${prov.url}/live/u1/pw1/1.ts`);
+    assert.ok(j.userAgent);
+    assert.equal((await get(base, '/api/direct?p=p1&sid=1', { headers: { Cookie: viewer } })).status, 403);
+    assert.equal((await get(base, '/api/direct?p=p1&sid=1')).status, 401);
+  });
+
+  test('bad channels and unknown providers are refused', async () => {
+    assert.equal((await get(base, '/api/direct?p=nope&sid=1', { headers: { Cookie: admin } })).status, 400);
+    assert.equal((await get(base, '/api/direct?p=p1&sid=../x', { headers: { Cookie: admin } })).status, 400);
+  });
+});
+
+describe('Android app sources', () => {
+  test('local mode and cast are wired between the page, the bridge and the manifest', () => {
+    const j = read('android/app/src/main/java/app/iptvmultiview/tv/MainActivity.java');
+    for (const m of ['localSupported', 'localPlay', 'localBounds', 'localPause', 'localVolume', 'localStop', 'castSupported', 'castStart', 'castStop']) {
+      assert.match(j, new RegExp(`public \\w+ ${m}\\(`), `Bridge.${m}`);
+      assert.match(read('public/app.js'), new RegExp(`\\b${m}\\b`), `page uses ${m}`);
+    }
+    assert.match(read('android/app/src/main/AndroidManifest.xml'), /OPTIONS_PROVIDER_CLASS_NAME[\s\S]*app\.iptvmultiview\.tv\.CastOptionsProvider/);
+    assert.match(read('android/app/build.gradle'), /media3-exoplayer/);
+    assert.match(read('android/app/build.gradle'), /play-services-cast-framework/);
+    assert.match(read('android/gradle.properties'), /android\.useAndroidX=true/);
   });
 });

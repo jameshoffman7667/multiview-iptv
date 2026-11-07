@@ -572,6 +572,17 @@ function createApp(options = {}) {
       return sendJson(req, res, 200, { from, to, available: !!(entry && entry.ok) || Object.values(progs).some((l) => l.length), programmes: progs });
     }
     if (/^\/api\/recordings(\/|$)/.test(p)) return handleRecordingsApi(req, res, url, me);
+    // Local mode (Android app, admins only): the provider's own stream address, so the app's native player can pull the
+    // stream directly instead of through this server. It carries the provider login, so only admins get it.
+    if (req.method === 'GET' && p === '/api/direct') {
+      needAdmin(me);
+      const pid = String(url.searchParams.get('p') || '');
+      const sid = String(url.searchParams.get('sid') || '');
+      const prov = config.get(pid);
+      if (!prov || !/^[A-Za-z0-9_:-]{1,40}$/.test(sid)) throw httpError(400, 'Bad channel', 'bad_request');
+      if (prov.type === 'local' || !prov.url) throw httpError(400, 'This channel cannot play directly (it is a local capture card)', 'no_direct');
+      return sendJson(req, res, 200, { url: xtream.streamUrl(prov, sid), title: lists.nameOf(pid, sid) || sid, userAgent: xtream.ua(prov) });
+    }
     if (req.method === 'POST' && p === '/api/cast') {
       if (!me) throw httpError(401, 'Login required', 'login_required');
       const body = await readJson(req);

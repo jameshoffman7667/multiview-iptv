@@ -63,7 +63,7 @@
   applyTheme();
   var ME = null; // set after /api/me: { admin, user, open, authRequired }
   function loadState() {
-    var d = { layout: '3x3', tiles: [], sel: 0, muted: false, bufSec: 4, keepSec: 0, transport: 'auto', fit: 'contain', failover: true, smallSd: true, vol: 1, shared: '', theme: 'system', workers: true, stats: false, labels: false, epgOn: true, favs: {}, pk: {} };
+    var d = { layout: '3x3', tiles: [], sel: 0, muted: false, bufSec: 4, keepSec: 0, transport: 'auto', fit: 'contain', failover: true, smallSd: true, vol: 1, shared: '', theme: 'system', local: false, workers: true, stats: false, labels: false, epgOn: true, favs: {}, pk: {} };
     var j = {};
     try { j = JSON.parse(localStorage.getItem(LS_KEY)) || {}; } catch (e) { j = {}; }
     Object.keys(d).forEach(function (k) { if (j[k] !== undefined && typeof j[k] === typeof d[k]) d[k] = j[k]; });
@@ -162,7 +162,8 @@
 
   function focusables(root) {
     var list = root.querySelectorAll('button:not([disabled]), select, input:not([disabled]), [tabindex="0"]');
-    return Array.prototype.filter.call(list, function (el) { return el.offsetParent !== null; });
+    // fixed-position buttons (the menu arrow, cast, mini player) have no offsetParent but are on screen
+    return Array.prototype.filter.call(list, function (el) { return el.offsetParent !== null || (el.getClientRects().length > 0 && getComputedStyle(el).position === 'fixed'); });
   }
 
   function modalKeys(box, e) {
@@ -233,6 +234,41 @@
   var wsFails = 0;
   var wsWorked = false;
 
+  // ---------------------------------------------------------------- local mode (Android app, admins)
+  // The app's native player pulls the selected screen straight from the provider, so the picture does not go through
+  // the server (useful when away from home on a slow upload). Rewind, recording, cast, shared screen and published
+  // streams need the server, so they are off for that screen. A failure falls back to the server automatically.
+  function appBridge() { return window.MVApp || null; }
+  function localSupported() { var b = appBridge(); try { return !!(b && typeof b.localSupported === 'function' && b.localSupported()); } catch (e) { return false; } }
+  function localWanted(t) {
+    return !!(S.local && localSupported() && isAdmin() && t && t.cfg && !t.cfg.vod && !t.localFailed && t.idx === S.sel && t.idx < visibleCount() &&
+      !viewStream() && !sharedOn());
+  }
+  function localNative() { for (var i = 0; i < tiles.length; i++) if (tiles[i].local) return tiles[i]; return null; }
+  function localPlace() {
+    var t = localNative();
+    if (!t || !appBridge()) return;
+    var r = t.el.getBoundingClientRect();
+    try { appBridge().localBounds(r.left, r.top, r.width, r.height); } catch (e) { /* old app */ }
+  }
+  // After the selection, layout, setting or view changes: exactly the wanted screen plays natively, the others use the server.
+  function localRefresh() {
+    if (typeof tiles === 'undefined' || !tiles.length) return;
+    var any = false;
+    tiles.forEach(function (t) {
+      if ((t.phase === 'local') !== localWanted(t) && t.visible) { t.start(); any = true; }
+    });
+    if (!any) localPlace();
+  }
+  window.__mvLocal = function (ev, msg) {
+    var t = localNative();
+    if (!t) return;
+    if (ev === 'playing') { t.setStatus(''); t.hasPlayed = true; return; }
+    t.localFailed = true;                       // 'error' or 'ended': use the server for this screen
+    banner('Local mode stopped (' + (msg || ev) + '); using the server', 4000);
+    t.start();
+  };
+
   function Tile(idx) {
     this.idx = idx;
     this.cfg = null;
@@ -299,6 +335,7 @@
 
   Tile.prototype.setCfg = function (cfg) {
     this.cfg = cfg;
+    this.localFailed = false;
     this.now = null;
     this.back = 0;
     this.userPaused = false;
@@ -351,6 +388,7 @@
     var self = this;
     if (this.cfg.vod) { this.startVod(); return; }
     if (sharedOn()) { this.render(); this.setStatus(''); return; } // the shared screen shows live channels
+    if (localWanted(this)) { this.startLocal(); return; }
     var mp = window.mpegts;
     if (!mp || !mp.getFeatureList || !mp.getFeatureList().mseLivePlayback) {
       this.setStatus('This browser cannot play live MPEG-TS (no MSE live playback)', true);
@@ -414,6 +452,28 @@
   };
 
   // A movie or episode: the browser plays the provider's file through the server's range proxy.
+  Tile.prototype.startLocal = function () {
+    var self = this;
+    var gen = ++this.gen;
+    var c = this.cfg;
+    this.phase = 'local';
+    this.setStatus('Connecting directly...');
+    api('/api/direct?p=' + encodeURIComponent(c.p) + '&sid=' + encodeURIComponent(c.sid)).then(function (r) {
+      if (gen !== self.gen || !appBridge()) return;
+      self.local = true;
+      self.el.classList.add('native');
+      document.documentElement.classList.add('nativeplay');
+      var rc = self.el.getBoundingClientRect();
+      appBridge().localPlay(r.url, r.userAgent || '', rc.left, rc.top, rc.width, rc.height);
+      applyAudio();
+    }, function (e) {
+      if (gen !== self.gen) return;
+      self.localFailed = true;
+      banner('Local mode not possible (' + (e && e.message ? e.message : 'error') + '); using the server', 4000);
+      self.start();
+    });
+  };
+
   Tile.prototype.startVod = function () {
     var self = this;
     var c = this.cfg;
@@ -469,6 +529,11 @@
 
   Tile.prototype.stop = function () {
     var v0 = this.video;
+    if (this.local) {
+      this.local = false;
+      this.el.classList.remove('native');
+      if (!localNative()) { document.documentElement.classList.remove('nativeplay'); try { appBridge().localStop(); } catch (e) { /* old app */ } }
+    }
     if (this.phase === 'vod' && v0.currentTime > 1) { this.resumeKey = this.vodKey; this.resumeAt = v0.currentTime; }
     v0.controls = false;
     v0.onplaying = v0.onwaiting = v0.oncanplay = v0.onerror = v0.onloadedmetadata = null;
@@ -753,7 +818,7 @@
       if (Date.now() - shared.lastAt > 15000) { shared.lastAt = Date.now(); sharedRetry('The picture stopped'); }
     }, 3000);
     document.body.classList.toggle('shared', sharedOn());
-    window.addEventListener('resize', function () { sharedSync(); });
+    window.addEventListener('resize', function () { sharedSync(); if (ovl && ovl.shown) ovlPlace(); localPlace(); });
   }
 
   // ---------------------------------------------------------------- grid, selection, audio
@@ -784,6 +849,8 @@
     tiles.forEach(function (t, i) { if (i < n && !(z >= 0 && i !== z)) t.applyQuality(); });
     updateSelection();
     updateLayoutButtons();
+    if (ovl && ovl.shown) ovlPlace();
+    localRefresh();
   }
 
   function updateSelection() {
@@ -801,6 +868,8 @@
       try { t.video.volume = vv; } catch (e) { /* read-only on some phones */ }
       t.el.classList.toggle('audio', !!on);
     });
+    var nt = localNative();
+    if (nt && appBridge()) { try { appBridge().localVolume(userActive && !S.muted && audioIdx() === nt.idx ? vv : 0); } catch (e) { /* old app */ } }
     if (shared.video) { shared.video.muted = !(userActive && !S.muted && sharedOn()); try { shared.video.volume = vv; } catch (e) { /* ignore */ } }
     sharedSync();
     ovlSync();
@@ -821,26 +890,29 @@
     idx = clamp(idx, 0, visibleCount() - 1);
     S.sel = idx;
     updateSelection();
+    if (ovl && ovl.shown) { ovl.idx = idx; ovlPlace(); fetchAvail(curTile()); ovlSync(); }
     saveSoon();
+    localRefresh();
     if (!fromFocus && document.activeElement !== tiles[idx].el && !modals.length) tiles[idx].el.focus();
   }
 
-  // Tap a tile: it is selected and the player controls come up; tap the same tile again to expand it (or go back to the grid).
+  // Tap rules (the controls live inside each screen):
+  //  1st tap, controls hidden: the controls come up on the tapped screen (nothing is selected).
+  //  2nd tap: a screen that is not selected becomes selected and the controls move to it; on the selected screen it acts as the 3rd tap.
+  //  3rd tap: a playing screen zooms (tap a zoomed screen to go back); an empty screen opens the channel selection (admins).
   function tileClick(t) {
     userGesture();
     var before = t.pressSel !== undefined ? t.pressSel : S.sel; // which tile was active before this press
     t.pressSel = undefined;
     var was = before === t.idx;
     if (!ovl.shown) {
-      // controls hidden: a tap only brings the controls up (an inactive screen is not selected; tap it again once they are up)
-      if (!was) { if (document.activeElement === t.el && S.sel !== before) { /* focus already moved the selection */ select(before, true); } ovlShow(); return; }
-      if (!t.cfg) { if (isAdmin()) openPicker(t.idx); return; }
-      ovlShow();
+      if (!was && document.activeElement === t.el && S.sel !== before) { /* focus already moved the selection */ select(before, true); }
+      ovlShow(t.idx);
       return;
     }
-    if (!was) select(t.idx);
-    if (!t.cfg) { if (was && isAdmin()) openPicker(t.idx); return; }
-    if (was && visibleCount() > 1) toggleZoom(t.idx); else ovlSync();
+    if (!was) { select(t.idx); return; }
+    if (!t.cfg) { if (isAdmin()) openPicker(t.idx); return; }
+    if (visibleCount() > 1) toggleZoom(t.idx); else ovlSync();
   }
 
   function assign(idx, cfg) {
@@ -999,11 +1071,12 @@
 
   // ---------------------------------------------------------------- player overlay
   // Tap any screen to bring it up, over everything, whether one channel or a multiview is showing. It acts on the selected tile.
-  var ovl = { el: null, shown: false, optsOpen: false, sub: '', timer: null, tick: null, p: {} };
+  var ovl = { el: null, idx: null, shown: false, optsOpen: false, sub: '', timer: null, tick: null, p: {} };
   var side = { el: null, open: false };
   var castState = { avail: false, session: null, ready: false };
 
-  function curTile() { return tiles[S.sel]; }
+  // The controls act on the screen the overlay sits on (a first tap puts them on a screen without selecting it).
+  function curTile() { return tiles[ovl.shown && ovl.idx != null && tiles[ovl.idx] ? ovl.idx : S.sel]; }
   function qualityLabel(c) { return !c ? '' : ({ sd: 'SD', full: 'FULL', '480': '480p' }[c.q || ''] || 'AUTO'); }
   function fmtClockMs(ms) { try { return new Date(ms).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }); } catch (e) { return ''; } }
   function fmtDur(s) {
@@ -1071,20 +1144,38 @@
     o.opt.fav.btn.appendChild(icon('star'));
     o.opt.rec.btn.appendChild(icon('rec'));
     o.opt.dl.btn.appendChild(icon('download'));
-    var top = h('div', { class: 'ov-top' }, o.guide, o.title, h('span', { class: 'spacer' }), o.cast, o.pip);
+    var top = h('div', { class: 'ov-top' }, o.guide, o.title, h('span', { class: 'spacer' }));
+    // page-level strip: menu arrow, cast and mini player stay at the screen edges whichever screen the controls are on
+    var strip = h('div', { class: 'ov-strip' }, o.cast, o.pip);
     var mid = h('div', { class: 'ov-mid' }, o.back, o.play, o.fwd);
     var right = h('div', { class: 'ov-right' }, o.up, o.down);
     var bar = h('div', { class: 'ov-bar' }, h('div', { class: 'ov-vols' }, o.mute, o.vol), h('div', { class: 'ov-prog' }, o.seek, o.live, o.time));
     var bottom = h('div', { class: 'ov-bottom' }, o.opts, bar, h('div', { class: 'ov-arrowrow' }, o.arrow));
-    ovl.el = h('div', { id: 'ovl', class: 'ovl', 'aria-label': 'Player controls' }, top, o.pull, mid, right, bottom);
+    ovl.el = h('div', { id: 'ovl', class: 'ovl', 'aria-label': 'Player controls' }, top, o.pull, strip, mid, right, bottom);
     ovl.el.addEventListener('pointerdown', function (e) { e.stopPropagation(); activity(); }, true);
     document.body.appendChild(ovl.el);
     buildSide();
     ovlSync();
   }
 
-  function ovlShow() {
+  // Put the controls over one screen (its rectangle), shrinking the buttons on small screens.
+  function ovlPlace() {
+    if (!ovl.el) return;
+    var t = tiles[ovl.idx != null ? ovl.idx : S.sel];
+    var r = t && t.el.getBoundingClientRect();
+    if (!r || !r.width || !r.height) { r = { left: 0, top: 0, width: window.innerWidth, height: window.innerHeight }; }
+    var st = ovl.el.style;
+    st.left = Math.round(r.left) + 'px'; st.top = Math.round(r.top) + 'px';
+    st.width = Math.round(r.width) + 'px'; st.height = Math.round(r.height) + 'px';
+    st.right = 'auto'; st.bottom = 'auto';
+    if (ovl.p.pull) ovl.p.pull.style.top = Math.round(r.top + r.height / 2) + 'px'; // the menu arrow stays at the page edge, level with the controls
+    ovl.el.classList.toggle('compact', r.width < 760 || r.height < 420);
+    ovl.el.classList.toggle('tiny', r.width < 460 || r.height < 260);
+  }
+  function ovlShow(idx) {
     if (!ME) return;
+    ovl.idx = typeof idx === 'number' && tiles[idx] ? idx : S.sel;
+    ovlPlace();
     ovl.shown = true;
     pushSentinel();
     ovl.el.classList.add('show');
@@ -1098,6 +1189,7 @@
   }
   function ovlHide() {
     ovl.shown = false;
+    ovl.idx = null;
     optsClose();
     subClose();
     sideClose();
@@ -1276,7 +1368,7 @@
   }
   function seekTo(v) {
     var t = curTile();
-    if (!t || !t.cfg || sharedOn()) return;
+    if (!t || !t.cfg || sharedOn() || t.local) return;
     if (t.cfg.vod) { try { t.video.currentTime = v; } catch (e) { /* not seekable */ } return; }
     liveSeek(t, (t.avail || 0) - v);
   }
@@ -1289,6 +1381,7 @@
   function togglePlay() {
     var t = curTile();
     if (!t || !t.cfg || sharedOn()) return;
+    if (t.local) { t.userPaused = !t.userPaused; try { appBridge().localPause(t.userPaused); } catch (e) { /* old app */ } ovlSync(); return; }
     var v = t.video;
     if (t.cfg.vod) { if (v.paused) { var pr = v.play(); if (pr && pr.catch) pr.catch(noop); } else v.pause(); ovlSync(); return; }
     if (!t.userPaused) { t.userPaused = true; t.pausedAt = Date.now(); try { v.pause(); } catch (e) { /* ignore */ } }
@@ -1335,7 +1428,8 @@
     var paused = !!c && (c.vod ? t.video.paused : !!t.userPaused);
     setIcon(o.play, paused ? 'play' : 'pause');
     var noSeek = !c || shared;
-    o.play.disabled = o.back.disabled = o.fwd.disabled = o.seek.disabled = noSeek;
+    o.play.disabled = o.back.disabled = o.fwd.disabled = o.seek.disabled = noSeek || !!(t && t.local);
+    if (t && t.local) o.play.disabled = false;
     o.play.title = shared ? 'Not available while the shared screen is on' : 'Play / pause';
     setIcon(o.mute, S.muted || S.vol === 0 ? 'mute' : 'vol');
     if (document.activeElement !== o.vol) o.vol.value = String(Math.round((S.vol === undefined ? 1 : S.vol) * 100));
@@ -1371,9 +1465,9 @@
     oo.fav.btn.disabled = !c || !!(c && c.vod);
     setIcon(oo.fav.btn, fav ? 'starOn' : 'star');
     oo.fav.btn.title = fav ? 'Remove from favourites' : 'Add to favourites';
-    oo.rec.btn.disabled = !c || !!(c && c.vod);
+    oo.rec.btn.disabled = !c || !!(c && c.vod) || !!(t && t.local);
     oo.dl.btn.disabled = !c;
-    o.cast.hidden = !castState.avail;
+    o.cast.hidden = !(castState.avail || nativeCast());
     o.pip.hidden = !pipMode();
     pipNote(!!c);
     o.pull.classList.toggle('open', side.open);
@@ -1535,6 +1629,8 @@
     var s = h('script', { src: 'https://www.gstatic.com/cv/js/sender/v1/cast_sender.js?loadCastFramework=1', async: true });
     document.head.appendChild(s);
   }
+  // The Android app has its own Google Cast sender (the web SDK does not exist inside a WebView).
+  function nativeCast() { var b = appBridge(); try { return !!(b && typeof b.castSupported === 'function' && b.castSupported()); } catch (e) { return false; } }
   function openCast() {
     var t = curTile();
     var c = t && t.cfg;
@@ -1555,6 +1651,15 @@
         if (!c || c.vod) { msg.textContent = 'Pick a live channel first'; return; }
         body = { mode: 'channel', p: c.p, sid: c.sid };
       }
+      if (nativeCast()) {
+        if (t && t.local) { msg.textContent = 'Not available for a screen in local mode'; return; }
+        api('/api/cast', { method: 'POST', body: body }).then(function (r) {
+          appBridge().castStart(location.origin + r.url, r.title || '');
+          msg.textContent = 'Pick the device in the list that opens. Mute this device\'s sound to avoid an echo.';
+          castState.casting = true;
+        }, function (e) { msg.textContent = 'Could not cast: ' + (e && e.message ? e.message : e); });
+        return;
+      }
       var ctx = window.cast.framework.CastContext.getInstance();
       var sess = ctx.getCurrentSession();
       var ready = sess ? Promise.resolve(sess) : ctx.requestSession().then(function (err) { if (err) throw new Error('Cast: ' + err); return ctx.getCurrentSession(); });
@@ -1569,7 +1674,7 @@
     }
     if (c && !c.vod) items.push(h('button', { class: 'btn', type: 'button', id: 'cast-channel', text: 'This channel (' + (c.name || c.sid) + ')', onclick: function () { go('channel'); } }));
     if (many) items.push(h('button', { class: 'btn', type: 'button', id: 'cast-multi', text: 'The whole multiview (as one picture)', onclick: function () { go('multiview'); } }));
-    items.push(h('button', { class: 'btn', type: 'button', id: 'cast-stop', text: 'Stop casting', onclick: function () { try { window.cast.framework.CastContext.getInstance().endCurrentSession(true); castState.casting = false; msg.textContent = 'Stopped.'; } catch (e) { msg.textContent = 'Nothing is being cast.'; } } }));
+    items.push(h('button', { class: 'btn', type: 'button', id: 'cast-stop', text: 'Stop casting', onclick: function () { try { if (nativeCast()) appBridge().castStop(); else window.cast.framework.CastContext.getInstance().endCurrentSession(true); castState.casting = false; msg.textContent = 'Stopped.'; } catch (e) { msg.textContent = 'Nothing is being cast.'; } } }));
     var m = openModal({ title: 'Cast to a Google device', body: [h('div', { class: 'menu' }, items), msg, h('div', { class: 'note', text: 'The TV opens the picture straight from this server, so the server address must be reachable from the TV (an https address works from anywhere).' })], foot: closeBtn({ close: function () { m.close(); } }) });
   }
 
@@ -2277,6 +2382,8 @@
         check('Use another provider when the chosen one is full', 'failover', function () { tiles.forEach(function (t) { if (t.cfg && t.retry) t.start(); }); }),
         check('Small tiles prefer the SD version of a channel (less to download and decode)', 'smallSd', function () { tiles.forEach(function (t) { t.applyQuality(); }); }),
         check('Use web workers (lighter on the page; turn off if video will not start)', 'workers'),
+        localSupported() && isAdmin() ? check('Local mode: play the selected screen directly from the provider (not through the server)', 'local', function () { tiles.forEach(function (t) { t.localFailed = false; }); localRefresh(); }) : null,
+        localSupported() && isAdmin() ? h('div', { class: 'note', text: 'Local mode skips the server for the selected screen only: no rewind, recording or cast for it, and it uses its own provider connection. It falls back to the server by itself if the direct stream fails.' }) : null,
         check('Show stats on tiles', 'stats', function () { document.body.classList.toggle('stats', S.stats); }),
         check('Always show channel names', 'labels', function () { document.body.classList.toggle('showlabels', S.labels); }),
         check("Show what's on now under channel names (programme guide)", 'epgOn', function () { tiles.forEach(function (t) { t.render(); }); pollEpg(); }),

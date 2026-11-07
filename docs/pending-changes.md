@@ -5,7 +5,7 @@ Requests logged here are not built yet. Say "build" to fold them into a new vers
 With every push, say whether the compose/stack file must change or whether pulling the new image is enough.
 Every build rewrites deploy/RELEASE.md using the FULL template of the app spec (section 8: Update, Image, Short, Long, Release commit, Type, Port, Public hostname, env vars, Data, Resources, Healthcheck, Verify, PWA, Docker build, Rollback naming the exact previous tag, Known issues, Backup tier). Server tests use `wget` (no curl on vm101). The server's real stack file is the homelab repo's stacks/multiview-iptv/compose.yaml (stack.yml here is only a reference); never tell anyone to update the Dockhand stack. Fixed `Update:` line: `Update: now` only when the user said "build, push and update" for that release, otherwise `Update: later`.
 
-Current released version: 0.8.0 (being pushed)
+Current released version: 0.9.0 (being pushed)
 
 ### P-1 - Rebuild the on-screen menu as a traditional video player overlay
 Requested: 2026-10-18. Tap any screen (single view or multiview) to show a full-screen overlay over everything:
@@ -90,22 +90,22 @@ Notes: version file used: package.json (there is no VERSION file). First release
 
 ### P-16 - Player overlay inside each screen, new tap sequence
 Requested: 2026-10-26. Move the overlay from a full-screen layer into each individual screen (tile). Tap sequence: 1st tap on a screen opens its overlay; 2nd tap selects the screen if it is not already selected, otherwise it acts as the 3rd tap; 3rd tap opens the channel screen (change channel / guide).
-Type: major-ish minor (reworks P-1 overlay layout and P-13 tap rules)   Status: Pending
+Type: major-ish minor (reworks P-1 overlay layout and P-13 tap rules)   Status: Built in 0.9.0
 Notes / questions: (a) with the overlay shown on screen A, a tap on screen B: select B and move the overlay to B, or only select? (b) does the zoom-on-tap of the active screen go away (zoom stays in the options row as Expand)? (c) screens are small in a 3x3 / 4x4 layout: show the full control set only when the screen is large enough, otherwise a reduced set (play/pause, mute, LIVE, options arrow) - acceptable? (d) the pull-out menu arrow, cast and mini player buttons are page-level, not per screen: keep them as a thin page overlay when any screen's overlay is up? (e) viewers (no change-channel rights): the 3rd tap does nothing; (f) the remote/keyboard flow (Enter shows controls, arrows move between them) should follow the selected screen. Not built.
 Decided 2026-10-30 (P-16): (1) with the overlay up on screen A, a tap on screen B selects B and moves the overlay to B. (2) The third tap: if the screen already has a channel playing it zooms it; if the screen is empty it opens the channel selection; a tap on a zoomed screen un-zooms it. (Changing the channel of a playing screen stays on the change-channel button in its overlay.) So the sequence is: tap 1 opens the overlay, tap 2 selects (or goes straight to tap 3 when already selected), tap 3 zooms / opens channel selection, tap again un-zooms. (3) Try the full set of controls inside every screen first, whatever the layout. (4) Menu arrow, cast and mini player stay as a thin page-level strip while any screen's overlay is up. (5) Viewers: no special case needed.
-Status: Pending (ready to build).
+Status: Built in 0.9.0.
 
 ### P-17 - Local mode: play streams directly from the provider, not through the server (idea)
 Requested: 2026-10-30 (James: "a local mode ... to avoid routing the stream through my server to improve speed").
-Type: minor-to-major   Status: Pending (scoped 2026-11-01, waiting for the choices in the chat)
+Type: minor-to-major   Status: Built in 0.9.0
 Notes / questions: see the chat reply of 2026-10-30. Main findings: browsers cannot read most providers' streams directly (no CORS headers; an https page cannot load http streams; the provider password would be exposed to the device); rewind, recording, cast, shared screen and published streams all need the relay; the relay also enforces the provider's connection limit. Feasible parts: (a) native Android TV app player (ExoPlayer) playing the provider URL directly, which also fixes AC-3/E-AC-3 audio; (b) "try direct, fall back to the relay" in browsers for providers that do send CORS headers. First find out where the slowness is: channel start time, buffer cushion, the server's CPU/network, or remote viewing through the Cloudflare tunnel.
 Scoped 2026-11-01 (James: "can we deploy this as an android app instead of a web app to allow for local mode?"): the Android app already exists (WebView around the page, built by CI as iptv-multiview.apk, runs on TV and phones). Local mode = add a native player (Media3/ExoPlayer) to that app that plays the provider's stream URL directly. Plan: phase 1, local mode for the selected / zoomed screen (and single-screen layout), page tells the app where to draw it; phase 2, several native players under a transparent web view for a whole multiview (limited by the device's hardware decoders). New server endpoint gives the direct URL only to users allowed to use local mode (admin by default, a per-user switch for viewers, default off). Per device setting "Local mode" with automatic fallback to the relay when the direct stream fails. Not available for direct screens: rewind, recording, cast, shared screen, published streams, relay connection sharing (each device uses its own provider connection, so the provider's max connections can be exceeded). Side benefit: AC-3/E-AC-3 audio and HEVC play where the device decodes them. Needs a new APK.
 Decided 2026-11-01 (P-17): phase 1 only (one screen: the selected / zoomed screen), and local mode for admin only. Reason given: the slowness is when away from home, where the stream goes provider -> home server -> Starlink upload -> device; direct play skips the Starlink upload. Existing workaround meanwhile: Shared screen at 480p (one small combined stream) and SD for small tiles.
-Status: Pending (ready to build).
+Status: Built in 0.9.0.
 
 ### P-18 - Cast from the Android app (phones and tablets)
 Requested: 2026-11-01 (James: "why can't casting work in the app like other Android apps?").
-Type: minor   Status: Pending
+Type: minor   Status: Built in 0.9.0
 Notes / questions: the web page's cast uses Chrome's Cast SDK, which does not exist inside an Android WebView, so the app hides the cast icon. Plan: add the native Google Cast sender (Cast framework + a cast button in the app's top strip) using the default media receiver, and have the page ask the app to cast the link that POST /api/cast returns (/cast/<token>.mp4). Needs Google Play services, so phones and tablets; Android TV / Shield boxes are not cast senders. A native sender does not need an https page, so a LAN address works as long as the Chromecast can reach the server. Later idea: with local mode, send the provider URL to the Chromecast directly. Needs a new APK.
 Decided 2026-11-01 (P-18): one APK for TV and phones (no separate builds). The app checks at run time whether casting is possible (Google Play services present and the device is not a TV box) and hides the cast button otherwise; separate TV / phone build flavours only if that ever causes trouble.
 

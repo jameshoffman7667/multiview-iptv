@@ -1,4 +1,4 @@
-# IPTV Multiview - functional spec (current state, v0.8.0)
+# IPTV Multiview - functional spec (current state, v0.9.0)
 
 Edited in place on every release; it describes what the app does now, not its history (see `CHANGELOG.md`).
 
@@ -7,8 +7,8 @@ A self-hosted relay and browser UI for Xtream Codes IPTV providers. One shared p
 
 ## Screens and controls
 - **Multiview page** - layouts: Single, 2x2, 1+5, 3x3, 1+7 (9 tile slots). One selected tile has the sound (red outline). Keyboard/remote: arrows, OK, 1-9, M, L, F, S, Z, C, R.
-- **Tap rules** - overlay hidden: any tap shows the overlay and selects nothing. Overlay shown: tapping the selected tile zooms it; tapping another tile selects it without zooming; a zoomed tile un-zooms on tap.
-- **Player overlay** - change channel (guide), play/pause, skip back 10 s / forward 30 s, channel up/down, progress bar with LIVE button (grey when behind live), mute/volume, options row (layout, expand, make main, record, cast, mini player), left arrow opens the pull-out menu.
+- **Tap rules** (the controls live inside each screen) - 1st tap, controls hidden: they come up on the tapped screen, nothing is selected. 2nd tap: a screen that is not selected becomes selected and the controls stay on it; on the selected screen it counts as the 3rd tap. 3rd tap: a playing screen zooms (tap a zoomed screen to go back); an empty screen opens the channel selection (admins). With the controls up, tapping another screen selects it and moves the controls there.
+- **Player controls** - cover only the tapped screen (compact buttons on small screens); the menu arrow, cast and mini player stay at the page edges. Change channel (guide), play/pause, skip back 10 s / forward 30 s, channel up/down, progress bar with LIVE button (grey when behind live), mute/volume, options row (layout, expand, make main, record, cast, mini player), left arrow opens the pull-out menu.
 - **Pull-out menu** - Watch, Multiviews, Recordings & Downloads, Settings, Providers, Logout.
 - **Settings** (per device, in the browser): buffer, keep-behind, stream delivery (WebSocket or HTTP), fit/fill, shared screen quality, failover, small tiles prefer SD, web workers, stats, channel names, programme guide, **Theme (System / Light / Dark)**.
 - **Theme** - default System (follows the device); Light and Dark override it. Applies to menus, dialogs and lists; the video area is black in every theme.
@@ -27,11 +27,12 @@ A self-hosted relay and browser UI for Xtream Codes IPTV providers. One shared p
 - **Rewind** - disk buffer of the last `REWIND_MINUTES` (default 60, max 240) of each open channel; emptied (not removed) at start.
 - **Recordings and downloads** - ffmpeg to `REC_DIR`, kept until deleted.
 - **Shared screen / published stream** - ffmpeg composite (`COMPOSE_MAX`, default 2), encoder auto/vaapi/x264/nvenc; 480p tile transcodes (`TRANSCODE_MAX`, default 2).
-- **Cast** - `POST /api/cast` returns a short-lived `/cast/<token>.mp4` link for a Chromecast.
+- **Local mode (Android app, admins)** - Settings > Local mode (per device, off by default). The selected / zoomed screen is played by the app's native player straight from the provider (`GET /api/direct`, admin only, returns the provider stream address); one screen at a time, own provider connection, no rewind / record / cast / shared screen / published streams; automatic fallback to the server on any error.
+- **Cast** - `POST /api/cast` returns a short-lived `/cast/<token>.mp4` link for a Chromecast. Chrome uses the web Cast SDK (https); the Android app (phones and tablets with Google Play services, not TV boxes) uses a native Cast sender with the default media receiver.
 - **Capture cards** - local `/dev/video*` devices as channels.
 
 ## HTTP API (all JSON unless noted; login required except `/healthz`, `/api/me`, `/api/login`, cast links)
-`/healthz` (public: `{"status":"ok","version":"X.Y.Z"}`), `/api/me`, `/api/login`, `/api/logout`, `/api/users[/<name>]`, `/api/views[/<id>]`, `/api/providers[/test]`, `/api/channels`, `/api/epg`, `/api/epg-search`, `/api/vod`, `/api/series`, `/api/state`, `/api/devices`, `/api/compose[/info|/test]`, `/api/recordings[/event]`, `/api/cast`, `/api/stream-error`; streams: `/stream/<provider>/<id>[.ts]` (HTTP) and WebSocket `/ws/...` (incl. `/ws/compose/<id>`), `/stream/compose/<id>`, `/vod/...`, `/recordings/<id>.<ext>`, `/cast/<token>.mp4`.
+`/healthz` (public: `{"status":"ok","version":"X.Y.Z"}`), `/api/me`, `/api/login`, `/api/logout`, `/api/users[/<name>]`, `/api/views[/<id>]`, `/api/providers[/test]`, `/api/channels`, `/api/epg`, `/api/epg-search`, `/api/vod`, `/api/series`, `/api/state`, `/api/devices`, `/api/compose[/info|/test]`, `/api/recordings[/event]`, `/api/cast`, `/api/direct` (admin), `/api/stream-error`; streams: `/stream/<provider>/<id>[.ts]` (HTTP) and WebSocket `/ws/...` (incl. `/ws/compose/<id>`), `/stream/compose/<id>`, `/vod/...`, `/recordings/<id>.<ext>`, `/cast/<token>.mp4`.
 
 ## Security
 - Provider credentials stay on the server; the browser sees channel ids only. Passwords hashed with scrypt, files `0600`.
@@ -51,6 +52,7 @@ A self-hosted relay and browser UI for Xtream Codes IPTV providers. One shared p
 
 ## Known limits
 - Browsers cannot play most provider streams directly (CORS, https page vs http stream, password exposure), so playback goes through the relay.
-- Android WebView lacks AC-3/E-AC-3/MP2 audio and Chrome's Cast SDK.
+- Android WebView lacks AC-3/E-AC-3/MP2 audio and Chrome's Cast SDK (the app's local mode and native cast cover both for the screen they apply to).
 - Many viewers of a published *screen* stream use server CPU/GPU; remote viewing is limited by the home upload speed.
-- Pending, not built: player overlay inside each screen (P-16), local (direct) mode in the Android app (P-17), native cast in the Android app (P-18).
+- Local mode and app casting were built without being run on a device (the build session could not compile or run Android); treat them as new.
+- Local mode: phase 1 is one screen; several native screens at once (phase 2) is not built.

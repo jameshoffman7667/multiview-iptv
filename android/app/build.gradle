@@ -2,7 +2,7 @@ plugins {
     id 'com.android.application'
 }
 
-// The release workflow passes the version (-PappVersion=0.8.0 -PappVersionCode=800).
+// The release workflow passes the version (-PappVersion=0.9.0 -PappVersionCode=900).
 def appVersion = (project.findProperty('appVersion') ?: '0.0.0').toString()
 def appVersionCode = (project.findProperty('appVersionCode') ?: '1').toString().toInteger()
 
@@ -51,4 +51,12 @@ android {
     lint {
         abortOnError false
     }
+}
+
+dependencies {
+    // Local mode: a native player that pulls the provider's stream directly (also decodes AC-3 / E-AC-3 audio).
+    implementation 'androidx.media3:media3-exoplayer:1.3.1'
+    // Casting from phones and tablets with the Google Cast sender (the default media receiver).
+    implementation 'com.google.android.gms:play-services-cast-framework:21.5.0'
+    implementation 'androidx.mediarouter:mediarouter:1.7.0'
 }

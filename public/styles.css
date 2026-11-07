@@ -253,7 +253,7 @@ body.shared .tile { background: transparent; }
 .ic-tv { width: 78%; height: 78%; }
 .ic-tv .fill { fill: #fff; }
 .ictext.dark { fill: #111; font-size: 6px; }
-.ov-pull { position: absolute; left: 6px; top: 50%; transform: translateY(-50%); width: 36px; height: 72px; border-radius: 0 36px 36px 0; }
+.ov-pull { position: fixed; left: 6px; top: 50%; transform: translateY(-50%); width: 36px; height: 72px; border-radius: 0 36px 36px 0; }
 .ov-pull.open { background: #17324f; }
 .ov-mid { position: absolute; left: 0; right: 0; top: 50%; transform: translateY(-50%); display: flex; align-items: center; justify-content: center; gap: 36px; }
 .ov-mid > * { pointer-events: auto; }
@@ -301,6 +301,28 @@ body.shared .tile { background: transparent; }
   .ov-right { right: 6px; gap: 10px; }
   .ov-title { max-width: 40vw; }
 }
+.ov-strip { position: fixed; top: 0; right: 0; display: flex; align-items: center; gap: 10px; padding: 10px 12px; z-index: 2; }
+/* the controls sit inside one screen; small screens get smaller buttons (class set from the screen's size) */
+.ovl.compact .ov-top { padding: 6px 8px; gap: 6px; }
+.ovl.compact .ovb { width: 36px; height: 36px; }
+.ovl.compact .ovb.big { width: 44px; height: 44px; }
+.ovl.compact .ovb.huge { width: 54px; height: 54px; }
+.ovl.compact .ov-pull { width: 30px; height: 60px; border-radius: 0 30px 30px 0; }
+.ovl.compact .ov-mid { gap: 18px; }
+.ovl.compact .ov-right { right: 6px; gap: 8px; }
+.ovl.compact .ov-bottom { padding: 0 8px 6px; }
+.ovl.compact .ov-bar { gap: 8px; }
+.ovl.compact .ov-opts { gap: 6px; }
+.ovl.compact .ov-title { font-size: 13px; max-width: 45%; }
+.ovl.compact .ov-time { min-width: 48px; font-size: 12px; }
+.ovl.compact #ov-vol { width: 56px; }
+.ovl.compact .ov-arrow { width: 34px; height: 24px; }
+.ovl.tiny .ovb { width: 30px; height: 30px; }
+.ovl.tiny .ovb.big { width: 36px; height: 36px; }
+.ovl.tiny .ovb.huge { width: 44px; height: 44px; }
+.ovl.tiny .ov-mid { gap: 10px; }
+.ovl.tiny #ov-vol { display: none; }
+.ovl.tiny .ov-time { display: none; }
 /* the sound marker and channel names stay out of the way while the controls are up */
 body.ovl-on .tile .speaker { opacity: 0; }
 
@@ -332,3 +354,8 @@ body.ovl-on .tile .speaker { opacity: 0; }
 .ovb svg:not(.ic) rect.big { fill: #9ccbff; }
 
 body.pip #ovl, body.pip .side, body.pip .banner, body.pip .hint { display: none !important; }
+
+/* local mode: the app's native video plays behind the page, so the page must be see-through where it is */
+html.nativeplay, html.nativeplay body, html.nativeplay .grid { background: transparent; }
+.tile.native { background: transparent; }
+.tile.native video, .tile.native .empty { display: none; }
