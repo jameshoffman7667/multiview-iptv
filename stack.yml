@@ -2,12 +2,12 @@
 # Change the tag to upgrade (see CHANGELOG.md). Settings are kept in the iptv-data volume.
 services:
   iptv-multiview:
-    image: mybadreligon/multiview-iptv:0.7.2
+    image: mybadreligon/multiview-iptv:0.8.0
     container_name: iptv-multiview
     restart: unless-stopped
     # Same check as the image: the app answers GET /healthz with {"status":"ok","version":"..."} (no login, no private data).
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:$${PORT}/healthz || exit 1"]
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:$${PORT}/healthz | grep -q '\"status\":\"ok\"' || exit 1"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -22,6 +22,8 @@ services:
       # About 2 GB per hour per 4-5 Mbps channel, so a 6-tile multiview needs about 12 GB.
       - REWIND_DIR=/rewind
       # - REWIND_MINUTES=60           # 0 switches rewind off, up to 240
+      # Set to 1 behind Caddy / Cloudflare so failed-login lockouts use the real client address, not the proxy's.
+      # - TRUST_PROXY=1
       # Creates the first admin account when no accounts exist yet (or create it in the app).
       # - ADMIN_USER=james
       # - ADMIN_PASSWORD=change-this-password

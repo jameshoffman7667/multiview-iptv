@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.8.0 - 2026-11-07
+Light theme that follows the device, harder logins, clean shutdown and the repo docs the app spec asks for.
+- **Theme** (P-22): Settings > Theme with System (the default, follows the device's light or dark setting), Light and Dark. It changes menus, dialogs, lists and the pull-out menu; the video area stays black. The setting is per device.
+- **Login protection** (P-19): the app already blocked an address after 8 wrong passwords. It now also locks the *account* (so guesses from many addresses count together) and can use the real client address behind Caddy or Cloudflare: set `TRUST_PROXY=1`, otherwise everyone shares the proxy's address. Every response now carries a Content-Security-Policy (own scripts plus Google's Cast sender, no inline scripts, nobody can frame the page), `X-Frame-Options: DENY`, `nosniff` and `no-referrer`. The offline page's script moved to `/offline.js` for the policy.
+- **Clean shutdown** (P-20): the image runs under tini (PID 1), so `docker stop` passes SIGTERM on and ffmpeg children are cleaned up; the app logs "Received SIGTERM", stops streams, recordings and shared screens, and exits within a second (a hard stop after 8 s as a safety net). A test starts the real server and checks the exit.
+- **Healthcheck and tests** (P-21): the image, `docker-compose.yml`, `stack.yml` and the new `deploy/compose.yaml` healthchecks now require `"status":"ok"` in the answer, not just any HTTP 200. New `test/hardening.test.js`: security headers on every response, no inline scripts, `/healthz` sets no cookie, login lockout per account and per proxied address, SIGTERM exit, healthcheck/tini/`$PORT`, manifest and icon sizes, the release workflow trigger, version files in step.
+- **Repo docs** (P-23): `docs/functional-spec.md` (what the app does now), the pending log moved to `docs/pending-changes.md`, `deploy/compose.yaml` and `deploy/.env.example` (image-based stack, `PORT` in `.env`). Release flow unchanged (push to `main`).
+
+**Upgrading from 0.7.2:** pulling the new image is enough. Optional: set `TRUST_PROXY=1` on the container when it sits behind Caddy / Cloudflare (so a lockout hits the offender, not everybody), and update the healthcheck in your compose to the stricter one in `deploy/compose.yaml`. The Android app is rebuilt with the same page; nothing to change on the TV.
+
 ## 0.7.2 - 2026-10-22
 Releases no longer need a tag push. No change to the app itself.
 - The release workflow now runs on a push to `main` that changes the version in `package.json`: it fails if the tag `vX.Y.Z` already exists or the CHANGELOG entry is missing or empty, builds and pushes `X.Y.Z`, `X.Y` and `latest`, then `gh release create vX.Y.Z --target $GITHUB_SHA` creates the release and the tag. The Android app is attached to that release afterwards. Pushes to `main` that do not change the version build nothing.

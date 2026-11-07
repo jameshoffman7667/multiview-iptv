@@ -21,7 +21,7 @@ Open `http://<server-ip>:1234` on the PC, and the same address in the Android TV
 
 First run opens the **Providers** window: enter the server URL, username and password from your provider and press **Test**. It reads how many connections your plan allows and fills that in. Add as many providers as you like. Then pick a tile, press Enter (or click it) and choose a channel.
 
-**Dockhand / prebuilt image:** create a stack from `stack.yml` (it uses `mybadreligon/multiview-iptv:0.7.2` from Docker Hub). Add `ADMIN_USER` / `ADMIN_PASSWORD` under environment if the port is reachable beyond your LAN.
+**Dockhand / prebuilt image:** create a stack from `stack.yml` (it uses `mybadreligon/multiview-iptv:0.8.0` from Docker Hub). Add `ADMIN_USER` / `ADMIN_PASSWORD` under environment if the port is reachable beyond your LAN.
 
 Without Docker: `node src/server.js` (Node 20+, no packages to install). Settings are stored in the `/data` volume (`providers.json`, channel list cache).
 
@@ -157,6 +157,7 @@ Tuning: `RING_MB` (default 32) is the relay buffer per channel, about a minute o
 | `DATA_DIR` | `/data` in Docker | where the app keeps its files inside the container (`providers.json`, `users.json`, `views.json`, sessions, channel cache) |
 | `DATA_PATH` | `iptv-data` volume | compose/stack only: what is mounted at `/data`. Set it to a host folder such as `/srv/iptv` (owned by uid 1000) to keep the data there, or leave it for the named volume |
 | `ADMIN_USER`, `ADMIN_PASSWORD` | none | creates the first admin account at start, only if no accounts exist yet |
+| `TRUST_PROXY` | off | set to `1` when the app sits behind Caddy, Cloudflare or another proxy: failed-login lockouts then use the real client address (`CF-Connecting-IP` / `X-Forwarded-For`) instead of the proxy's |
 | `BASIC_AUTH` | none | optional extra `user:password` gate in front of everything (separate from the user logins above) |
 | `REC_DIR` | `<DATA_DIR>/recordings` | where recordings and downloads are saved (large, slow disk is fine). Kept until deleted |
 | `REWIND_DIR` | `<DATA_DIR>/rewind` | where the rewind buffer is kept (use a fast disk); emptied at start |
@@ -176,6 +177,16 @@ Tuning: `RING_MB` (default 32) is the relay buffer per channel, about a minute o
 ## Security
 
 Your provider credentials stay on the server; the browser only sees channel ids. Until you create the first account, anyone who can reach the port is an admin. Create it before sharing the address. Anyone with an admin login can add providers and make the server fetch the URLs they enter, so make only people you trust admins. Putting your provider's account in front of other people can break the provider's terms (some forbid sharing a subscription), so check yours.
+
+Wrong passwords lock the address and the account out for 5 minutes after 8 tries (set `TRUST_PROXY=1` behind a proxy, otherwise everyone shares the proxy's address). Every response carries a Content-Security-Policy (own scripts only, plus Google's Cast sender), `X-Frame-Options: DENY`, `nosniff` and `no-referrer`. The image runs under tini, so `docker stop` finishes in a second or two.
+
+## Theme
+
+Settings > Theme: System (follows the device's light or dark setting, the default), Light or Dark. It changes menus, dialogs and lists; the video area stays black.
+
+## Docs
+
+`docs/functional-spec.md` (what the app does now), `docs/pending-changes.md` (requests not built yet), `deploy/compose.yaml` and `deploy/.env.example` (the image-based stack), `deploy/RELEASE.md` (the latest release's deploy sheet).
 
 ## Troubleshooting
 

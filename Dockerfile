@@ -3,7 +3,7 @@ ENV NODE_ENV=production PORT=1234 DATA_DIR=/data
 # ffmpeg: local capture cards, the shared screen and 480p tile transcoding.
 # The VA drivers let ffmpeg encode on an Intel (intel-media-driver, Quick Sync) or AMD (mesa-va-gallium) GPU when
 # /dev/dri is passed into the container; without a GPU everything falls back to the CPU encoder.
-RUN apk add --no-cache su-exec ffmpeg \
+RUN apk add --no-cache tini su-exec ffmpeg \
  && for pkg in libva-utils mesa-va-gallium intel-media-driver; do apk add --no-cache "$pkg" || echo "note: $pkg is not available for this CPU type"; done
 WORKDIR /app
 COPY package.json ./
@@ -14,6 +14,7 @@ RUN chmod +x /usr/local/bin/docker-entrypoint.sh && mkdir -p /data && chown -R n
 VOLUME /data
 EXPOSE 1234
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s \
-  CMD wget -qO- http://127.0.0.1:${PORT}/healthz || exit 1
-ENTRYPOINT ["docker-entrypoint.sh"]
+  CMD wget -qO- http://127.0.0.1:${PORT}/healthz | grep -q '"status":"ok"' || exit 1
+# tini is PID 1: it passes SIGTERM on and reaps ffmpeg children, so `docker stop` finishes in a second or two.
+ENTRYPOINT ["/sbin/tini", "--", "docker-entrypoint.sh"]
 CMD ["node", "src/server.js"]

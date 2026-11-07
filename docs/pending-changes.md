@@ -5,7 +5,7 @@ Requests logged here are not built yet. Say "build" to fold them into a new vers
 With every push, say whether the compose/stack file must change or whether pulling the new image is enough.
 Every build rewrites deploy/RELEASE.md using the FULL template of the app spec (section 8: Update, Image, Short, Long, Release commit, Type, Port, Public hostname, env vars, Data, Resources, Healthcheck, Verify, PWA, Docker build, Rollback naming the exact previous tag, Known issues, Backup tier). Server tests use `wget` (no curl on vm101). The server's real stack file is the homelab repo's stacks/multiview-iptv/compose.yaml (stack.yml here is only a reference); never tell anyone to update the Dockhand stack. Fixed `Update:` line: `Update: now` only when the user said "build, push and update" for that release, otherwise `Update: later`.
 
-Current released version: 0.7.2 (being pushed)
+Current released version: 0.8.0 (being pushed)
 
 ### P-1 - Rebuild the on-screen menu as a traditional video player overlay
 Requested: 2026-10-18. Tap any screen (single view or multiview) to show a full-screen overlay over everything:
@@ -111,27 +111,27 @@ Decided 2026-11-01 (P-18): one APK for TV and phones (no separate builds). The a
 
 ### P-19 - Login hardening (spec v1.9 gap)
 Requested: 2026-11-05 (James: "gap analysis against the app development spec").
-Type: patch   Status: Pending
+Type: patch   Status: Built in 0.8.0
 Notes / questions: no rate limiting or lockout on POST /api/login; no Content-Security-Policy, X-Frame-Options / frame-ancestors headers on the page (only nosniff and no-referrer). Plan: per-IP and per-user failed-login delay/lockout, security headers that still allow the app's own scripts, blob: video, websockets and the cast/PiP features.
 
 ### P-20 - Clean shutdown proof (spec v1.9 gap)
 Requested: 2026-11-05 (gap analysis).
-Type: patch   Status: Pending
+Type: patch   Status: Built in 0.8.0
 Notes / questions: a SIGTERM handler exists, but there is no init process (tini or compose `init: true`) and no test that the app exits cleanly and fast (under 10 s) with ffmpeg children running. Plan: add tini to the image, make shutdown stop ffmpeg children and the rewind/compose jobs, and add a test.
 
 ### P-21 - Healthcheck body check and tests (spec v1.9 gap)
 Requested: 2026-11-05 (gap analysis).
-Type: patch   Status: Pending
+Type: patch   Status: Built in 0.8.0
 Notes / questions: the image healthcheck only needs an HTTP 200; make it also require `"status":"ok"`. Add tests: /healthz sets no cookie and needs no login, the healthcheck follows $PORT, the manifest and icon sizes are valid, and the release workflow trigger/version checks.
 
 ### P-22 - Light theme that follows the system setting (spec v1.9 gap)
 Requested: 2026-11-05 (James: "include a light mode, default to system setting").
-Type: minor (new setting)   Status: Pending (ready to build)
+Type: minor (new setting)   Status: Built in 0.8.0
 Notes / questions: add a light theme; the default follows the device's light/dark setting (prefers-color-scheme), with a Theme setting (System / Light / Dark) stored per device. Also covers the PWA theme-color, the Android app's bars, and the video/overlay controls staying readable on both.
 
 ### P-23 - Repo docs layout (spec v1.9 gap)
 Requested: 2026-11-05 (gap analysis).
-Type: docs   Status: Pending
+Type: docs   Status: Built in 0.8.0
 Notes / questions: no docs/functional-spec.md; the pending log is PENDING_CHANGES.md in the repo root, not docs/pending-changes.md; deploy/ holds only RELEASE.md (compose files are in the repo root as docker-compose.yml and stack.yml, no deploy/compose.yaml or deploy/.env.example); CHANGELOG headings have no `v` prefix and no Short/Long lines. Question: which of these should move to the spec's layout, given the push-to-main flow already in use?
 Decided 2026-11-05 (James: "go with your recommendations"): (1) write docs/functional-spec.md; (2) move the pending log to docs/pending-changes.md and update references; (3) add deploy/compose.yaml and deploy/.env.example (README paths updated; root docker-compose.yml / stack.yml kept as references or pointed at deploy/); (4) keep push-to-main releases (no switch back to tag pushes); (5) keep amd64 + arm64; (6) CHANGELOG: leave the format as is (no Short/Long lines) unless James asks later.
-Status: Pending (ready to build).
+Status: Built in 0.8.0.

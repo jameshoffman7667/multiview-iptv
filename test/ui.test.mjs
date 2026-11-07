@@ -789,6 +789,7 @@ describe('logins and shared multiviews (browser)', () => {
     // publish
     await menu(page, 'views');
     await page.click('text=Publish my current screen...');
+    await page.waitForSelector('.modal input[type=text]');
     await page.fill('.modal input[type=text]', 'Game day');
     await page.click('.modal .btn.primary');
     await page.waitForFunction(() => /Published/.test(document.getElementById('banner').textContent));
@@ -1068,8 +1069,8 @@ describe('player overlay, pull-out menu, recordings, PWA', () => {
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
-  async function open(state, { viewport = { width: 1600, height: 900 }, sw = 'block', init = '' } = {}) {
-    const ctx = await browser.newContext({ viewport, serviceWorkers: sw });
+  async function open(state, { viewport = { width: 1600, height: 900 }, sw = 'block', init = '', colorScheme } = {}) {
+    const ctx = await browser.newContext(colorScheme ? { viewport, serviceWorkers: sw, colorScheme } : { viewport, serviceWorkers: sw });
     if (sw === 'block') {
       await ctx.route('**/vendor/mpegts.js', (route) => route.fulfill({ contentType: 'text/javascript', body: FAKE_MPEGTS }));
       await ctx.addInitScript(MEDIA_STUBS);
@@ -1281,10 +1282,41 @@ describe('player overlay, pull-out menu, recordings, PWA', () => {
     await page.click('.tile[data-idx="0"]');
     await page.waitForFunction(() => window.__mv.ovl.shown);
     await page.click('#ov-guide');
-    await page.waitForSelector('.modal .tabs');
+    await page.waitForSelector('.modal .tabs .tab.on');
     assert.equal(await page.evaluate(() => document.querySelector('.tab.on').textContent.trim()), 'Guide');
     assert.deepEqual(errors, []);
     await ctx.close();
+  });
+
+  test('theme: follows the device setting by default, Settings can force Light or Dark, video area stays black', async () => {
+    const panel = (page) => page.evaluate(() => getComputedStyle(document.querySelector('.modal') || document.body).backgroundColor);
+    const bodyBg = (page) => page.evaluate(() => getComputedStyle(document.body).backgroundColor);
+    const lum = (rgb) => { const m = rgb.match(/\d+/g).map(Number); return (m[0] + m[1] + m[2]) / 3; };
+    const openSettings = async (page) => {
+      await page.click('.tile[data-idx="0"]');
+      await page.click('#ov-pull');
+      await page.click('#sm-settings');
+      await page.waitForSelector('.modal h2');
+    };
+    for (const [scheme, expectLight] of [['light', true], ['dark', false]]) {
+      const { ctx, page, errors } = await open(one, { viewport: { width: 1280, height: 720 }, colorScheme: scheme });
+      assert.equal(await page.evaluate(() => document.documentElement.hasAttribute('data-theme')), false, 'system by default');
+      await openSettings(page);
+      assert.equal(lum(await panel(page)) > 128, expectLight, `system theme with a ${scheme} device`);
+      assert.equal(lum(await bodyBg(page)), 0, 'the video area stays black');
+      // force the opposite theme from the Settings dialog
+      const sel = page.locator('.modal select', { has: page.locator('option[value="system"]') });
+      await sel.selectOption(expectLight ? 'dark' : 'light');
+      assert.equal(await page.evaluate(() => document.documentElement.getAttribute('data-theme')), expectLight ? 'dark' : 'light');
+      assert.equal(lum(await panel(page)) > 128, !expectLight, 'forced theme wins over the device setting');
+      await page.waitForTimeout(400);
+      assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('mv.state.v1')).theme), expectLight ? 'dark' : 'light', 'saved on this device');
+      await page.reload();
+      await page.waitForFunction(() => window.__mv && window.__mv.ME);
+      assert.equal(await page.evaluate(() => document.documentElement.getAttribute('data-theme')), expectLight ? 'dark' : 'light', 'kept after reload');
+      assert.deepEqual(errors, [], 'no console errors (a blocked script would show up here as a policy violation)');
+      await ctx.close();
+    }
   });
 
   test('pull-out menu: Watch, Multiviews, Recordings & Downloads, Settings, Providers, Log out', async () => {

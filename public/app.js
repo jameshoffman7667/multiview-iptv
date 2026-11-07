@@ -60,13 +60,15 @@
   // ---------------------------------------------------------------- state
   var LS_KEY = 'mv.state.v1';
   var S = loadState();
+  applyTheme();
   var ME = null; // set after /api/me: { admin, user, open, authRequired }
   function loadState() {
-    var d = { layout: '3x3', tiles: [], sel: 0, muted: false, bufSec: 4, keepSec: 0, transport: 'auto', fit: 'contain', failover: true, smallSd: true, vol: 1, shared: '', workers: true, stats: false, labels: false, epgOn: true, favs: {}, pk: {} };
+    var d = { layout: '3x3', tiles: [], sel: 0, muted: false, bufSec: 4, keepSec: 0, transport: 'auto', fit: 'contain', failover: true, smallSd: true, vol: 1, shared: '', theme: 'system', workers: true, stats: false, labels: false, epgOn: true, favs: {}, pk: {} };
     var j = {};
     try { j = JSON.parse(localStorage.getItem(LS_KEY)) || {}; } catch (e) { j = {}; }
     Object.keys(d).forEach(function (k) { if (j[k] !== undefined && typeof j[k] === typeof d[k]) d[k] = j[k]; });
     if (!LAYOUTS[d.layout]) d.layout = '3x3';
+    if (d.theme !== 'light' && d.theme !== 'dark') d.theme = 'system';
     var tiles = Array.isArray(j.tiles) ? j.tiles : [];
     d.tiles = [];
     for (var i = 0; i < SLOTS; i++) {
@@ -2223,6 +2225,9 @@
     var fitSel = h('select', null, h('option', { value: 'contain', text: 'Fit (black bars, nothing cropped)' }), h('option', { value: 'cover', text: 'Fill (crops edges)' }));
     fitSel.value = S.fit;
     fitSel.addEventListener('change', function () { S.fit = fitSel.value; document.body.classList.toggle('fill', S.fit === 'cover'); saveSoon(); });
+    var themeSel = h('select', null, h('option', { value: 'system', text: 'System (follow the device)' }), h('option', { value: 'light', text: 'Light' }), h('option', { value: 'dark', text: 'Dark' }));
+    themeSel.value = S.theme;
+    themeSel.addEventListener('change', function () { S.theme = themeSel.value; applyTheme(); saveSoon(); });
     var shSel = h('select', null, h('option', { value: '', text: 'Off - each tile plays its own stream' }), h('option', { value: '480', text: '480p - lightest' }), h('option', { value: '720', text: '720p - recommended for a TV' }), h('option', { value: '1080', text: '1080p - needs a strong server' }));
     shSel.value = S.shared || '';
     shSel.addEventListener('change', function () { S.shared = shSel.value; shared.failed = false; shared.retry = 0; shared.sig = ''; sharedMessage(''); saveSoon(); sharedApply(); sharedSync(); });
@@ -2265,6 +2270,7 @@
         field('Keep up to (largest cushion kept while playing)', keepSel),
         memNote,
         field('Video', fitSel),
+        field('Theme (menus and dialogs; the video area stays black)', themeSel),
         field('Shared screen (for weak devices)', shSel),
         shNote, shInfo, shBtns,
         field('Stream delivery (applies when a stream reconnects)', trSel),
@@ -3176,7 +3182,13 @@
     boot();
   }
 
+  // Theme: 'system' leaves html[data-theme] off so the CSS follows the device's light/dark setting.
+  function applyTheme() {
+    if (S.theme === 'light' || S.theme === 'dark') document.documentElement.setAttribute('data-theme', S.theme);
+    else document.documentElement.removeAttribute('data-theme');
+  }
   function applyBodyPrefs() {
+    applyTheme();
     document.body.classList.toggle('fill', S.fit === 'cover');
     document.body.classList.toggle('stats', S.stats);
     document.body.classList.toggle('showlabels', S.labels);

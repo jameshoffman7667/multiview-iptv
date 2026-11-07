@@ -1,0 +1,56 @@
+# Image-based stack for the home server (the server's own copy lives in the homelab repo: stacks/multiview-iptv/compose.yaml).
+# Container port = host port: set PORT in .env to the number the port register assigns. Copy .env.example to .env first.
+# Change the tag to upgrade (see CHANGELOG.md). No `build:`; the server only pulls the image.
+services:
+  iptv-multiview:
+    image: mybadreligon/multiview-iptv:0.8.0
+    container_name: iptv-multiview
+    restart: unless-stopped
+    # Same check as the image: the app answers GET /healthz with {"status":"ok","version":"..."} (no login, no private data).
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:$${PORT}/healthz | grep -q '\"status\":\"ok\"' || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    ports:
+      - "${PORT:-1234}:${PORT:-1234}"
+    environment:
+      - TZ=America/Toronto
+      - PORT=${PORT:-1234}
+      # Recordings and downloads (kept until you delete them, no size cap): put this on a large, slow disk.
+      - REC_DIR=/recordings
+      # Rewind buffer (the last hour of every channel being watched, cleared at start): put this on a fast disk.
+      # About 2 GB per hour per 4-5 Mbps channel, so a 6-tile multiview needs about 12 GB.
+      - REWIND_DIR=/rewind
+      # - REWIND_MINUTES=60           # 0 switches rewind off, up to 240
+      # Set to 1 behind Caddy / Cloudflare so failed-login lockouts use the real client address, not the proxy's.
+      # - TRUST_PROXY=1
+      # Creates the first admin account when no accounts exist yet (or create it in the app).
+      # - ADMIN_USER=james
+      # - ADMIN_PASSWORD=change-this-password
+      # Relay memory per channel in MB. 32 holds about a minute of an HD channel; a viewer who joins a channel that is
+      # already running can start that far behind live. For 5 minute buffers use 256 and make sure the host has the RAM
+      # (9 channels x 256 MB).
+      # - RING_MB=32
+      # Shared screen and 480p tile transcoding (see README). auto = GPU if /dev/dri is passed in, else CPU.
+      # - COMPOSE_ENCODER=auto        # auto | vaapi | x264 | nvenc
+      # - VAAPI_DEVICE=/dev/dri/renderD128   # use renderD129 to pick the other GPU
+      # - COMPOSE_MAX=2               # shared screens running at once
+      # - TRANSCODE_MAX=2             # 480p tile transcodes running at once
+      # - TRANSCODE_ALLOW_CPU=1       # allow 480p tile transcoding on the CPU (off: GPU only)
+    # Only for a local capture card (Providers > Add capture card) and/or a GPU encoder. Uncomment what you need
+    # (list each device once), then restart the stack.
+    # devices:
+    #   - /dev/video0:/dev/video0
+    #   - /dev/snd:/dev/snd
+    #   - /dev/dri:/dev/dri
+    volumes:
+      - ${DATA_PATH:-iptv-data}:/data  # set DATA_PATH to a host folder (e.g. /srv/iptv) or leave for the named volume
+      - ${REC_PATH:-iptv-recordings}:/recordings  # set REC_PATH to a folder on a big disk (owned by uid 1000)
+      - ${REWIND_PATH:-iptv-rewind}:/rewind       # set REWIND_PATH to a folder on a fast disk (owned by uid 1000)
+
+volumes:
+  iptv-data:
+  iptv-recordings:
+  iptv-rewind:

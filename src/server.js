@@ -39,7 +39,23 @@ function createApp(options = {}) {
     try { users.create({ username: adminUser, password: adminPass, role: 'admin' }); } catch (e) { console.error('ADMIN_USER/ADMIN_PASSWORD ignored: ' + e.message); }
   }
   const streamsByUser = new Map(); // username -> Set<res>
-  const failures = new Map();      // ip -> { n, until }
+  const failures = new Map();      // "ip:<address>" or "user:<name>" -> { n, until, at }
+  const LOGIN_TRIES = 8;           // wrong passwords before that address / account is locked out
+  const LOGIN_LOCK_MS = 5 * 60 * 1000;
+  // Behind Caddy or a tunnel every request comes from the proxy, so the real address is only trusted from the
+  // proxy's header when TRUST_PROXY is set; otherwise one person's wrong passwords would lock everyone out.
+  const trustProxy = /^(1|true|yes|on)$/i.test(env('TRUST_PROXY', ''));
+  const clientIp = (req) => {
+    if (trustProxy) {
+      const h = String(req.headers['cf-connecting-ip'] || req.headers['x-forwarded-for'] || '').split(',')[0].trim();
+      if (h) return h.slice(0, 64);
+    }
+    return req.socket.remoteAddress || '?';
+  };
+  const pruneFailures = (now) => {
+    if (failures.size < 500) return;
+    for (const [k, f] of failures) if (f.until <= now && (f.at || 0) < now - LOGIN_LOCK_MS) failures.delete(k);
+  };
   // Rewind buffer: the newest REWIND_MINUTES of every open channel, on disk in REWIND_DIR (put it on a fast disk).
   const rewindMinutes = options.rewindMinutes !== undefined ? options.rewindMinutes : (Number.isFinite(Number(env('REWIND_MINUTES', 60))) ? Math.max(0, Math.min(240, Number(env('REWIND_MINUTES', 60)))) : 60);
   const rewindDir = options.rewindDir || env('REWIND_DIR', path.join(dataDir, 'rewind'));
@@ -374,18 +390,25 @@ function createApp(options = {}) {
       });
     }
     if (req.method === 'POST' && p === '/api/login') {
-      const ip = req.socket.remoteAddress || '?';
-      const f = failures.get(ip);
-      if (f && f.until > Date.now()) throw httpError(429, 'Too many wrong passwords. Try again in a few minutes.', 'too_many');
       const body = await readJson(req);
+      const keys = [`ip:${clientIp(req)}`, `user:${String(body.username || '').toLowerCase().slice(0, 80)}`];
+      const now = Date.now();
+      for (const k of keys) {
+        const f = failures.get(k);
+        if (f && f.until > now) throw httpError(429, 'Too many wrong passwords. Try again in a few minutes.', 'too_many');
+      }
       const u = users.verify(body.username, body.password);
       if (!u) {
-        const n = ((f && f.n) || 0) + 1;
-        failures.set(ip, { n, until: n >= 8 ? Date.now() + 5 * 60 * 1000 : 0 });
-        if (n >= 8) failures.set(ip, { n: 0, until: Date.now() + 5 * 60 * 1000 });
+        for (const k of keys) {
+          const f = failures.get(k);
+          const n = ((f && f.until <= now && f.n) || 0) + 1;
+          failures.set(k, n >= LOGIN_TRIES ? { n: 0, until: now + LOGIN_LOCK_MS } : { n, until: 0, at: now });
+        }
+        pruneFailures(now);
         throw httpError(401, 'Wrong username or password', 'bad_login');
       }
-      failures.delete(ip);
+      failures.delete(keys[0]);
+      failures.delete(keys[1]);
       setCookie(req, res, users.login(u), 30 * 24 * 3600);
       return sendJson(req, res, 200, { user: { username: u.username, role: u.role } });
     }
@@ -677,9 +700,21 @@ function createApp(options = {}) {
     });
   }
 
+  // The page only loads its own scripts (plus Google's Cast sender, which Chrome needs) and never lets another site frame it.
+  // Styles stay 'unsafe-inline' because the page sets style attributes on tiles; scripts do not.
+  const SECURITY_HEADERS = {
+    'Content-Security-Policy': "default-src 'self'; script-src 'self' https://www.gstatic.com; style-src 'self' 'unsafe-inline'; " +
+      "img-src 'self' data: blob: http: https:; media-src 'self' blob: http: https:; connect-src 'self' ws: wss: https://www.gstatic.com; " +
+      "font-src 'self' data:; worker-src 'self' blob:; frame-src 'self' https://www.gstatic.com; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
+    'X-Frame-Options': 'DENY',
+    'X-Content-Type-Options': 'nosniff',
+    'Referrer-Policy': 'no-referrer',
+    'Cross-Origin-Opener-Policy': 'same-origin-allow-popups',
+  };
   // {"status":"ok","version":"<image tag>"}: public, nothing private, no outside checks
   const healthBody = JSON.stringify({ status: 'ok', version: require('../package.json').version });
   const server = http.createServer(async (req, res) => {
+    for (const k of Object.keys(SECURITY_HEADERS)) res.setHeader(k, SECURITY_HEADERS[k]);
     try {
       const url = new URL(req.url, 'http://localhost');
       if (url.pathname === '/healthz') { res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }); return res.end(healthBody); }
@@ -755,5 +790,13 @@ if (require.main === module) {
     if (!app.users.enabled && !env('BASIC_AUTH', '')) console.log('Note: no logins yet, so anyone who can reach this port is an admin. Create the first account in the app (Users), or set ADMIN_USER and ADMIN_PASSWORD.');
     app.lists.preload();
   });
-  for (const sig of ['SIGTERM', 'SIGINT']) process.on(sig, () => { app.close(); setTimeout(() => process.exit(0), 200); });
+  let stopping = false;
+  for (const sig of ['SIGTERM', 'SIGINT']) process.on(sig, () => {
+    if (stopping) return;
+    stopping = true;
+    console.log(`Received ${sig}: stopping streams, jobs and connections`);
+    try { app.close(); } catch (e) { console.error('shutdown error: ' + e.message); }
+    setTimeout(() => { console.log('Stopped'); process.exit(0); }, 200);
+    setTimeout(() => process.exit(1), 8000).unref();
+  });
 }
