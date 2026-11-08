@@ -1,0 +1,72 @@
+<!doctype html><html><head><meta charset="utf-8"><title>mock</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{width:1600px;height:900px;background:#000;overflow:hidden;font-family:"Segoe UI",Roboto,Helvetica,Arial,sans-serif;color:#fff}
+#grid{position:absolute;left:0;top:0;width:1600px;height:866px;display:grid;gap:3px;background:#000}
+.tile{position:relative;overflow:hidden;background:#1d5c2b}
+/* a generic football broadcast: striped turf, yard lines, hash marks, a few blurred players, a scoreboard bug */
+.turf{position:absolute;inset:0;background:
+  repeating-linear-gradient(90deg,rgba(255,255,255,.06) 0 8%,rgba(0,0,0,.06) 8% 16%),
+  linear-gradient(180deg,#0f3d1d 0%,#1f6b32 38%,#2a8240 100%)}
+.stands{position:absolute;left:0;right:0;top:0;height:22%;background:
+  radial-gradient(circle at 20% 40%,#3a4a6a 0 3px,transparent 4px) 0 0/22px 18px,
+  linear-gradient(180deg,#141a2a,#26304a);opacity:.9}
+.line{position:absolute;top:22%;bottom:0;width:2px;background:rgba(255,255,255,.55);transform:skewX(-8deg)}
+.hash{position:absolute;left:0;right:0;height:3px;background:repeating-linear-gradient(90deg,rgba(255,255,255,.5) 0 6px,transparent 6px 40px)}
+.pl{position:absolute;width:3.2%;aspect-ratio:1/1.9;border-radius:40% 40% 30% 30%;filter:blur(1.2px)}
+.bug{position:absolute;left:2.2%;top:26%;display:flex;align-items:stretch;font-weight:700;font-size:var(--bug);border-radius:4px;overflow:hidden;box-shadow:0 2px 6px rgba(0,0,0,.5)}
+.bug div{padding:.25em .6em;background:#10162b}.bug .t1{background:#7a1c1c}.bug .t2{background:#0b4a7a}.bug .q{background:#e8e8e8;color:#111}
+.ch{position:absolute;right:2%;top:25%;font-size:calc(var(--bug)*.8);font-weight:600;background:rgba(0,0,0,.55);padding:.2em .6em;border-radius:3px}
+/* ticker */
+#ticker{position:absolute;left:0;right:0;bottom:0;height:34px;background:rgba(10,12,16,.94);border-top:1px solid #2b2f39;display:flex;align-items:center;white-space:nowrap;overflow:hidden;font-size:15px;font-weight:600}
+#ticker .tag{flex:none;height:100%;display:flex;align-items:center;padding:0 12px;background:#14161b;border-right:1px solid #2b2f39;color:#9aa1b2;letter-spacing:.08em;font-size:12px}
+#ticker .view{flex:1;overflow:hidden;height:100%;display:flex;align-items:center}#ticker .run{display:flex;align-items:center;gap:34px;padding-left:24px;transform:translateX(-120px)}
+.lg{display:flex;align-items:center;gap:8px}.lg b{font-weight:700}.me{color:#35e07a}.op{color:#ff5a5a}.dim{color:#9aa1b2;font-weight:500}.sep{color:#3a4050}
+.pp{font-weight:500;color:#cfd4e0}.pp i{font-style:normal;color:#35e07a}.pp u{text-decoration:none;color:#ff5a5a}
+.n-g{color:#35e07a}.n-a{color:#ffc447}.n-r{color:#ff5a5a}
+/* popup: no background, no outline - only a soft shadow so it stays readable on bright video */
+#pop{position:absolute;top:10px;left:50%;transform:translateX(-50%) scale(var(--ps,1));transform-origin:top center;width:640px;display:flex;flex-direction:column;align-items:center;
+  filter:drop-shadow(0 2px 3px rgba(0,0,0,.85)) drop-shadow(0 0 10px rgba(0,0,0,.55))}
+#pop .top{display:flex;align-items:center;justify-content:center;gap:20px;width:100%}
+#pop .side{flex:1;font-size:62px;font-weight:800;letter-spacing:-.02em;font-variant-numeric:tabular-nums}
+#pop .side.l{text-align:right;color:#35e07a}#pop .side.r{text-align:left;color:#ff4d4d}
+#pop .ph{width:150px;height:150px;flex:none}
+#pop .nm{margin-top:-2px;font-size:20px;font-weight:700;letter-spacing:.02em}#pop .nm span{color:#cfd4e0;font-weight:500}
+#pop .rows{margin-top:8px;width:100%;display:flex;flex-direction:column;gap:3px}
+#pop .row{display:grid;grid-template-columns:1fr auto 1fr;gap:16px;align-items:baseline;font-size:20px;font-weight:700;font-variant-numeric:tabular-nums}
+#pop .row .a{text-align:right;color:#35e07a}#pop .row .c{text-align:center;min-width:250px}#pop .row .b{text-align:left;color:#ff4d4d}
+#pop .row .c small{display:block;font-size:11px;font-weight:600;color:#c9cedb;margin-top:-2px;letter-spacing:.06em;text-transform:uppercase}
+#cap{position:absolute;right:10px;bottom:40px;font-size:12px;color:#fff;background:rgba(0,0,0,.55);padding:3px 8px;border-radius:3px;z-index:9}
+</style></head><body>
+<div id="grid"></div>
+<div id="pop"></div>
+<div id="ticker"></div>
+<div id="cap">MOCK-UP · sample data, not live scores</div>
+<script>
+const q=new URLSearchParams(location.search);const mode=q.get('m')||'single';
+const cfg={single:[1,1,1],quad:[2,2,4],nine:[3,3,9]}[mode];
+document.getElementById('pop').style.setProperty('--ps',{single:1,quad:.85,nine:.7}[mode]);const g=document.getElementById('grid');g.style.gridTemplateColumns=`repeat(${cfg[0]},1fr)`;g.style.gridTemplateRows=`repeat(${cfg[1]},1fr)`;
+const games=[['DET','KC','Q2 8:41','17','14'],['BUF','MIA','Q3 11:02','21','13'],['SF','SEA','Q1 3:15','7','3'],['DAL','PHI','Q4 6:20','24','27'],['HOU','JAX','Q2 1:48','10','10'],['NYG','WAS','Q3 4:33','6','20'],['CIN','BAL','Q1 9:57','0','7'],['GB','MIN','Q4 2:10','28','24'],['LAR','ARI','Q2 5:05','14','3']];
+const names=['CBS 4','FOX 6','NBC 2','ESPN','ABC 7','CTV','TSN 1','FOX 2','CBS 9'];
+for(let i=0;i<cfg[2];i++){
+ const t=document.createElement('div');t.className='tile';const gm=games[i];
+ const big=cfg[2]===1?1:(cfg[2]===4?.62:.42);t.style.setProperty('--bug',(22*big)+'px');
+ let pl='';const cols=['#e8e8e8','#b01e2c','#e8e8e8','#0b5aa8','#0b5aa8','#e8e8e8','#b01e2c','#0b5aa8'];
+ for(let k=0;k<9;k++){pl+=`<div class="pl" style="left:${28+((k*37+i*11)%55)}%;top:${52+((k*23+i*7)%32)}%;background:${cols[(k+i)%8]};transform:scale(${.9+(k%3)*.18})"></div>`}
+ let lines='';for(let k=0;k<7;k++)lines+=`<div class="line" style="left:${8+k*14}%"></div>`;
+ t.innerHTML=`<div class="turf"></div><div class="stands"></div>${lines}<div class="hash" style="top:58%"></div><div class="hash" style="top:84%"></div>${pl}
+ <div class="bug"><div class="t1">${gm[0]}</div><div>${gm[3]}</div><div class="t2">${gm[1]}</div><div>${gm[4]}</div><div class="q">${gm[2]}</div></div><div class="ch">${names[i]}</div>`;
+ g.appendChild(t)}
+document.getElementById('ticker').innerHTML=`<div class="tag">FANTASY</div><div class="view"><div class="run">
+<div class="lg"><b class="n-g">The Forgotten Titans</b><span class="me">The All Days 96.4</span><span class="dim">–</span><span class="op">78.2 Bills Mafia</span><span class="pp"><i>Chase 24.3</i> · <i>LaPorta 13.3</i> · <u>Henry 17.9</u></span></div><span class="sep">|</span>
+<div class="lg"><b class="n-a">The NextFL</b><span class="me">Team Mybadreligon 71.0</span><span class="dim">–</span><span class="op">74.6 Slim Pickens</span><span class="pp"><i>Hurts 22.8</i> · <u>Kelce 11.2</u></span></div><span class="sep">|</span>
+<div class="lg"><b class="n-r">IRONMAN FF</b><span class="me">Mybadreligon 48.5</span><span class="dim">–</span><span class="op">83.9 Gridiron Gang</span><span class="pp"><i>Barkley 9.4</i> · <u>Jefferson 28.1</u></span></div><span class="sep">|</span>
+<div class="lg"><b class="n-g">The Human League</b><span class="me">Mybadreligon 102.6</span><span class="dim">–</span><span class="op">65.3 Waiver Wolves</span><span class="pp"><i>Allen 31.0</i> · <i>Nacua 19.6</i></span></div><span class="sep">|</span>
+<div class="lg"><b class="n-g">Guardians of the Gridiron</b><span class="me">Mybadreligon 88.1</span><span class="dim">–</span><span class="op">80.2 Dynasty Dads</span></div></div></div>`;
+const rows=[['n-g','The Forgotten Titans','102.4','88.7','Q2 8:41'],['n-a','The Human League','71.0','66.2',''],['n-r','IRONMAN FF','48.5','83.9',''],['n-g','Guardians of the Gridiron','95.6','90.1','']];
+const SIL=`<svg class="ph" viewBox="0 0 150 150"><defs><linearGradient id="sg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#e9edf5"/><stop offset="1" stop-color="#9aa6bd"/></linearGradient></defs>
+<ellipse cx="75" cy="52" rx="29" ry="33" fill="url(#sg)"/><path d="M14 150c2-34 20-52 44-56l17 12 17-12c24 4 42 22 44 56z" fill="url(#sg)"/><path d="M44 46c0-24 14-36 31-36s31 12 31 36" fill="none" stroke="#5c6a8a" stroke-width="7" stroke-linecap="round"/></svg>`;
+document.getElementById('pop').innerHTML=`<div class="top"><div class="side l">+6.4</div>${SIL}<div class="side r">+6.4</div></div>
+<div class="nm">J. Chase <span>WR · CIN · 6.4 pts TD</span></div>
+<div class="rows">${rows.map((r,i)=>`<div class="row"><div class="a">${r[2]}</div><div class="c ${r[0]}">${r[1]}</div><div class="b">${r[3]}</div></div>`).join('')}</div>`;
+</script></body></html>

@@ -141,3 +141,13 @@ Requested: 2026-11-08 (James: "The app seems to be missing the full screen butto
 Type: minor (new button)
 Notes / questions: fullscreen today is only in Settings > Fullscreen and the F key; the controls have no button for it (the old one is gone since the controls moved inside each screen). Proposal: a fullscreen / exit-fullscreen button in the page-level strip at the top right, next to cast and the mini player, so it is always at the page edge whichever screen the controls are on. It is hidden where the browser has no fullscreen (iPhone Safari) and in the Android app, which is already full screen. Decided 2026-11-08 (James: "Top right"): the page-level strip at the top right, next to cast and the mini player.
 Status: Pending (ready to build).
+
+### P-25 - Fantasy ticker along the bottom (Fantasy Manager data)
+Requested: 2026-11-08 (James: "a fantasy football ticker plugin that connects to fantasy manager and scrolls across the bottom of the app showing matchup scores and player scoring for each matchup across all leagues").
+Type: minor (new feature, new endpoints, new env FANTASY_URL / FANTASY_TOKEN)   Status: Blocked (waiting on the Fantasy Manager API, see docs/fantasy-manager-api-handoff.md)
+Notes / questions: scope in docs/fantasy-ticker-scope.md and mock-ups in docs/img/. Fantasy Manager is James's own Docker app, so the data comes from its API, not Sleeper. Needs: the API from that app, its address and a read-only token, the league-name colour rule, who may see it (admins only suggested).
+
+### P-26 - Fantasy score pop-ups (headshot, one at a time)
+Requested: 2026-11-08 (James: pop-up when players score: headshot top centre, green points left, red points right, league rows with my total green / opponent red, league name coloured vs projection, one at a time for 5 s, queue, rolling numbers, slide down/up, delay and minimum-points options).
+Type: minor   Status: Blocked (needs the same API, SSE score events, headshots)
+Notes / questions: full spec in docs/fantasy-ticker-scope.md section 5; mock-ups for single, quad and nine screens in docs/img/. Provider stat lag means pop-ups cannot beat the real play; the Delay option only adds time. Open questions listed in the scope doc (colour rule, who sees it, default threshold and delay, bench players, negative changes).
