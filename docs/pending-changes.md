@@ -144,7 +144,7 @@ Status: Pending (ready to build).
 
 ### P-25 - Fantasy ticker along the bottom (Fantasy Manager data)
 Requested: 2026-11-08 (James: scrolling ticker of matchup scores and player scoring for every league, from Fantasy Manager).
-Type: minor (new feature, new endpoints, new env FANTASY_URL / FANTASY_TOKEN)   Status: Blocked (waiting on the Fantasy Manager API and its doc, see docs/fantasy-manager-api-handoff.md)
+Type: minor (new feature, new endpoints, new env FANTASY_URL / FANTASY_TOKEN)   Status: Blocked (Fantasy Manager 4.17.0 API received, saved as docs/fantasy-manager-api.md; waiting on slot, kickoffAt and statLine fields, see docs/fantasy-manager-followup.md)
 Decisions 2026-11-08: ticker is admins only; starters only for both teams.
 Ticker design (James, 2026-11-08), repeated per league, in this order:
 1. Header block scrolls in: league name, then my team name + my score (both coloured vs projection), then opponent score + opponent team name (white). Team names sit under the corresponding score (my name left, opponent name right).
@@ -154,10 +154,11 @@ Ticker design (James, 2026-11-08), repeated per league, in this order:
    - Game in progress: name, total points, counting stats in brackets.
    - Game finished: score and final stats in light grey.
 4. Score-up effect: when a player comes on screen and has scored since the last time his name was on screen for that side of the matchup (mine vs opponent, across all leagues), his total turns green (mine) or red (opponent) with a glow and rolls up to the new score, and the team total rolls up with it.
+Fantasy Manager 4.17.0 gives: summary, SSE score events, headshots, health, colour rule (green #3FAE58, amber #D9A521, red #D6533B; league colour is green/amber/red by expected final vs opponent, 5% of remaining). Missing for this design: roster slot + order, kickoff time, counting-stat line. Address is the Fantasy Manager client port on the LAN; token created in its Account > Multiview access (given to Claude Code, never in the repo).
 Open: league-name colour (assumed neutral/white now that the team name and score carry the vs-projection colour; confirm), colour rule from Fantasy Manager, address and read-only token.
 
 ### P-26 - Fantasy score pop-ups (headshot, one at a time)
 Requested: 2026-11-08 (pop-up when players score: headshot top centre, green points left, red points right, league rows with my total green / opponent red, league name coloured vs projection, one at a time for 5 s, queue, rolling numbers, slide down/up, delay and minimum-points options).
-Type: minor   Status: Blocked (needs the same API, SSE score events, headshots)
+Type: minor   Status: Pending (the 4.17.0 API already has everything pop-ups need: score events with before/after totals, headshots, league colour; can be built before the ticker)
 Decisions 2026-11-08: pop-ups are admins only; default minimum is 3 points so only big plays show (option stays adjustable, default delay 0); starters only; negative changes never pop up (the totals still update).
 Notes: spec in docs/fantasy-ticker-scope.md section 5; provider stat lag means pop-ups cannot beat the real play, the Delay option only adds time.
