@@ -40,7 +40,7 @@ function createApp(options = {}) {
     try { users.create({ username: adminUser, password: adminPass, role: 'admin' }); } catch (e) { console.error('ADMIN_USER/ADMIN_PASSWORD ignored: ' + e.message); }
   }
   // Fantasy Manager (P-26): optional, read-only link for score pop-ups; admins only
-  const fantasy = new Fantasy({ url: options.fantasyUrl !== undefined ? options.fantasyUrl : env('FANTASY_URL', ''), token: options.fantasyToken !== undefined ? options.fantasyToken : env('FANTASY_TOKEN', ''), reconnectMs: options.fantasyReconnectMs });
+  const fantasy = new Fantasy({ url: options.fantasyUrl !== undefined ? options.fantasyUrl : env('FANTASY_URL', ''), token: options.fantasyToken !== undefined ? options.fantasyToken : env('FANTASY_TOKEN', ''), reconnectMs: options.fantasyReconnectMs, summaryMs: options.fantasySummaryMs });
   const streamsByUser = new Map(); // username -> Set<res>
   const failures = new Map();      // "ip:<address>" or "user:<name>" -> { n, until, at }
   const LOGIN_TRIES = 8;           // wrong passwords before that address / account is locked out
@@ -589,6 +589,12 @@ function createApp(options = {}) {
     if (p === '/api/fantasy/status' && req.method === 'GET') {
       needAdmin(me);
       return sendJson(req, res, 200, fantasy.status());
+    }
+    if (p === '/api/fantasy/summary' && req.method === 'GET') {
+      needAdmin(me);
+      if (!fantasy.enabled) throw httpError(404, 'Fantasy Manager is not set up (FANTASY_URL and FANTASY_TOKEN)', 'fantasy_off');
+      const sum = fantasy.summary;
+      return sendJson(req, res, 200, sum ? Object.assign({}, sum, { ageSeconds: Math.round((Date.now() - fantasy.summaryAt) / 1000) }) : { leagues: [], ageSeconds: null });
     }
     if (p === '/api/fantasy/stream' && req.method === 'GET') {
       needAdmin(me);

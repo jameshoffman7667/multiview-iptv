@@ -381,3 +381,37 @@ html.nativeplay, html.nativeplay body, html.nativeplay .grid { background: trans
 .fp-nm span { color: #cfd4e0; font-weight: 500; }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 .fpset { margin: 6px 0 10px; }
+
+/* ---------- fantasy ticker (P-25) ---------- */
+:root { --tk-h: 56px; }
+.ftick { position: fixed; left: 0; right: 0; bottom: 0; height: var(--tk-h); z-index: 60; background: #0b0e14; border-top: 1px solid #262c3a; color: #fff; overflow: hidden; }
+.ftick[hidden] { display: none; }
+body.ftick-below .grid { bottom: var(--tk-h); }
+body.ftick-below #shared { bottom: var(--tk-h); height: auto; }
+.ft-view { position: absolute; inset: 0; overflow: hidden; }
+.ft-tape { display: flex; width: max-content; height: 100%; }
+.ft-copy { display: flex; height: 100%; flex: none; }
+.ft-seg { display: flex; height: 100%; flex: none; position: relative; align-items: stretch; }
+.ft-name, .ft-score { position: sticky; z-index: 3; background: #0b0e14; display: flex; align-items: center; flex: none; height: 100%; }
+.ft-name { left: 0; padding: 0 16px 0 14px; font-size: 18px; font-weight: 800; letter-spacing: .02em; white-space: nowrap; color: #fff; z-index: 4; }
+.ft-score { padding: 0 22px 0 4px; gap: 12px; font-variant-numeric: tabular-nums; box-shadow: 8px 0 8px -4px #0b0e14; }
+.ft-side { position: relative; min-width: 96px; text-align: center; height: 100%; display: flex; justify-content: center; }
+.ft-tot { font-size: 24px; font-weight: 800; line-height: 34px; }
+.ft-op { color: #fff; }
+.ft-tn { position: absolute; left: 50%; bottom: 4px; transform: translateX(-50%); font-size: 12px; max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; opacity: .9; transition: opacity .25s; }
+.ft-seg.pinned .ft-tn { opacity: 0; }
+.ft-dash { font-size: 22px; color: #8b93a7; align-self: flex-start; line-height: 34px; }
+.ft-items { display: flex; align-items: stretch; height: 100%; }
+.ft-div { align-self: center; margin: 0 14px 0 8px; padding: 2px 10px; border: 1px solid #2c3446; border-radius: 12px; font-size: 12px; font-weight: 700; white-space: nowrap; color: #c3c9d8; }
+.ft-it { display: flex; flex-direction: column; justify-content: center; padding: 0 18px; border-left: 1px solid #1d2332; white-space: nowrap; }
+.ft-l1 { display: flex; align-items: baseline; gap: 8px; font-size: 17px; font-weight: 700; }
+.ft-pos { font-size: 11px; color: #8b93a7; font-weight: 600; }
+.ft-pts { font-variant-numeric: tabular-nums; min-width: 2.6em; text-align: right; transition: color .2s, text-shadow .3s; }
+.ft-l2 { font-size: 12px; color: #aab2c5; font-variant-numeric: tabular-nums; }
+.ft-it.final .ft-nm, .ft-it.final .ft-pts { color: #aeb4c2; font-weight: 600; }
+.ft-it.final .ft-l2 { color: #8a90a0; }
+.ft-it.pre .ft-l2 { color: #9fb4d8; }
+.ft-pts.up-mine { color: #3FAE58 !important; text-shadow: 0 0 10px #3FAE58, 0 0 18px rgba(63,174,88,.7); }
+.ft-pts.up-opp { color: #D6533B !important; text-shadow: 0 0 10px #D6533B, 0 0 18px rgba(214,83,59,.7); }
+@media (max-width: 700px) { :root { --tk-h: 48px; } .ft-name { display: block; max-width: 34vw; overflow: hidden; text-overflow: ellipsis; padding: 0 8px; font-size: 13px; line-height: var(--tk-h); }
+  .ft-score { gap: 4px; padding: 0 8px 0 2px; } .ft-side { min-width: 56px; } .ft-tot { font-size: 18px; } .ft-tn { font-size: 10px; max-width: 80px; } .ft-dash { font-size: 16px; } .ft-l1 { font-size: 14px; } .ft-l2 { font-size: 11px; } .ft-it { padding: 0 12px; } }

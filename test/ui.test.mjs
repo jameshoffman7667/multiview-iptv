@@ -1757,6 +1757,171 @@ describe('player overlay, pull-out menu, recordings, PWA', () => {
     await ctx.close();
   });
 
+  const tkPl = (id, name, pos, side, order, pts, st, extra = {}) => Object.assign({ playerId: id, name, pos, nflTeam: 'CIN', side, starter: true, slot: pos, slotOrder: order, kickoffAt: '2026-11-08T18:00:00Z', points: pts, projected: 10, gameStatus: st, gameClock: null, stats: null }, extra);
+  const tkSum = (mod) => {
+    const s = { leagues: [
+      { leagueId: 'a', name: 'The Forgotten Titans', status: 'live', colour: 'green', mine: { name: 'The All Days', points: 96.4, projected: 130 }, opp: { name: 'Bills Mafia', points: 78.2, projected: 120 }, players: [
+        tkPl('2', 'Runner Mine', 'RB', 'mine', 2, 11.2, 'live', { stats: { rushAtt: 12, rushYds: 61, rushTd: 1, rec: 2, recYds: 14 } }),
+        tkPl('1', 'Quarterback Mine', 'QB', 'mine', 1, 18.4, 'final', { stats: { passCmp: 21, passAtt: 31, passYds: 250, passTd: 2, int: 1 } }),
+        tkPl('5', 'Later Guy', 'WR', 'mine', 3, 0, 'pre', { kickoffAt: '2026-11-08T21:25:00Z' }),
+        tkPl('7', 'Opp Runner', 'RB', 'opp', 2, 4.1, 'live', { stats: { rushAtt: 5, rushYds: 21, rec: 1, recYds: 9 } }),
+        tkPl('6', 'Opp Quarterback', 'QB', 'opp', 1, 9.9, 'final', { stats: { passCmp: 10, passAtt: 20, passYds: 120 } })] },
+      { leagueId: 'b', name: 'IRONMAN FF', status: 'live', colour: 'red', mine: { name: 'Iron Team', points: 48.5, projected: 90 }, opp: { name: 'Steel Team', points: 83.9, projected: 120 }, players: [
+        tkPl('2', 'Runner Mine', 'RB', 'mine', 1, 11.2, 'live', { stats: { rushAtt: 12, rushYds: 61, rushTd: 1 } }),
+        tkPl('8', 'Steel Wide', 'WR', 'opp', 1, 14.3, 'live', { stats: { rec: 5, recYds: 80 } })] }] };
+    if (mod) mod(s);
+    return s;
+  };
+  const tkOpen = async (init = '') => {
+    const r = await open(two, { init: `window.__ftSpeed = 0; window.__ftTiming = { roll: 150, glow: 600 }; window.__ftPollMs = 3600000;` + init });
+    await r.page.waitForFunction(() => window.__players.length === 2);
+    await r.page.waitForFunction(() => window.__mv.FP.status !== null);   // the page's own status call has answered (not set up), so it cannot overwrite the next line
+    await r.page.evaluate(() => { window.__mv.FP.avail = true; });
+    return r;
+  };
+  const tkSet = (page, sum) => page.evaluate((x) => window.__mv.ftSet(x), sum);
+  const tkAt = async (page, x) => { await page.evaluate((v) => { window.__mv.FT.x = v; }, x); await page.waitForTimeout(60); await page.evaluate(() => window.__mv.ftCheck()); };
+
+  test('ticker: bar below the video, league header with colours, lineups in roster-slot order, pre/live/final formats', async () => {
+    const { ctx, page, errors } = await tkOpen();
+    await tkSet(page, tkSum());
+    await page.waitForSelector('#ftick:not([hidden])');
+    const d = await page.evaluate(() => {
+      const seg = document.querySelector('.ft-seg');
+      const col = (e) => getComputedStyle(e).color;
+      const bar = document.getElementById('ftick').getBoundingClientRect();
+      const grid = document.getElementById('grid').getBoundingClientRect();
+      const its = [...seg.querySelectorAll('.ft-it')];
+      return { name: seg.querySelector('.ft-name').textContent, me: seg.querySelector('.ft-me').textContent, op: seg.querySelector('.ft-op').textContent, tn: [...seg.querySelectorAll('.ft-tn')].map((e) => e.textContent),
+        meCol: col(seg.querySelector('.ft-me')), opCol: col(seg.querySelector('.ft-op')), nameCol: col(seg.querySelector('.ft-name')),
+        divs: [...seg.querySelectorAll('.ft-div')].map((e) => e.textContent), order: its.map((e) => e.querySelector('.ft-nm').textContent),
+        l2: its.map((e) => e.querySelector('.ft-l2').textContent), pts: its.map((e) => e.querySelector('.ft-pts').textContent + '|' + e.querySelector('.ft-pts').style.display),
+        finalCol: col(its[0].querySelector('.ft-nm')), liveCol: col(its[1].querySelector('.ft-nm')), barH: bar.height, barBottom: bar.bottom, vh: innerHeight, gridBottom: grid.bottom, barBg: getComputedStyle(document.getElementById('ftick')).backgroundColor,
+        copies: document.querySelectorAll('.ft-copy').length, leagues: seg.parentNode.querySelectorAll('.ft-name').length };
+    });
+    assert.equal(d.name, 'The Forgotten Titans');
+    assert.equal(d.me, '96.4'); assert.equal(d.op, '78.2');
+    assert.deepEqual(d.tn, ['The All Days', 'Bills Mafia']);
+    assert.equal(d.meCol, 'rgb(63, 174, 88)', 'my score and team name take the league colour (green)');
+    assert.equal(d.opCol, 'rgb(255, 255, 255)');
+    assert.equal(d.nameCol, 'rgb(255, 255, 255)');
+    assert.deepEqual(d.order, ['Quarterback Mine', 'Runner Mine', 'Later Guy', 'Opp Quarterback', 'Opp Runner'], 'mine then opponent, each in roster-slot order');
+    assert.deepEqual(d.divs, ['The All Days', 'vs Bills Mafia']);
+    assert.equal(d.l2[0], '(21/31, 250 yds, 2 TD, 1 INT)', 'final stats');
+    assert.equal(d.l2[1], '(12 car, 61 yds, 1 TD, 2 rec, 14 yds)', 'live stats in brackets');
+    assert.match(d.l2[2], /\d/, 'a game time for a player who has not played');
+    assert.doesNotMatch(d.l2[2], /\(/);
+    assert.equal(d.pts[0].split('|')[0], '18.4'); assert.equal(d.pts[1].split('|')[0], '11.2'); assert.match(d.pts[2], /none$/, 'no points shown before the game');
+    assert.notEqual(d.finalCol, d.liveCol, 'final players are lighter grey');
+    assert.match(d.finalCol, /rgb\((1[5-9]\d|2\d\d)/);
+    assert.equal(d.barBg, 'rgb(11, 14, 20)', 'opaque bar');
+    assert.ok(Math.abs(d.barH - 57) <= 2 && Math.abs(d.barBottom - d.vh) <= 1);
+    assert.ok(d.gridBottom <= d.vh - 54, 'below the video: the grid is shorter so nothing is covered, got ' + d.gridBottom);
+    assert.equal(d.leagues, 2);
+    assert.ok(d.copies >= 2);
+    assert.deepEqual(errors, []);
+    await ctx.close();
+  });
+
+  test('ticker: overlap keeps the grid full height; setting is saved; can be switched off', async () => {
+    const { ctx, page, errors } = await tkOpen();
+    await tkSet(page, tkSum());
+    await page.waitForSelector('#ftick:not([hidden])');
+    await page.evaluate(() => document.getElementById('sm-settings').click());
+    await page.waitForSelector('#ft-pos');
+    assert.equal(await page.evaluate(() => document.getElementById('ft-pos').value), 'below', 'default is below the video');
+    await page.selectOption('#ft-pos', 'overlap');
+    assert.equal(await page.evaluate(() => window.__mv.S.fpos), 'overlap');
+    await page.waitForTimeout(100);
+    const o = await page.evaluate(() => ({ grid: document.getElementById('grid').getBoundingClientRect().bottom, vh: innerHeight, below: document.body.classList.contains('ftick-below'), bar: !document.getElementById('ftick').hidden }));
+    assert.equal(o.below, false); assert.ok(o.bar); assert.ok(Math.abs(o.grid - o.vh) <= 1);
+    await page.selectOption('#ft-speed', 'fast');
+    assert.equal(await page.evaluate(() => window.__mv.S.fspeed), 'fast');
+    await page.click('#ft-on');
+    await page.waitForTimeout(100);
+    assert.equal(await page.evaluate(() => document.getElementById('ftick').hidden), true, 'switched off');
+    assert.equal(await page.evaluate(() => Math.abs(document.getElementById('grid').getBoundingClientRect().bottom - innerHeight) <= 1), true);
+    assert.deepEqual(errors, []);
+    await ctx.close();
+  });
+
+  test('ticker: league name and score stall at the left, team names drop away, the next league pushes them off', async () => {
+    const { ctx, page, errors } = await tkOpen();
+    await tkSet(page, tkSum());
+    await page.waitForSelector('#ftick:not([hidden])');
+    const g = await page.evaluate(() => { const m = window.__mv.FT.model; const s = m.leagues[0].segs[0]; const t = m.leagues[1].segs[0]; return { x: s.x, w: s.w, pinW: s.pinW, nx: t.x, nw: s.nw }; });
+    // before it reaches the edge: nothing pinned, team names visible
+    await tkAt(page, Math.max(0, g.x - 5));
+    assert.equal(await page.evaluate(() => document.querySelector('.ft-seg').classList.contains('pinned')), false);
+    // well into the league: name at the left edge, score right of it, team names gone, items going behind the block
+    await tkAt(page, g.x + 400);
+    const p = await page.evaluate(() => { const seg = document.querySelector('.ft-seg'); const v = document.getElementById('ft-view').getBoundingClientRect(); const n = seg.querySelector('.ft-name').getBoundingClientRect(); const sc = seg.querySelector('.ft-score').getBoundingClientRect(); const tn = getComputedStyle(seg.querySelector('.ft-tn')).opacity;
+      const z = (e) => Number(getComputedStyle(e).zIndex); const it = seg.querySelector('.ft-it');
+      return { pinned: seg.classList.contains('pinned'), nameLeft: Math.round(n.left - v.left), scoreLeft: Math.round(sc.left - n.right), tn, zPin: z(seg.querySelector('.ft-score')), zIt: z(it) || 0 }; });
+    assert.equal(p.pinned, true);
+    assert.equal(p.nameLeft, 0, 'league name sits at the left edge');
+    assert.ok(Math.abs(p.scoreLeft) <= 1, 'score sits right beside the name');
+    await page.waitForTimeout(400);
+    assert.equal(await page.evaluate(() => getComputedStyle(document.querySelector('.ft-seg .ft-tn')).opacity), '0', 'team names fall off');
+    assert.ok(p.zPin > p.zIt, 'the lineup slides behind the pinned block');
+    // the next league's name arrives and pushes the block off the left edge
+    await tkAt(page, g.nx - 60);
+    const q = await page.evaluate(() => { const v = document.getElementById('ft-view').getBoundingClientRect(); const n = document.querySelector('.ft-seg .ft-name').getBoundingClientRect(); const n2 = document.querySelectorAll('.ft-seg')[1].querySelector('.ft-name').getBoundingClientRect(); return { left: Math.round(n.left - v.left), right: Math.round(n.right - v.left), n2: Math.round(n2.left - v.left) }; });
+    assert.ok(q.left < 0, 'first league name is being pushed off the left, at ' + q.left);
+    assert.ok(q.n2 > 0 && q.n2 < 200, 'second league name arrives from the right: ' + q.n2);
+    await tkAt(page, g.nx + 300);
+    assert.equal(await page.evaluate(() => document.querySelectorAll('.ft-seg')[1].classList.contains('pinned')), true);
+    assert.equal(await page.evaluate(() => document.querySelector('.ft-seg').classList.contains('pinned')), false);
+    // the tape loops: it wraps by one copy
+    const wrap = await page.evaluate(() => { const F = window.__mv.FT; F.x = F.copyW - 1; return F.copyW; });
+    assert.ok(wrap > 800);
+    assert.deepEqual(errors, []);
+    await ctx.close();
+  });
+
+  test('ticker: a player who scored since last on screen glows (green mine, red opponent) and rolls up with the team total; first sight is only a baseline', async () => {
+    const { ctx, page, errors } = await tkOpen();
+    await tkSet(page, tkSum());
+    await page.waitForSelector('#ftick:not([hidden])');
+    const g = await page.evaluate(() => { const s = window.__mv.FT.model.leagues[0].segs[0]; return { x: s.x, pinW: s.pinW }; });
+    // the lineup comes on screen for the first time: baseline, no glow
+    await tkAt(page, g.x + 120);
+    const glow = () => page.evaluate(() => ({ mine: document.querySelectorAll('.up-mine').length, opp: document.querySelectorAll('.up-opp').length }));
+    assert.deepEqual(await glow(), { mine: 0, opp: 0 }, 'first time on screen is a baseline');
+    // scrolled off to the far side of the tape (league b), then new scores arrive for both sides
+    const nx = await page.evaluate(() => window.__mv.FT.model.leagues[1].segs[0].x);
+    await tkAt(page, nx + 400);
+    await tkSet(page, tkSum((s) => { s.leagues[0].players[0].points = 15.2; s.leagues[0].mine.points = 100.4; s.leagues[0].players[3].points = 8.1; s.leagues[0].opp.points = 82.2; }));
+    // league a is off screen: its total waits and nothing glows yet
+    assert.deepEqual(await glow(), { mine: 0, opp: 0 });
+    const shown = await page.evaluate(() => document.querySelector('.ft-seg .ft-me').textContent);
+    assert.equal(shown, '96.4', 'the total waits for the player to come on screen');
+    // back to league a: both players are on screen again, scored since last time
+    await tkAt(page, g.x + 120);
+    await page.waitForFunction(() => document.querySelectorAll('.up-mine').length > 0 && document.querySelectorAll('.up-opp').length > 0, null, { timeout: 3000 });
+    await page.waitForFunction(() => { const e = document.querySelector('.up-mine'); return !e || getComputedStyle(e).color === 'rgb(63, 174, 88)'; }, null, { timeout: 2000 }).catch(() => {});
+    const col = await page.evaluate(() => ({ mine: getComputedStyle(document.querySelector('.up-mine')).color, opp: getComputedStyle(document.querySelector('.up-opp')).color, glow: getComputedStyle(document.querySelector('.up-mine')).textShadow }));
+    assert.equal(col.mine, 'rgb(63, 174, 88)'); assert.equal(col.opp, 'rgb(214, 83, 59)'); assert.notEqual(col.glow, 'none');
+    await page.waitForFunction(() => document.querySelector('.ft-seg .ft-me').textContent === '100.4' && document.querySelector('.ft-seg .ft-op').textContent === '82.2', null, { timeout: 3000 });
+    const pts = await page.evaluate(() => [...document.querySelector('.ft-seg').querySelectorAll('.ft-it')].map((e) => e.querySelector('.ft-pts').textContent));
+    assert.ok(pts.includes('15.2') && pts.includes('8.1'), 'player numbers rolled up: ' + pts.join(','));
+    // the glow fades afterwards
+    await page.waitForFunction(() => document.querySelectorAll('.up-mine,.up-opp').length === 0, null, { timeout: 3000 });
+    // same player in league b (same id, same side) did not change: no glow there
+    assert.deepEqual(await glow(), { mine: 0, opp: 0 });
+    assert.deepEqual(errors, []);
+    await ctx.close();
+  });
+
+  test('ticker: not shown to viewers or when the server link is off', async () => {
+    const { ctx, page, errors } = await open(two, { init: `window.__ftSpeed = 0;` });
+    await page.waitForFunction(() => window.__players.length === 2);
+    await page.evaluate((s) => window.__mv.ftSet(s), tkSum());
+    assert.equal(await page.evaluate(() => { const b = document.getElementById('ftick'); return !b || b.hidden; }), true, 'FP.avail is false when Fantasy Manager is not set up');
+    assert.deepEqual(errors, []);
+    await ctx.close();
+  });
+
   test('mini player in the Android app: native call, auto-start flag, page chrome hides while floating', async () => {
     const { ctx, page, errors } = await open(two, { init: `window.__app = []; window.MVApp = { canPip: function () { return true; }, enterPip: function () { window.__app.push('enter'); }, setAutoPip: function (on) { window.__app.push('auto:' + on); }, changeServer: function () {} };` });
     await page.waitForFunction(() => window.__players.length === 2);

@@ -50,6 +50,40 @@ class SseParser {
   }
 }
 
+// Matchup summary (GET /api/ticker/summary), reduced to what the ticker shows. Starters only.
+function cleanSummary(raw) {
+  if (!raw || typeof raw !== 'object' || !Array.isArray(raw.leagues)) return null;
+  const num = (x) => (Number.isFinite(Number(x)) ? Number(x) : 0);
+  const str = (x, n) => String(x == null ? '' : x).slice(0, n);
+  const colour = (c) => (c === 'green' || c === 'amber' || c === 'red' ? c : '');
+  const status = (x) => (x === 'pre' || x === 'live' || x === 'final' ? x : 'pre');
+  const team = (t) => ({ name: str(t && t.name, 40), points: num(t && t.points), projected: num(t && t.projected) });
+  const statKeys = ['passCmp', 'passAtt', 'passYds', 'passTd', 'int', 'rushAtt', 'rushYds', 'rushTd', 'rec', 'recYds', 'recTd', 'fgm', 'xpm', 'sacks'];
+  const leagues = raw.leagues.slice(0, 30).map((l) => ({
+    leagueId: str(l.leagueId, 40),
+    name: str(l.name, 80),
+    status: status(l.status),
+    colour: colour(l.colour),
+    mine: team(l.mine),
+    opp: team(l.opp),
+    players: (Array.isArray(l.players) ? l.players : []).filter((p) => p && p.starter !== false && p.slot !== 'BN').slice(0, 40).map((p) => {
+      let stats = null;
+      if (p.stats && typeof p.stats === 'object') { stats = {}; for (const k of statKeys) if (p.stats[k] !== undefined) stats[k] = num(p.stats[k]); }
+      return {
+        playerId: str(p.playerId, 24).replace(/[^A-Za-z0-9_-]/g, ''),
+        name: str(p.name, 60), pos: str(p.pos, 6), nflTeam: str(p.nflTeam, 6),
+        side: p.side === 'opp' ? 'opp' : 'mine',
+        slot: str(p.slot, 12), slotOrder: Number.isFinite(Number(p.slotOrder)) && p.slotOrder !== null ? Number(p.slotOrder) : 99,
+        kickoffAt: p.kickoffAt ? str(p.kickoffAt, 30) : null,
+        points: num(p.points), projected: num(p.projected),
+        gameStatus: status(p.gameStatus), gameClock: p.gameClock ? str(p.gameClock, 20) : '',
+        stats,
+      };
+    }).filter((p) => p.playerId),
+  })).filter((l) => l.leagueId);
+  return { generatedAt: str(raw.generatedAt, 30), season: num(raw.season), week: num(raw.week), leagues };
+}
+
 // One score event from Fantasy Manager, reduced to what the page needs.
 function cleanEvent(raw, id) {
   if (!raw || typeof raw !== 'object') return null;
@@ -95,14 +129,19 @@ class Fantasy extends EventEmitter {
     this.timer = null;
     this.watch = null;
     this.closed = false;
+    this.summary = null;               // latest cleaned matchup summary
+    this.summaryAt = 0;
+    this.sumTimer = null;
+    this.sumBusy = false;
+    this.sumMs = opts.summaryMs || 0;  // tests set a short poll; normally 15 s during games, 60 s otherwise
     this.heads = new Map();           // playerId -> { at, type, body } (or { at, none: true })
     this.minBackoff = opts.reconnectMs || 2000;
     this.backoff = this.minBackoff;
-    if (this.enabled) this.connect();
+    if (this.enabled) { this.connect(); this.pollSummary(); }
   }
 
   status() {
-    return { enabled: this.enabled, connected: this.connected, lastEventAt: this.lastEventAt || null, error: this.connected ? '' : this.lastError };
+    return { enabled: this.enabled, connected: this.connected, lastEventAt: this.lastEventAt || null, summaryAt: this.summaryAt || null, error: this.connected ? '' : this.lastError };
   }
 
   lib() { return this.base.startsWith('https:') ? https : http; }
@@ -141,6 +180,32 @@ class Fantasy extends EventEmitter {
     this.req = req;
   }
 
+  // Matchup summary: every 15 s while any game is live, every 60 s otherwise (Fantasy Manager caches it either way).
+  pollSummary() {
+    if (this.closed || !this.enabled) return;
+    clearTimeout(this.sumTimer);
+    if (this.sumBusy) return;
+    this.sumBusy = true;
+    const done = (sum) => {
+      this.sumBusy = false;
+      if (sum) { this.summary = sum; this.summaryAt = Date.now(); this.lastError = this.connected ? '' : this.lastError; this.emit('summary'); }
+      if (this.closed) return;
+      const live = this.summary && this.summary.leagues.some((l) => l.status === 'live');
+      this.sumTimer = setTimeout(() => this.pollSummary(), this.sumMs || (live ? 15000 : 60000));
+    };
+    const req = this.request('/api/ticker/summary', { Accept: 'application/json' }, (res) => {
+      if (res.statusCode !== 200) { res.resume(); if (res.statusCode === 401 || res.statusCode === 403) this.lastError = 'Fantasy Manager refused the token'; return done(null); }
+      const parts = [];
+      let n = 0;
+      res.on('data', (c) => { n += c.length; if (n > 2 * 1024 * 1024) req.destroy(); else parts.push(c); });
+      res.on('end', () => { let j = null; try { j = cleanSummary(JSON.parse(Buffer.concat(parts).toString('utf8'))); } catch { /* bad answer */ } done(j); });
+      res.on('error', () => done(null));
+    });
+    req.on('timeout', () => req.destroy());
+    req.on('error', () => done(null));
+    req.end();
+  }
+
   retry() {
     if (this.closed) return;
     clearTimeout(this.watch);
@@ -166,6 +231,9 @@ class Fantasy extends EventEmitter {
     this.log.push({ at: now, ev });
     while (this.log.length && this.log[0].at < now - KEEP_MS) this.log.shift();
     this.emit('score', ev, now);
+    // a score just changed: refresh the summary soon so the ticker follows
+    clearTimeout(this.sumTimer);
+    this.sumTimer = setTimeout(() => this.pollSummary(), 1500);
   }
 
   // Events the server saw at or after `sinceMs` (a page that reconnects asks for the last few seconds only).
@@ -202,9 +270,10 @@ class Fantasy extends EventEmitter {
     this.closed = true;
     clearTimeout(this.timer);
     clearTimeout(this.watch);
+    clearTimeout(this.sumTimer);
     if (this.req) { try { this.req.destroy(); } catch { /* gone */ } }
     this.removeAllListeners();
   }
 }
 
-module.exports = { Fantasy, SseParser, cleanEvent, cleanBase };
+module.exports = { Fantasy, SseParser, cleanEvent, cleanSummary, cleanBase };

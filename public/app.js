@@ -63,7 +63,7 @@
   applyTheme();
   var ME = null; // set after /api/me: { admin, user, open, authRequired }
   function loadState() {
-    var d = { layout: '3x3', tiles: [], sel: 0, muted: false, bufSec: 4, keepSec: 0, transport: 'auto', fit: 'contain', failover: true, smallSd: true, vol: 1, shared: '', theme: 'system', local: false, fpop: true, fmin: 3, fdelay: 0, fopp: true, fsize: 'auto', fage: 60, workers: true, stats: false, labels: false, epgOn: true, favs: {}, pk: {} };
+    var d = { layout: '3x3', tiles: [], sel: 0, muted: false, bufSec: 4, keepSec: 0, transport: 'auto', fit: 'contain', failover: true, smallSd: true, vol: 1, shared: '', theme: 'system', local: false, fpop: true, fmin: 3, fdelay: 0, fopp: true, fsize: 'auto', fage: 60, ftick: true, fpos: 'below', fspeed: 'normal', workers: true, stats: false, labels: false, epgOn: true, favs: {}, pk: {} };
     var j = {};
     try { j = JSON.parse(localStorage.getItem(LS_KEY)) || {}; } catch (e) { j = {}; }
     Object.keys(d).forEach(function (k) { if (j[k] !== undefined && typeof j[k] === typeof d[k]) d[k] = j[k]; });
@@ -73,6 +73,8 @@
     d.fmin = clamp(Number(d.fmin) || 0, 0, 100);
     d.fdelay = clamp(Number(d.fdelay) || 0, 0, 180);
     d.fage = clamp(Number(d.fage) || 60, 5, 600);
+    if (d.fpos !== 'overlap') d.fpos = 'below';
+    if (d.fspeed !== 'slow' && d.fspeed !== 'fast') d.fspeed = 'normal';
     var tiles = Array.isArray(j.tiles) ? j.tiles : [];
     d.tiles = [];
     for (var i = 0; i < SLOTS; i++) {
@@ -822,7 +824,7 @@
       if (Date.now() - shared.lastAt > 15000) { shared.lastAt = Date.now(); sharedRetry('The picture stopped'); }
     }, 3000);
     document.body.classList.toggle('shared', sharedOn());
-    window.addEventListener('resize', function () { sharedSync(); if (ovl && ovl.shown) ovlPlace(); localPlace(); });
+    window.addEventListener('resize', function () { if (FT.on) ftMeasure(); sharedSync(); if (ovl && ovl.shown) ovlPlace(); localPlace(); });
   }
 
   // ---------------------------------------------------------------- grid, selection, audio
@@ -1626,6 +1628,289 @@
   function fsSupported() { var el = document.documentElement; return !window.MVApp && !!(el.requestFullscreen || el.webkitRequestFullscreen); }
   function onFullscreenChange() { var b = $('#set-full'); if (b) b.textContent = fsElement() ? 'Exit fullscreen' : 'Fullscreen'; ovlSync(); }
 
+
+  // ---------------------------------------------------------------- fantasy ticker (P-25, admins only)
+  // A bar along the bottom. For each league: the league name and both team scores scroll in, then the league name and the
+  // score stall at the left edge (the lineup slides in behind them) until the next league's name pushes them off; after the
+  // header come both starting lineups. A player who scored since his name was last on screen glows and rolls up.
+  var FT = { model: null, sig: '', tm: null, last: 0, raf: 0, x: 0, copyW: 0, copies: 2, seen: {}, summaryAt: 0, timer: null, paused: false, on: false, chk: 0 };
+  var FT_SPEED = { slow: 40, normal: 70, fast: 110 };
+  var FT_MINE = '#3FAE58', FT_OPP = '#D6533B';
+  function ftTimes() { var o = window.__ftTiming || {}; return { roll: o.roll !== undefined ? o.roll : 900, glow: o.glow !== undefined ? o.glow : 2200 }; }
+  function ftPoll() {
+    clearTimeout(FT.timer);
+    if (!FP.avail || !S.ftick) return;
+    api('/api/fantasy/summary').then(function (sum) { ftSet(sum); }, noop);
+    FT.timer = setTimeout(ftPoll, (window.__ftPollMs || 10000));
+  }
+  function ftSoon() { if (!S.ftick || !FP.avail) return; clearTimeout(FT.timer); FT.timer = setTimeout(ftPoll, 3000); }
+  function ftNum(n) { return (Math.round(Number(n) * 10) / 10).toFixed(1); }
+  function ftStats(p) {
+    var s = p.stats;
+    if (!s) return '';
+    var o = [];
+    function has(k) { return s[k] !== undefined && s[k] !== null; }
+    if (p.pos === 'K') { o.push((s.fgm || 0) + ' FG'); o.push((s.xpm || 0) + ' XP'); }
+    else if (p.pos === 'DEF' || p.pos === 'DST') { o.push((s.sacks || 0) + ' sck'); o.push((s.int || 0) + ' int'); }
+    else {
+      if (has('passAtt') && s.passAtt > 0) { o.push((s.passCmp || 0) + '/' + s.passAtt); o.push((s.passYds || 0) + ' yds'); if (s.passTd) o.push(s.passTd + ' TD'); if (s.int) o.push(s.int + ' INT'); }
+      if (has('rushAtt') && s.rushAtt > 0) { o.push(s.rushAtt + ' car'); o.push((s.rushYds || 0) + ' yds'); if (s.rushTd) o.push(s.rushTd + ' TD'); }
+      if (has('rec') && (s.rec > 0 || p.pos === 'WR' || p.pos === 'TE' || p.pos === 'RB')) { o.push((s.rec || 0) + ' rec'); o.push((s.recYds || 0) + ' yds'); if (s.recTd) o.push(s.recTd + ' TD'); }
+    }
+    return o.length ? '(' + o.join(', ') + ')' : '';
+  }
+  function ftKick(iso) {
+    var d = iso ? new Date(iso) : null;
+    if (!d || isNaN(d.getTime())) return 'Not started';
+    try { return d.toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' }); } catch (e) { return d.toString().slice(0, 21); }
+  }
+  // players of one side, in roster-slot order
+  function ftSide(l, side) { return l.players.filter(function (p) { return p.side === side; }).sort(function (a, b) { return a.slotOrder - b.slotOrder; }); }
+  function ftSig(sum) {
+    return sum.leagues.map(function (l) {
+      return [l.leagueId, l.name, l.mine.name, l.opp.name, ftSide(l, 'mine').concat(ftSide(l, 'opp')).map(function (p) { return p.side + p.playerId; }).join(',')].join('|');
+    }).join('#');
+  }
+  function ftEnsure() {
+    if ($('#ftick')) return;
+    document.body.appendChild(h('div', { id: 'ftick', class: 'ftick', hidden: true }, h('div', { id: 'ft-view', class: 'ft-view' }, h('div', { id: 'ft-tape', class: 'ft-tape' }))));
+  }
+  function ftSet(sum) {
+    ftEnsure();
+    if (!sum || !sum.leagues || !sum.leagues.length) { ftClear(); return; }
+    var sig = ftSig(sum);
+    if (!FT.model || sig !== FT.sig) { FT.sig = sig; ftBuild(sum); }
+    else ftUpdate(sum);
+    FT.summaryAt = Date.now();
+    ftShow(true);
+  }
+  function ftClear() { FT.model = null; FT.sig = ''; ftShow(false); }
+  function ftShow(on) {
+    var bar = $('#ftick');
+    var want = !!(on && S.ftick && FP.avail && FT.model && isAdmin());
+    document.body.classList.toggle('ftick-on', want);
+    document.body.classList.toggle('ftick-below', want && S.fpos === 'below');
+    if (bar) bar.hidden = !want;
+    FT.on = want;
+    if (want && !FT.raf) { FT.last = 0; FT.raf = requestAnimationFrame(ftFrame); }
+    if (!want && FT.raf) { cancelAnimationFrame(FT.raf); FT.raf = 0; }
+    if (want) ftMeasure();
+    else if (typeof ovlPlace === 'function' && ovl && ovl.shown) { /* nothing to move */ }
+  }
+  function ftPlayerEl(rec, it, l) {
+    var pts = h('span', { class: 'ft-pts', text: '' });
+    var l2 = h('div', { class: 'ft-l2' });
+    var el = h('div', { class: 'ft-it' }, h('div', { class: 'ft-l1' }, h('span', { class: 'ft-pos', text: it.pos }), h('span', { class: 'ft-nm', text: it.name }), pts), l2);
+    rec.els.push({ el: el, pts: pts, l2: l2 });
+    return el;
+  }
+  function ftPaint(rec) {
+    var p = rec.p;
+    rec.els.forEach(function (e) {
+      e.el.className = 'ft-it ' + p.gameStatus;
+      e.pts.style.display = p.gameStatus === 'pre' ? 'none' : '';
+      e.l2.textContent = p.gameStatus === 'pre' ? ftKick(p.kickoffAt) : p.gameStatus === 'live' ? ftStats(p) : ftStats(p) || 'Final';
+      if (p.gameStatus === 'pre') e.pts.textContent = '';
+      else if (!rec.anim) e.pts.textContent = ftNum(rec.shown);
+    });
+  }
+  function ftBuild(sum) {
+    var tape = $('#ft-tape');
+    if (!tape) return;
+    var keepSeen = FT.seen;
+    var model = { leagues: [], units: [] };
+    sum.leagues.forEach(function (l) {
+      var lg = { id: l.leagueId, l: l, recs: [], els: [], mineShown: l.mine.points, oppShown: l.opp.points, segs: [] };
+      model.leagues.push(lg);
+      ['mine', 'opp'].forEach(function (side) {
+        ftSide(l, side).forEach(function (p) {
+          var rec = { key: side + '|' + p.playerId, side: side, p: p, shown: p.points, anim: null, glow: null, els: [], lg: lg, base: false };
+          lg.recs.push(rec);
+        });
+      });
+    });
+    FT.model = model;
+    // one copy of the tape; copies are cloned as needed to fill the screen twice over
+    tape.textContent = '';
+    FT.copies = 2;
+    for (var c = 0; c < 2; c++) {
+      var copy = h('div', { class: 'ft-copy' });
+      model.leagues.forEach(function (lg) { copy.appendChild(ftSegment(lg, c)); });
+      tape.appendChild(copy);
+    }
+    model.leagues.forEach(function (lg) { ftRefreshHead(lg); lg.recs.forEach(ftPaint); });
+    ftMeasure();
+  }
+  function ftSegment(lg, copy) {
+    var l = lg.l;
+    var col = FCOL[l.colour] || '#fff';
+    var seg = h('div', { class: 'ft-seg' });
+    var name = h('div', { class: 'ft-name', text: l.name });
+    var me = h('div', { class: 'ft-side' }, h('span', { class: 'ft-tot ft-me', style: 'color:' + col, text: '' }), h('span', { class: 'ft-tn', style: 'color:' + col, text: l.mine.name }));
+    var op = h('div', { class: 'ft-side' }, h('span', { class: 'ft-tot ft-op', text: '' }), h('span', { class: 'ft-tn', text: l.opp.name }));
+    var score = h('div', { class: 'ft-score' }, me, h('span', { class: 'ft-dash', text: '-' }), op);
+    seg.appendChild(name); seg.appendChild(score);
+    var s = { seg: seg, name: name, score: score, me: me.firstChild, op: op.firstChild, tn: [me.lastChild, op.lastChild], copy: copy, x: 0, pinW: 0, nw: 0 };
+    lg.segs.push(s);
+    var items = h('div', { class: 'ft-items' });
+    seg.appendChild(items);
+    ['mine', 'opp'].forEach(function (side) {
+      var recs = lg.recs.filter(function (r) { return r.side === side; });
+      if (!recs.length) return;
+      items.appendChild(h('div', { class: 'ft-div', style: side === 'mine' ? 'color:' + col : '', text: side === 'mine' ? l.mine.name : 'vs ' + l.opp.name }));
+      recs.forEach(function (r) { items.appendChild(ftPlayerEl(r, r.p, l)); });
+    });
+    return seg;
+  }
+  function ftRefreshHead(lg) {
+    lg.segs.forEach(function (s) {
+      s.me.textContent = ftNum(lg.mineShown);
+      s.op.textContent = ftNum(lg.oppShown);
+    });
+  }
+  function ftUpdate(sum) {
+    sum.leagues.forEach(function (l, i) {
+      var lg = FT.model.leagues[i];
+      lg.l = l;
+      lg.segs.forEach(function (s) { var col = FCOL[l.colour] || '#fff'; s.me.style.color = col; s.tn[0].style.color = col; });
+      ftSide(l, 'mine').concat(ftSide(l, 'opp')).forEach(function (p) {
+        var rec = lg.recs.filter(function (r) { return r.key === p.side + '|' + p.playerId; })[0];
+        if (rec) { rec.p = p; ftPaint(rec); }
+      });
+    });
+    ftMeasure();
+  }
+  // positions of segments and items inside the tape (cached so the 100 ms check never touches layout)
+  function ftMeasure() {
+    var tape = $('#ft-tape'), view = $('#ft-view');
+    if (!tape || !view || !FT.model) return;
+    var copies = tape.children;
+    if (!copies.length) return;
+    var w = copies[0].offsetWidth;
+    FT.copyW = w;
+    var vw = view.clientWidth || window.innerWidth;
+    // enough copies that the tape always extends past the right edge of the screen
+    var need = w > 0 ? Math.max(2, Math.ceil(vw / w) + 1) : 2;
+    while (tape.children.length < need) {
+      var copy = h('div', { class: 'ft-copy' });
+      FT.model.leagues.forEach(function (lg) { copy.appendChild(ftSegment(lg, tape.children.length)); });
+      tape.appendChild(copy);
+      FT.model.leagues.forEach(function (lg) { ftRefreshHead(lg); lg.recs.forEach(ftPaint); });
+    }
+    FT.copies = tape.children.length;
+    FT.model.leagues.forEach(function (lg) {
+      lg.segs.forEach(function (s) {
+        var cx = s.seg.parentNode.offsetLeft;
+        s.x = cx + s.seg.offsetLeft;
+        s.nw = s.name.offsetWidth;
+        s.score.style.left = s.nw + 'px';
+        s.pinW = s.nw + s.score.offsetWidth;
+        s.w = s.seg.offsetWidth;
+      });
+      lg.recs.forEach(function (r) {
+        r.els.forEach(function (e, k) {
+          var seg = lg.segs[k] || lg.segs[0];
+          var segEl = e.el.closest('.ft-seg');
+          var si = 0;
+          for (var q = 0; q < lg.segs.length; q++) if (lg.segs[q].seg === segEl) si = q;
+          e.s = lg.segs[si];
+          e.x = lg.segs[si].x + e.el.offsetLeft;   // offsetParent is the segment itself
+          e.w = e.el.offsetWidth;
+        });
+      });
+    });
+  }
+  function ftFrame(t) {
+    FT.raf = requestAnimationFrame(ftFrame);
+    var view = $('#ft-view');
+    if (!view || !FT.model) return;
+    var dt = FT.last ? Math.min(100, t - FT.last) : 0;
+    FT.last = t;
+    var sp = window.__ftSpeed !== undefined ? window.__ftSpeed : FT_SPEED[S.fspeed] || 70;
+    if (!FT.paused && FT.copyW > 0) {
+      FT.x += sp * dt / 1000;
+      if (FT.x >= FT.copyW) FT.x -= FT.copyW;
+    }
+    view.scrollLeft = FT.x;
+    if (t - FT.chk > 120) { FT.chk = t; ftCheck(view); }
+    if (t - (FT.meas || 0) > 2000) { FT.meas = t; ftMeasure(); }
+  }
+  // which items are on screen (right of the pinned block), which segments are pinned
+  function ftCheck(view) {
+    var vw = view.clientWidth, sx = view.scrollLeft, tm = ftTimes();
+    FT.model.leagues.forEach(function (lg) {
+      var visSeg = false, pending = 0;
+      lg.segs.forEach(function (s) {
+        var pinned = sx > s.x + 1 && sx < s.x + s.w - s.pinW;
+        if (s.pinned !== pinned) { s.pinned = pinned; s.seg.classList.toggle('pinned', pinned); }
+        if (sx + vw > s.x && sx < s.x + s.w) visSeg = true;
+      });
+      lg.recs.forEach(function (r) {
+        var seen = false;
+        r.els.forEach(function (e) {
+          if (!e.s) return;
+          var pr = sx > e.s.x ? e.s.pinW : 0;
+          var vx = e.x - sx;
+          if (vx + e.w > pr + 4 && vx < vw - 4) seen = true;
+        });
+        if (r.shown < r.p.points - 0.001) pending++;
+        if (!seen) return;
+        var k = r.side + '|' + r.p.playerId;
+        var last = FT.seen[k];
+        if (last === undefined) FT.seen[k] = r.p.points;                     // first time on screen: baseline, no effect
+        else if (r.p.points > last + 0.001) { ftUp(r, last, tm); FT.seen[k] = r.p.points; }
+        else if (r.shown < r.p.points - 0.001 && !r.anim) ftUp(r, null, tm); // a list of the same player in another league: roll, no glow
+      });
+      // totals follow the players on screen; when nothing is pending (or the league is off screen) they settle on the real figure
+      if (!visSeg || !pending) {
+        var mT = lg.l.mine.points, oT = lg.l.opp.points;
+        if (!lg.anim && (Math.abs(lg.mineShown - mT) > 0.001 || Math.abs(lg.oppShown - oT) > 0.001)) {
+          if (visSeg) ftRollTotals(lg, mT, oT, tm.roll); else { lg.mineShown = mT; lg.oppShown = oT; ftRefreshHead(lg); }
+        }
+      }
+    });
+  }
+  function ftEase(x) { return 1 - Math.pow(1 - x, 3); }
+  function ftUp(r, last, tm) {
+    var from = r.shown, to = r.p.points, glow = last !== null;
+    var lg = r.lg, delta = to - from;
+    r.shown = to;
+    if (glow) {
+      r.els.forEach(function (e) { e.pts.classList.add(r.side === 'mine' ? 'up-mine' : 'up-opp'); });
+      clearTimeout(r.glow);
+      r.glow = setTimeout(function () { r.els.forEach(function (e) { e.pts.classList.remove('up-mine', 'up-opp'); }); }, tm.roll + tm.glow);
+    }
+    // the team total for that side rolls up along with the player
+    var mF = lg.mineShown, oF = lg.oppShown;
+    var mT = r.side === 'mine' ? mF + delta : mF, oT = r.side === 'opp' ? oF + delta : oF;
+    var t0 = performance.now();
+    r.anim = true;
+    lg.anim = true;
+    function step(now) {
+      var k = tm.roll <= 0 ? 1 : Math.min(1, (now - t0) / tm.roll), e = ftEase(k);
+      var v = from + (to - from) * e;
+      r.els.forEach(function (x) { x.pts.textContent = ftNum(v); });
+      lg.mineShown = mF + (mT - mF) * e; lg.oppShown = oF + (oT - oF) * e;
+      ftRefreshHead(lg);
+      if (k < 1) requestAnimationFrame(step);
+      else { r.anim = null; lg.anim = null; ftPaint(r); lg.mineShown = mT; lg.oppShown = oT; ftRefreshHead(lg); }
+    }
+    requestAnimationFrame(step);
+  }
+  function ftRollTotals(lg, mT, oT, ms) {
+    var mF = lg.mineShown, oF = lg.oppShown, t0 = performance.now();
+    lg.anim = true;
+    function step(now) {
+      var k = ms <= 0 ? 1 : Math.min(1, (now - t0) / ms), e = ftEase(k);
+      lg.mineShown = mF + (mT - mF) * e; lg.oppShown = oF + (oT - oF) * e;
+      ftRefreshHead(lg);
+      if (k < 1) requestAnimationFrame(step); else { lg.anim = null; lg.mineShown = mT; lg.oppShown = oT; ftRefreshHead(lg); }
+    }
+    requestAnimationFrame(step);
+  }
+  function ftInit() { ftEnsure(); ftPoll(); }
+  function ftApply() { if (S.ftick) ftPoll(); else { clearTimeout(FT.timer); ftShow(false); } if (FT.model) ftShow(true); }
+
   // ---------------------------------------------------------------- fantasy score pop-ups (P-26, admins only)
   // Fantasy Manager's score events come through this server. One pop-up at a time, queued, each shown for about 5 s:
   // slides down from the top, shows the league totals from before the play and 0 points for half a second, rolls the
@@ -1635,13 +1920,13 @@
   function fpTimes() { var t = {}; var o = window.__fpTiming || {}; Object.keys(FP.t).forEach(function (k) { t[k] = o[k] !== undefined ? o[k] : FP.t[k]; }); return t; }
   function fpInit() {
     if (!isAdmin()) return;
-    api('/api/fantasy/status').then(function (st) { FP.avail = !!st.enabled; FP.status = st; fpConnect(); }, noop);
+    api('/api/fantasy/status').then(function (st) { FP.avail = !!st.enabled; FP.status = st; fpConnect(); ftInit(); }, noop);
   }
   function fpConnect() {
     if (!FP.avail || !S.fpop || FP.es || !window.EventSource) return;
     var es = new EventSource('/api/fantasy/stream?recent=10');
     FP.es = es;
-    es.addEventListener('score', function (e) { try { fpIncoming(JSON.parse(e.data)); } catch (x) { /* bad event */ } });
+    es.addEventListener('score', function (e) { try { fpIncoming(JSON.parse(e.data)); } catch (x) { /* bad event */ } ftSoon(); });
     es.addEventListener('status', function (e) { try { FP.status = JSON.parse(e.data); fpStatusNote(); } catch (x) { /* ignore */ } });
   }
   function fpDisconnect() { if (FP.es) { FP.es.close(); FP.es = null; } }
@@ -2479,6 +2764,15 @@
     delay.id = 'fp-delay';
     var age = numSel('fage', [15, 30, 60, 120, 300], function (n) { return n + ' seconds' + (n === 60 ? ' (default)' : ''); });
     age.id = 'fp-age';
+    var tkOn = h('input', { type: 'checkbox', id: 'ft-on' });
+    tkOn.checked = !!S.ftick;
+    tkOn.addEventListener('change', function () { S.ftick = tkOn.checked; saveSoon(); ftApply(); });
+    var tkPos = h('select', { id: 'ft-pos' }, h('option', { value: 'below', text: 'Below the video (keeps the score bug clear)' }), h('option', { value: 'overlap', text: 'Overlap the video (for streams with their own ticker)' }));
+    tkPos.value = S.fpos;
+    tkPos.addEventListener('change', function () { S.fpos = tkPos.value; saveSoon(); ftApply(); });
+    var tkSpeed = h('select', { id: 'ft-speed' }, h('option', { value: 'slow', text: 'Slow' }), h('option', { value: 'normal', text: 'Normal' }), h('option', { value: 'fast', text: 'Fast' }));
+    tkSpeed.value = S.fspeed;
+    tkSpeed.addEventListener('change', function () { S.fspeed = tkSpeed.value; saveSoon(); });
     if (!FP.avail) return h('div', { class: 'fpset' }, h('div', { class: 'note', text: 'Score pop-ups (Fantasy Manager): not set up on the server (FANTASY_URL and FANTASY_TOKEN).' }));
     return h('div', { class: 'fpset' },
       h('label', { class: 'check' }, on, h('span', { text: 'Show a pop-up when a player scores (Fantasy Manager)' })),
@@ -2489,6 +2783,9 @@
         h('label', { class: 'check' }, opp, h('span', { text: "Also show players on my opponents' teams" })),
         h('div', { class: 'field' }, h('label', { text: 'Pop-up size' }), size),
         h('div', { class: 'field' }, h('label', { text: 'Drop a pop-up that is this late' }), age),
+        h('label', { class: 'check' }, tkOn, h('span', { text: 'Show the score ticker along the bottom' })),
+        h('div', { class: 'field' }, h('label', { text: 'Ticker position' }), tkPos),
+        h('div', { class: 'field' }, h('label', { text: 'Ticker speed' }), tkSpeed),
         h('div', { class: 'viewbtns' }, test)) : null);
   }
 
@@ -3549,5 +3846,5 @@
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init); else init();
 
   // test hook (harmless in production)
-  window.__mv = { updateReady: updateReady, ovlShow: ovlShow, ovlHide: ovlHide, get ovl() { return ovl; }, get side() { return side; }, castState: castState, openRecordings: openRecordings, get S() { return S; }, get ME() { return ME; }, applyView: applyView, tiles: tiles, LAYOUTS: LAYOUTS, setLayout: setLayout, select: select, assign: assign, toggleZoom: toggleZoom, sharedApply: sharedApply, get shared() { return shared; }, get zoom() { return zoom; }, get modals() { return modals.length; }, get FP() { return FP; }, fpIncoming: fpIncoming, fpTest: fpTest };
+  window.__mv = { updateReady: updateReady, ovlShow: ovlShow, ovlHide: ovlHide, get ovl() { return ovl; }, get side() { return side; }, castState: castState, openRecordings: openRecordings, get S() { return S; }, get ME() { return ME; }, applyView: applyView, tiles: tiles, LAYOUTS: LAYOUTS, setLayout: setLayout, select: select, assign: assign, toggleZoom: toggleZoom, sharedApply: sharedApply, get shared() { return shared; }, get zoom() { return zoom; }, get modals() { return modals.length; }, get FP() { return FP; }, fpIncoming: fpIncoming, fpTest: fpTest, get FT() { return FT; }, ftSet: ftSet, ftCheck: function () { ftMeasure(); ftCheck($('#ft-view')); } };
 })();

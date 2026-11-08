@@ -3,7 +3,7 @@
 # Change the tag to upgrade (see CHANGELOG.md). No `build:`; the server only pulls the image.
 services:
   iptv-multiview:
-    image: mybadreligon/multiview-iptv:0.10.0
+    image: mybadreligon/multiview-iptv:0.11.0
     container_name: iptv-multiview
     restart: unless-stopped
     # Same check as the image: the app answers GET /healthz with {"status":"ok","version":"..."} (no login, no private data).

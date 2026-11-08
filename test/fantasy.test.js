@@ -7,7 +7,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { createApp } = require('../src/server');
-const { SseParser, cleanEvent, cleanBase } = require('../src/fantasy');
+const { SseParser, cleanEvent, cleanSummary, cleanBase } = require('../src/fantasy');
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==', 'base64');
@@ -20,8 +20,21 @@ function ev(id, extra = {}) {
 }
 
 // A stand-in for Fantasy Manager's ticker API.
+function summaryDoc() {
+  const pl = (id, name, pos, side, slot, slotOrder, pts, st, extra = {}) => Object.assign({ playerId: id, name, pos, nflTeam: 'CIN', side, starter: true, slot, slotOrder, kickoffAt: '2026-11-08T18:00:00Z', points: pts, projected: 12, gameStatus: st, gameClock: null, stats: null }, extra);
+  return { generatedAt: '2026-11-08T18:02:11Z', season: 2026, week: 9, leagues: [{
+    leagueId: '123', name: 'The Forgotten Titans', platform: 'sleeper', status: 'live', colour: 'green',
+    colourBasis: { points: 96.4, projected: 134.6 },
+    mine: { teamId: '1', name: 'The All Days', points: 96.4, projected: 134.6 }, opp: { teamId: '4', name: 'Bills Mafia', points: 78.2, projected: 120.1 },
+    players: [
+      pl('3', 'Wide Receiver', 'WR', 'mine', 'WR', 3, 24.3, 'live', { stats: { rec: 6, recYds: 98, recTd: 1 } }),
+      pl('1', 'Quarterback One', 'QB', 'mine', 'QB', 1, 18.4, 'final', { stats: { passCmp: 21, passAtt: 31, passYds: 250, passTd: 2, int: 1, rushAtt: 3, rushYds: 12, rushTd: 0 } }),
+      pl('9', 'Bench Guy', 'RB', 'mine', 'BN', 9, 2, 'live', { starter: false }),
+      pl('7', 'Runner Opp', 'RB', 'opp', 'RB', 2, 0, 'pre', { stats: null, kickoffAt: '2026-11-08T21:25:00Z' })] }] };
+}
+
 function mockFm() {
-  const m = { clients: new Set(), connects: [], seenAuth: [] };
+  const m = { clients: new Set(), connects: [], seenAuth: [], summary: summaryDoc(), summaryHits: 0 };
   m.server = http.createServer((req, res) => {
     m.seenAuth.push(req.headers.authorization);
     if (req.headers.authorization !== 'Bearer ' + TOKEN) { res.writeHead(401); return res.end(); }
@@ -33,6 +46,7 @@ function mockFm() {
       req.on('close', () => m.clients.delete(res));
       return;
     }
+    if (req.url.startsWith('/api/ticker/summary')) { m.summaryHits++; res.writeHead(200, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify(m.summary)); }
     if (req.url === '/api/headshot/SF') { res.writeHead(200, { 'Content-Type': 'image/svg+xml' }); return res.end('<svg xmlns="http://www.w3.org/2000/svg"/>'); }
     if (req.url === '/api/headshot/6794') { res.writeHead(200, { 'Content-Type': 'image/png' }); return res.end(PNG); }
     res.writeHead(404); res.end();
@@ -99,6 +113,24 @@ describe('event parsing', () => {
   });
 });
 
+describe('summary cleaning', () => {
+  test('bad answers give null, odd values are tamed, unknown keys dropped', () => {
+    assert.equal(cleanSummary(null), null);
+    assert.equal(cleanSummary({ leagues: 'x' }), null);
+    const c = cleanSummary({ leagues: [{ leagueId: 'L1', name: 'A', status: 'weird', colour: 'purple', mine: {}, opp: { name: 'B', points: 'x' },
+      players: [{ playerId: 'a b!', name: 'P', side: 'opp', starter: true, slot: 'QB', slotOrder: null, points: '4.5', stats: { passYds: 10, secret: 1 } }, { playerId: '' }] }, { name: 'no id' }] });
+    assert.equal(c.leagues.length, 1);
+    assert.equal(c.leagues[0].status, 'pre');
+    assert.equal(c.leagues[0].colour, '');
+    assert.equal(c.leagues[0].opp.points, 0);
+    assert.equal(c.leagues[0].players.length, 1);
+    assert.equal(c.leagues[0].players[0].playerId, 'ab');
+    assert.equal(c.leagues[0].players[0].slotOrder, 99);
+    assert.equal(c.leagues[0].players[0].points, 4.5);
+    assert.deepEqual(c.leagues[0].players[0].stats, { passYds: 10 });
+  });
+});
+
 describe('Fantasy Manager 4.17.1 doc examples', () => {
   test('the exact score event from the doc is accepted, a DEF event keeps its team abbreviation, null reason and providerAt are fine', () => {
     const doc = { id: 'evt_1794078131000', detectedAt: '2026-11-08T18:02:11Z', providerAt: null, playerId: '6794', name: "Ja'Marr Chase", pos: 'WR', nflTeam: 'CIN', delta: 6.4, points: 24.3, reason: null, headshot: '/api/headshot/6794',
@@ -117,7 +149,7 @@ describe('Fantasy Manager link', () => {
     fm = mockFm();
     await new Promise((r) => fm.server.listen(0, '127.0.0.1', r));
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mv-fant-'));
-    app = createApp({ dataDir: dir, basicAuth: '', adminUser: 'boss', adminPassword: 'hunter22', fantasyUrl: `http://127.0.0.1:${fm.server.address().port}`, fantasyToken: TOKEN, fantasyReconnectMs: 150 });
+    app = createApp({ dataDir: dir, basicAuth: '', adminUser: 'boss', adminPassword: 'hunter22', fantasyUrl: `http://127.0.0.1:${fm.server.address().port}`, fantasyToken: TOKEN, fantasyReconnectMs: 150, fantasySummaryMs: 150 });
     await new Promise((r) => app.server.listen(0, '127.0.0.1', r));
     base = `http://127.0.0.1:${app.server.address().port}`;
     admin = cookieOf(await request(base, '/api/login', { method: 'POST', body: { username: 'boss', password: 'hunter22' } }));
@@ -138,6 +170,29 @@ describe('Fantasy Manager link', () => {
     assert.equal((await request(base, '/api/fantasy/stream', { headers: { Cookie: viewer } })).status, 403);
     assert.equal((await request(base, '/api/fantasy/headshot/6794', { headers: { Cookie: viewer } })).status, 403);
     assert.equal((await request(base, '/api/fantasy/status')).status, 401);
+  });
+
+  test('the matchup summary is polled, cleaned to starters, served to admins only and refreshed', async () => {
+    for (let i = 0; i < 40 && !app.fantasy.summary; i++) await sleep(50);
+    const r = await request(base, '/api/fantasy/summary', { headers: { Cookie: admin } });
+    assert.equal(r.status, 200);
+    const j = JSON.parse(r.body);
+    assert.equal(j.leagues.length, 1);
+    const l = j.leagues[0];
+    assert.equal(l.colour, 'green');
+    assert.equal(l.mine.name, 'The All Days');
+    assert.equal(l.players.length, 3, 'bench players are left out');
+    assert.equal(l.players.some((p) => p.slot === 'BN'), false);
+    assert.equal(l.players[0].stats.rec, 6);
+    assert.equal(JSON.stringify(j).includes(TOKEN), false);
+    assert.equal((await request(base, '/api/fantasy/summary', { headers: { Cookie: viewer } })).status, 403);
+    assert.equal((await request(base, '/api/fantasy/summary')).status, 401);
+    const hits = fm.summaryHits;
+    fm.summary.leagues[0].mine.points = 99.9;
+    for (let i = 0; i < 40 && JSON.parse((await request(base, '/api/fantasy/summary', { headers: { Cookie: admin } })).body).leagues[0].mine.points !== 99.9; i++) await sleep(50);
+    assert.equal(JSON.parse((await request(base, '/api/fantasy/summary', { headers: { Cookie: admin } })).body).leagues[0].mine.points, 99.9);
+    assert.ok(fm.summaryHits > hits);
+    fm.summary = summaryDoc();
   });
 
   test('an admin page gets score events with their age; corrections and negatives never arrive; repeats are ignored', async () => {
@@ -188,6 +243,20 @@ describe('Fantasy Manager link', () => {
     for (let i = 0; i < 40 && !app.fantasy.connected; i++) await sleep(50);
     assert.equal(app.fantasy.connected, true);
   });
+
+  test('a score event makes the summary refresh soon', async () => {
+    const a = await listen(base, '/api/fantasy/stream', { Cookie: admin });
+    await sleep(100);
+    const hits = fm.summaryHits;
+    app.fantasy.sumMs = 60000;
+    clearTimeout(app.fantasy.sumTimer);
+    app.fantasy.sumTimer = setTimeout(() => app.fantasy.pollSummary(), 60000);
+    fm.send(ev('evt_sum1'));
+    for (let i = 0; i < 40 && fm.summaryHits === hits; i++) await sleep(100);
+    assert.ok(fm.summaryHits > hits, 'refreshed after the score event');
+    app.fantasy.sumMs = 150;
+    a.close();
+  });
 });
 
 describe('Fantasy Manager link: off or refused', () => {
@@ -196,7 +265,7 @@ describe('Fantasy Manager link: off or refused', () => {
     const app = createApp({ dataDir: dir, basicAuth: '', fantasyUrl: '', fantasyToken: '' });
     await new Promise((r) => app.server.listen(0, '127.0.0.1', r));
     const base = `http://127.0.0.1:${app.server.address().port}`;
-    assert.deepEqual(JSON.parse((await request(base, '/api/fantasy/status')).body), { enabled: false, connected: false, lastEventAt: null, error: '' });
+    assert.deepEqual(JSON.parse((await request(base, '/api/fantasy/status')).body), { enabled: false, connected: false, lastEventAt: null, summaryAt: null, error: '' });
     assert.equal((await request(base, '/api/fantasy/stream')).status, 404);
     app.close();
     fs.rmSync(dir, { recursive: true, force: true });

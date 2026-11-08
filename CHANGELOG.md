@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.11.0 - 2026-11-08
+The Fantasy Manager score ticker along the bottom.
+- **Fantasy ticker** (P-25, admins only, needs Fantasy Manager 4.17.1 or later and `FANTASY_URL` / `FANTASY_TOKEN` from 0.10.0): an opaque bar along the bottom, one block per league. The league name and both scores scroll in (your team name and score in the league colour, the opponent in white, team names under their scores); then the league name stalls at the left edge, the score stalls right of it, the team names drop away and the lineup slides in behind them until the next league's name pushes the block off. After the header come both starting lineups, yours then the opponent's, in roster-slot order: players who have not played show their game time, live players show name, points and counting stats in brackets, finished players show the score and final stats in light grey. When a player comes on screen with more points than the last time his name was on screen for that side (yours or the opponent's, across all leagues) his score glows green (yours) or red (opponent) and rolls up, and the team total rolls up with it.
+- Settings > *Show the score ticker along the bottom*, *Ticker position*: **Below the video** (default; the screens shrink so the bar never covers a score bug) or **Overlap the video** (for streams that carry their own ticker), and speed (slow / normal / fast).
+- Server: `src/fantasy.js` also polls Fantasy Manager's `GET /api/ticker/summary` (every 15 s while any game is live, every 60 s otherwise, and soon after a score event); new admin-only `GET /api/fantasy/summary` serves the cleaned starters-only summary.
+- Tests: server (summary polling, cleaning, admin-only, refresh after a score event) and UI (bar below / overlap, header colours, slot order, pre / live / final formats, pinning and push-off, glow and roll-up with baseline on first sight, settings, off for viewers).
+
+**Upgrading from 0.10.0:** pull the new image, no compose change if the stack already has the `FANTASY_URL` and `FANTASY_TOKEN` lines from 0.10.0. The league name is plain white (assumed). Like the pop-ups, the ticker was tested against a stand-in for Fantasy Manager, not the real one.
+
 ## 0.10.0 - 2026-11-08
 A fullscreen button in the controls, and score pop-ups from Fantasy Manager.
 - **Fullscreen button** (P-24): in the page-level strip at the top right of the player controls, after cast and the mini player. It enters and leaves fullscreen and changes its icon. It is hidden where the browser has no fullscreen (iPhone Safari) and in the Android app, which is already full screen. Settings > Fullscreen and the F key still work.
