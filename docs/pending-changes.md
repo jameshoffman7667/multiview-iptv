@@ -144,7 +144,7 @@ Status: Built in 0.10.0.
 
 ### P-25 - Fantasy ticker along the bottom (Fantasy Manager data)
 Requested: 2026-11-08 (James: scrolling ticker of matchup scores and player scoring for every league, from Fantasy Manager).
-Type: minor (new feature, new endpoints, new env FANTASY_URL / FANTASY_TOKEN)   Status: Blocked (Fantasy Manager 4.17.0 API received, saved as docs/fantasy-manager-api.md; waiting on slot, kickoffAt and statLine fields, see docs/fantasy-manager-followup.md)
+Type: minor (new feature, new endpoints, new env FANTASY_URL / FANTASY_TOKEN)   Status: Pending (ready to build: Fantasy Manager 4.17.1 API received 2026-11-08, saved as docs/fantasy-manager-api.md; it now has slot, slotOrder, kickoffAt and raw stats)
 Decisions 2026-11-08: ticker is admins only; starters only for both teams.
 Ticker design (James, 2026-11-08), repeated per league, in this order:
 1. Header block scrolls in: league name, then my team name + my score (both coloured vs projection), then opponent score + opponent team name (white). Team names sit under the corresponding score (my name left, opponent name right).
@@ -156,6 +156,7 @@ Ticker design (James, 2026-11-08), repeated per league, in this order:
 4. Score-up effect: when a player comes on screen and has scored since the last time his name was on screen for that side of the matchup (mine vs opponent, across all leagues), his total turns green (mine) or red (opponent) with a glow and rolls up to the new score, and the team total rolls up with it.
 Fantasy Manager 4.17.0 gives: summary, SSE score events, headshots, health, colour rule (green #3FAE58, amber #D9A521, red #D6533B; league colour is green/amber/red by expected final vs opponent, 5% of remaining). Missing for this design: roster slot + order, kickoff time, counting-stat line. Address is the Fantasy Manager client port on the LAN; token created in its Account > Multiview access (given to Claude Code, never in the repo).
 Ticker bar is opaque (decided 2026-11-08). Setting "Ticker position": Below the video (default; the video area shrinks so the ticker never covers a score bug) or Overlap the video (for streams that carry their own ticker; the opaque bar covers the bottom of the picture). Pop-ups stay without background; the look in docs/img mock-ups is approved.
+4.17.1 notes: `stats` is a raw object (null until the game is live or final; QB passCmp/passAtt/passYds/passTd/int/rushAtt/rushYds/rushTd, RB/WR/TE rushAtt/rushYds/rushTd/rec/recYds/recTd, K fgm/xpm, DEF sacks/int), so Multiview formats the bracketed stat line itself; stats can lag the score by a minute or two. The league `colour` is used for the team name and score (no `mine.colour`). `players` come in a stable order (mine by slotOrder, then opponent). DEF playerId is the team abbreviation and its headshot is the team logo. Summary is polled every 15 s during games.
 Open: league-name colour (assumed neutral/white now that the team name and score carry the vs-projection colour; confirm), colour rule from Fantasy Manager, address and read-only token.
 
 ### P-26 - Fantasy score pop-ups (headshot, one at a time)

@@ -33,6 +33,7 @@ function mockFm() {
       req.on('close', () => m.clients.delete(res));
       return;
     }
+    if (req.url === '/api/headshot/SF') { res.writeHead(200, { 'Content-Type': 'image/svg+xml' }); return res.end('<svg xmlns="http://www.w3.org/2000/svg"/>'); }
     if (req.url === '/api/headshot/6794') { res.writeHead(200, { 'Content-Type': 'image/png' }); return res.end(PNG); }
     res.writeHead(404); res.end();
   });
@@ -98,6 +99,18 @@ describe('event parsing', () => {
   });
 });
 
+describe('Fantasy Manager 4.17.1 doc examples', () => {
+  test('the exact score event from the doc is accepted, a DEF event keeps its team abbreviation, null reason and providerAt are fine', () => {
+    const doc = { id: 'evt_1794078131000', detectedAt: '2026-11-08T18:02:11Z', providerAt: null, playerId: '6794', name: "Ja'Marr Chase", pos: 'WR', nflTeam: 'CIN', delta: 6.4, points: 24.3, reason: null, headshot: '/api/headshot/6794',
+      leagues: [{ leagueId: '123', name: 'The Forgotten Titans', side: 'mine', delta: 6.4, mineBefore: 96.4, mineAfter: 102.8, oppBefore: 78.2, oppAfter: 78.2, colour: 'green' }] };
+    const c = cleanEvent(doc);
+    assert.equal(c.id, 'evt_1794078131000');
+    assert.equal(c.leagues[0].mineAfter, 102.8);
+    assert.equal(c.reason, '');
+    assert.equal(cleanEvent(Object.assign({}, doc, { playerId: 'SF', name: '49ers', pos: 'DEF', nflTeam: 'SF' })).playerId, 'SF');
+  });
+});
+
 describe('Fantasy Manager link', () => {
   let fm; let app; let base; let dir; let admin; let viewer;
   before(async () => {
@@ -159,6 +172,9 @@ describe('Fantasy Manager link', () => {
     const before = fm.seenAuth.length;
     await request(base, '/api/fantasy/headshot/6794', { headers: { Cookie: admin } });
     assert.equal(fm.seenAuth.length, before, 'second request comes from the cache');
+    const logo = await request(base, '/api/fantasy/headshot/SF', { headers: { Cookie: admin } });
+    assert.equal(logo.status, 200, 'a DEF logo (team abbreviation) works');
+    assert.equal(logo.headers['content-type'], 'image/svg+xml');
     assert.equal((await request(base, '/api/fantasy/headshot/9999', { headers: { Cookie: admin } })).status, 404);
     assert.equal((await request(base, '/api/fantasy/headshot/..%2Fetc', { headers: { Cookie: admin } })).status === 200, false);
   });

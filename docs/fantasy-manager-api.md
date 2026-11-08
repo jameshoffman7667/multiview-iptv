@@ -1,9 +1,9 @@
-# Fantasy Manager -> IPTV Multiview: ticker API (v4.17.0)
+# Fantasy Manager -> IPTV Multiview: ticker API (v4.17.1)
 
 Answers to the Multiview handoff. Read-only, token-protected, JSON/UTF-8, ISO-8601 UTC. Nothing here writes to Sleeper.
 
 ## Address and version
-- Version with the API: **4.17.0** (confirm with `GET /api/ticker/health`, which returns the running version).
+- Version with the API: **4.17.1** (4.17.0 lacks slot, slotOrder, kickoffAt and stats) (confirm with `GET /api/ticker/health`, which returns the running version).
 - Multiview's server calls `http://<Fantasy Manager host LAN IP>:<CLIENT_PORT>` (the client container's published port, default 5000; ask Claude Code on the server for the exact value). nginx there forwards `/api/` to the server container, and the stream route is un-buffered. The server container's own port 4000 is not published. **No compose or .env change is needed**, so Multiview does not have to join the Fantasy Manager Docker network.
 - Do not use the public hostname: it may sit behind Cloudflare Access.
 
@@ -26,10 +26,15 @@ Served from a cache (rebuilt at most every 15 s during games, every 60 s otherwi
     "mine": { "teamId": "1", "name": "The All Days", "points": 96.4, "projected": 134.6 },
     "opp":  { "teamId": "4", "name": "Bills Mafia",  "points": 78.2, "projected": 120.1 },
     "players": [{ "playerId": "6794", "name": "Ja'Marr Chase", "pos": "WR", "nflTeam": "CIN", "side": "mine|opp",
-                  "starter": true, "points": 24.3, "projected": 16.1, "gameStatus": "pre|live|final", "gameClock": "8:41 - 2nd" }] }] }
+                  "starter": true, "slot": "WR", "slotOrder": 3, "kickoffAt": "2026-11-08T18:00:00.000Z",
+                  "points": 24.3, "projected": 16.1, "gameStatus": "pre|live|final", "gameClock": "8:41 - 2nd",
+                  "stats": { "rushAtt": 0, "rushYds": 0, "rushTd": 0, "rec": 7, "recYds": 112, "recTd": 1 } }] }] }
 ```
 - `status`: `pre` = none of the starters' games has started, `final` = all are finished, otherwise `live` (so a week with Thursday done and Sunday to come is `live`).
 - `projected` for a team is the **expected final** (live estimate); for a player it is his week projection. `teamId` is the Sleeper roster id. `gameClock` is ESPN's status text, null before kickoff.
+- **v4.17.1 fields on each player:** `slot` is the lineup position from the league's roster settings (QB, RB, WR, TE, FLEX, SUPER_FLEX, K, DEF; bench players are `"BN"`); `slotOrder` is the 0-based position in the lineup (null on the bench). `players` are returned in a stable order: your side first, then the opponent, starters by `slotOrder`, then bench. `kickoffAt` is his game's kickoff in ISO UTC, null when there is no game (bye) or the time is unknown.
+- **`stats` is the raw object, not a formatted `statLine`** (Multiview formats it). It is null until his game is live or final. Keys depend on position: QB `passCmp, passAtt, passYds, passTd, int, rushAtt, rushYds, rushTd`; RB/WR/TE `rushAtt, rushYds, rushTd, rec, recYds, recTd`; K `fgm, xpm`; DEF `sacks, int`. Values come from Sleeper's live week stats (refreshed about every 90 s, so they can lag the score by a minute or two); key names are Sleeper's, read from the code, not seen live. A missing stat is 0.
+- `colour` on the league is the one to use for your team name and score (there is no `mine.colour`). A DEF `playerId` is the team abbreviation (for example `SF`) and `/api/headshot/SF` returns the team logo.
 - `players` = starters only; `?bench=1` adds bench players with `"starter": false`. `?week=` asks for another week (computed on demand, cached 60 s).
 
 ### GET /api/ticker/stream  (Server-Sent Events)
@@ -49,7 +54,7 @@ Event `score`, one per starter whose points went UP since the last look, all lea
 Token required. PNG/JPG from the existing disk cache (Sleeper's image site first, then ESPN's; 30-day hits, misses retried after a day). Unknown players get a grey silhouette (SVG). Sleeper player ids; for a DEF use the team abbreviation. Licence/terms: these are the public Sleeper and ESPN CDN images the app already shows; Multiview should cache them locally only, not republish.
 
 ### GET /api/ticker/health
-`{ "status": "ok", "version": "4.17.0", "lastProviderUpdate": "2026-11-08T18:02:11Z" }` (`lastProviderUpdate` = when the last snapshot was built, null before the first). Token required.
+`{ "status": "ok", "version": "4.17.1", "lastProviderUpdate": "2026-11-08T18:02:11Z" }` (`lastProviderUpdate` = when the last snapshot was built, null before the first). Token required.
 
 ## League colour rule (the one on the Game Day cards, server/gameday.js)
 - remaining = (my projected - my points) + (opp projected - opp points), each side floored at 0; threshold = 5% of remaining.

@@ -1,3 +1,5 @@
+> Answered 2026-11-08 by Fantasy Manager 4.17.1 (docs/fantasy-manager-api.md): slot, slotOrder, kickoffAt and a raw `stats` object were added; league `colour` is used for the team name. Nothing further is needed from that chat for the ticker.
+
 # Follow-up for the Fantasy Manager chat (reply to your v4.17.0 ticker API doc)
 
 Thanks, the doc is clear and the colour rule is exactly what Multiview needs. The ticker design changed after the first handoff, so I need four small additions to `GET /api/ticker/summary` (starters only is already what you return). Please log it in your pending changes and build only when James says "build".
