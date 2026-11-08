@@ -135,3 +135,8 @@ Type: docs   Status: Built in 0.8.0
 Notes / questions: no docs/functional-spec.md; the pending log is PENDING_CHANGES.md in the repo root, not docs/pending-changes.md; deploy/ holds only RELEASE.md (compose files are in the repo root as docker-compose.yml and stack.yml, no deploy/compose.yaml or deploy/.env.example); CHANGELOG headings have no `v` prefix and no Short/Long lines. Question: which of these should move to the spec's layout, given the push-to-main flow already in use?
 Decided 2026-11-05 (James: "go with your recommendations"): (1) write docs/functional-spec.md; (2) move the pending log to docs/pending-changes.md and update references; (3) add deploy/compose.yaml and deploy/.env.example (README paths updated; root docker-compose.yml / stack.yml kept as references or pointed at deploy/); (4) keep push-to-main releases (no switch back to tag pushes); (5) keep amd64 + arm64; (6) CHANGELOG: leave the format as is (no Short/Long lines) unless James asks later.
 Status: Built in 0.8.0.
+
+### P-24 - Fullscreen button in the player controls
+Requested: 2026-11-08 (James: "The app seems to be missing the full screen button").
+Type: minor (new button)   Status: Pending
+Notes / questions: fullscreen today is only in Settings > Fullscreen and the F key; the controls have no button for it (the old one is gone since the controls moved inside each screen). Proposal: a fullscreen / exit-fullscreen button in the page-level strip at the top right, next to cast and the mini player, so it is always at the page edge whichever screen the controls are on. It is hidden where the browser has no fullscreen (iPhone Safari) and in the Android app, which is already full screen. Question: strip at the top right (proposed), or in the options row under the arrow?
