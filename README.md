@@ -21,7 +21,7 @@ Open `http://<server-ip>:1234` on the PC, and the same address in the Android TV
 
 First run opens the **Providers** window: enter the server URL, username and password from your provider and press **Test**. It reads how many connections your plan allows and fills that in. Add as many providers as you like. Then pick a tile, press Enter (or click it) and choose a channel.
 
-**Dockhand / prebuilt image:** create a stack from `stack.yml` (it uses `mybadreligon/multiview-iptv:0.9.0` from Docker Hub). Add `ADMIN_USER` / `ADMIN_PASSWORD` under environment if the port is reachable beyond your LAN.
+**Dockhand / prebuilt image:** create a stack from `stack.yml` (it uses `mybadreligon/multiview-iptv:0.10.0` from Docker Hub). Add `ADMIN_USER` / `ADMIN_PASSWORD` under environment if the port is reachable beyond your LAN.
 
 Without Docker: `node src/server.js` (Node 20+, no packages to install). Settings are stored in the `/data` volume (`providers.json`, channel list cache).
 
@@ -48,6 +48,8 @@ Then add `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS` (`iptv`) and `ANDROID_
 
 ### Local mode and casting in the app
 
+- **Fullscreen** - a button at the top right of the controls (after cast and the mini player); also Settings > Fullscreen and the `F` key. Hidden in the Android app and on browsers without fullscreen.
+- **Score pop-ups** (admins; needs Fantasy Manager 4.17.0+ and `FANTASY_URL` / `FANTASY_TOKEN`): when a starter in any of your leagues scores, the player's headshot slides down from the top centre with the points on each side (green: yours, red: your opponent's) and the leagues beside them with both totals; one at a time, 5 s each, queued. Settings > *Show a pop-up when a player scores* sets the smallest score (default 3 points), a delay for delayed streams, opponents on/off, size and how late a pop-up may be; *Show a sample pop-up* tests the look.
 - **Local mode** (admins, off by default): Settings > *Local mode*. The selected screen plays straight from your provider in the app's native player, skipping the server (handy away from home with a slow upload). One screen at a time, its own provider connection, no rewind / recording / cast for it; if it fails it falls back to the server by itself. Also plays AC-3 / E-AC-3 audio.
 - **Cast** from phones and tablets with Google Play services: the cast button lists your Cast devices and plays the server's cast link on the one you pick (the Cast device must be able to reach the server address). Hidden on TV boxes.
 
@@ -162,6 +164,7 @@ Tuning: `RING_MB` (default 32) is the relay buffer per channel, about a minute o
 | `DATA_DIR` | `/data` in Docker | where the app keeps its files inside the container (`providers.json`, `users.json`, `views.json`, sessions, channel cache) |
 | `DATA_PATH` | `iptv-data` volume | compose/stack only: what is mounted at `/data`. Set it to a host folder such as `/srv/iptv` (owned by uid 1000) to keep the data there, or leave it for the named volume |
 | `ADMIN_USER`, `ADMIN_PASSWORD` | none | creates the first admin account at start, only if no accounts exist yet |
+| `FANTASY_URL` / `FANTASY_TOKEN` | empty (off) | Fantasy Manager score pop-ups (admins): its LAN address with the client port, e.g. `http://192.168.4.11:5000`, and the read-only token from Fantasy Manager > Account > Multiview access. Values go in the server `.env`, never in git |
 | `TRUST_PROXY` | off | set to `1` when the app sits behind Caddy, Cloudflare or another proxy: failed-login lockouts then use the real client address (`CF-Connecting-IP` / `X-Forwarded-For`) instead of the proxy's |
 | `BASIC_AUTH` | none | optional extra `user:password` gate in front of everything (separate from the user logins above) |
 | `REC_DIR` | `<DATA_DIR>/recordings` | where recordings and downloads are saved (large, slow disk is fine). Kept until deleted |

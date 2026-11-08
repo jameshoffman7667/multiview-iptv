@@ -63,12 +63,16 @@
   applyTheme();
   var ME = null; // set after /api/me: { admin, user, open, authRequired }
   function loadState() {
-    var d = { layout: '3x3', tiles: [], sel: 0, muted: false, bufSec: 4, keepSec: 0, transport: 'auto', fit: 'contain', failover: true, smallSd: true, vol: 1, shared: '', theme: 'system', local: false, workers: true, stats: false, labels: false, epgOn: true, favs: {}, pk: {} };
+    var d = { layout: '3x3', tiles: [], sel: 0, muted: false, bufSec: 4, keepSec: 0, transport: 'auto', fit: 'contain', failover: true, smallSd: true, vol: 1, shared: '', theme: 'system', local: false, fpop: true, fmin: 3, fdelay: 0, fopp: true, fsize: 'auto', fage: 60, workers: true, stats: false, labels: false, epgOn: true, favs: {}, pk: {} };
     var j = {};
     try { j = JSON.parse(localStorage.getItem(LS_KEY)) || {}; } catch (e) { j = {}; }
     Object.keys(d).forEach(function (k) { if (j[k] !== undefined && typeof j[k] === typeof d[k]) d[k] = j[k]; });
     if (!LAYOUTS[d.layout]) d.layout = '3x3';
     if (d.theme !== 'light' && d.theme !== 'dark') d.theme = 'system';
+    if (['auto', 'small', 'medium', 'large'].indexOf(d.fsize) < 0) d.fsize = 'auto';
+    d.fmin = clamp(Number(d.fmin) || 0, 0, 100);
+    d.fdelay = clamp(Number(d.fdelay) || 0, 0, 180);
+    d.fage = clamp(Number(d.fage) || 60, 5, 600);
     var tiles = Array.isArray(j.tiles) ? j.tiles : [];
     d.tiles = [];
     for (var i = 0; i < SLOTS; i++) {
@@ -1040,7 +1044,9 @@
     tv: { d: 'M3 5h18v12H3z M8 21h8 M12 17v4', fill: true, text: '', dark: true },
     rec: { d: 'M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18z', fill: true, red: true, text: 'REC' },
     menu: { d: 'M4 6h16 M4 12h16 M4 18h16' },
-    pip: { d: 'M3 5h18v14H3z M12 12h8v6h-8z', fill: false }
+    pip: { d: 'M3 5h18v14H3z M12 12h8v6h-8z', fill: false },
+    full: { d: 'M4 9V4h5 M20 9V4h-5 M4 15v5h5 M20 15v5h-5' },
+    fullExit: { d: 'M9 4v5H4 M15 4v5h5 M9 20v-5H4 M15 20v-5h5' }
   };
   function icon(name, label) {
     var def = ICONS[name];
@@ -1101,6 +1107,8 @@
     o.cast.hidden = true;
     o.pip = obtn('ov-pip', 'pip', 'Mini player (keeps playing over other apps)', pipEnter);
     o.pip.hidden = !pipMode();
+    o.full = obtn('ov-full', 'full', 'Fullscreen', toggleFullscreen);
+    o.full.hidden = !fsSupported();
     o.pull = obtn('ov-pull', 'chevR', 'Menu', function () { sideToggle(); }, 'ov-pull');
     o.back = obtn('ov-back', 'back', 'Back 10 seconds', function () { skip(-10); }, 'big');
     o.play = obtn('ov-play', 'pause', 'Play / pause', togglePlay, 'huge');
@@ -1146,7 +1154,7 @@
     o.opt.dl.btn.appendChild(icon('download'));
     var top = h('div', { class: 'ov-top' }, o.guide, o.title, h('span', { class: 'spacer' }));
     // page-level strip: menu arrow, cast and mini player stay at the screen edges whichever screen the controls are on
-    var strip = h('div', { class: 'ov-strip' }, o.cast, o.pip);
+    var strip = h('div', { class: 'ov-strip' }, o.cast, o.pip, o.full);
     var mid = h('div', { class: 'ov-mid' }, o.back, o.play, o.fwd);
     var right = h('div', { class: 'ov-right' }, o.up, o.down);
     var bar = h('div', { class: 'ov-bar' }, h('div', { class: 'ov-vols' }, o.mute, o.vol), h('div', { class: 'ov-prog' }, o.seek, o.live, o.time));
@@ -1469,6 +1477,10 @@
     oo.dl.btn.disabled = !c;
     o.cast.hidden = !(castState.avail || nativeCast());
     o.pip.hidden = !pipMode();
+    o.full.hidden = !fsSupported();
+    setIcon(o.full, fsElement() ? 'fullExit' : 'full');
+    o.full.title = fsElement() ? 'Exit fullscreen' : 'Fullscreen';
+    o.full.setAttribute('aria-label', o.full.title);
     pipNote(!!c);
     o.pull.classList.toggle('open', side.open);
   }
@@ -1610,7 +1622,151 @@
       else (el.requestFullscreen || el.webkitRequestFullscreen).call(el);
     } catch (e) { banner('Fullscreen is not available in this browser', 3000); }
   }
-  function onFullscreenChange() { var b = $('#set-full'); if (b) b.textContent = fsElement() ? 'Exit fullscreen' : 'Fullscreen'; }
+  // no fullscreen button where the browser has none (iPhone Safari) or in the Android app (already full screen)
+  function fsSupported() { var el = document.documentElement; return !window.MVApp && !!(el.requestFullscreen || el.webkitRequestFullscreen); }
+  function onFullscreenChange() { var b = $('#set-full'); if (b) b.textContent = fsElement() ? 'Exit fullscreen' : 'Fullscreen'; ovlSync(); }
+
+  // ---------------------------------------------------------------- fantasy score pop-ups (P-26, admins only)
+  // Fantasy Manager's score events come through this server. One pop-up at a time, queued, each shown for about 5 s:
+  // slides down from the top, shows the league totals from before the play and 0 points for half a second, rolls the
+  // numbers up to the new values, stays, slides back off the top. No background, only a shadow.
+  var FP = { avail: false, es: null, seen: {}, seenN: 0, queue: [], showing: false, timer: null, wake: null, status: null, t: { slide: 450, hold0: 500, roll: 900, show: 5000, gap: 250 } };
+  var FCOL = { green: '#3FAE58', amber: '#D9A521', red: '#D6533B' };
+  function fpTimes() { var t = {}; var o = window.__fpTiming || {}; Object.keys(FP.t).forEach(function (k) { t[k] = o[k] !== undefined ? o[k] : FP.t[k]; }); return t; }
+  function fpInit() {
+    if (!isAdmin()) return;
+    api('/api/fantasy/status').then(function (st) { FP.avail = !!st.enabled; FP.status = st; fpConnect(); }, noop);
+  }
+  function fpConnect() {
+    if (!FP.avail || !S.fpop || FP.es || !window.EventSource) return;
+    var es = new EventSource('/api/fantasy/stream?recent=10');
+    FP.es = es;
+    es.addEventListener('score', function (e) { try { fpIncoming(JSON.parse(e.data)); } catch (x) { /* bad event */ } });
+    es.addEventListener('status', function (e) { try { FP.status = JSON.parse(e.data); fpStatusNote(); } catch (x) { /* ignore */ } });
+  }
+  function fpDisconnect() { if (FP.es) { FP.es.close(); FP.es = null; } }
+  function fpApply() { if (S.fpop) fpConnect(); else { fpDisconnect(); FP.queue = []; } }
+  function fpStatusNote() {
+    var n = $('#fp-note');
+    if (!n) return;
+    var st = FP.status;
+    n.textContent = !FP.avail ? 'Not set up on the server (FANTASY_URL and FANTASY_TOKEN).' : !st ? '' : st.connected ? 'Connected to Fantasy Manager.' : (st.error || 'Not connected to Fantasy Manager yet.');
+    n.className = 'note' + (FP.avail && st && !st.connected ? ' warn' : '');
+  }
+  function fpIncoming(ev, force) {
+    if (!ev || !ev.leagues || !ev.leagues.length || !S.fpop && !force) return;
+    if (ev.id) {
+      if (FP.seen[ev.id]) return;
+      FP.seen[ev.id] = 1;
+      if (++FP.seenN > 400) { FP.seen = {}; FP.seenN = 0; }
+    }
+    var leagues = ev.leagues.filter(function (l) { return l.delta > 0 && (S.fopp || l.side !== 'opp'); });
+    if (!leagues.length) return;
+    var big = 0;
+    leagues.forEach(function (l) { if (l.delta > big) big = l.delta; });
+    if (!force && big < S.fmin) return;
+    var arrived = Date.now() - Math.max(0, Number(ev.age) || 0);
+    var e = { id: ev.id, playerId: ev.playerId, name: ev.name, pos: ev.pos, team: ev.nflTeam, reason: ev.reason, leagues: leagues.map(function (l) { return Object.assign({}, l); }), due: arrived + (force ? 0 : S.fdelay * 1000) };
+    // the same player scoring again before his pop-up has started joins it (one pop-up per player at a time)
+    for (var i = 0; i < FP.queue.length; i++) {
+      var q = FP.queue[i];
+      if (q.playerId !== e.playerId) continue;
+      e.leagues.forEach(function (l) {
+        var m = null;
+        q.leagues.forEach(function (x) { if (x.leagueId === l.leagueId && x.side === l.side) m = x; });
+        if (m) { m.delta += l.delta; m.mineAfter = l.mineAfter; m.oppAfter = l.oppAfter; if (l.colour) m.colour = l.colour; } else q.leagues.push(l);
+      });
+      fpPump();
+      return;
+    }
+    FP.queue.push(e);
+    FP.queue.sort(function (a, b) { return a.due - b.due; });
+    fpPump();
+  }
+  function fpPump() {
+    clearTimeout(FP.wake);
+    if (FP.showing) return;
+    var now = Date.now();
+    // a play that waited longer than the age limit past its time is dropped rather than shown late
+    FP.queue = FP.queue.filter(function (e) { return now - e.due <= S.fage * 1000; });
+    if (!FP.queue.length) return;
+    var next = FP.queue[0];
+    if (next.due > now) { FP.wake = setTimeout(fpPump, Math.min(next.due - now, 2000)); return; }
+    if (modals.length || document.hidden || document.body.classList.contains('pip')) { FP.wake = setTimeout(fpPump, 500); return; }
+    FP.queue.shift();
+    fpShow(next);
+  }
+  function fpShort(n) { var p = String(n || '').trim().split(/\s+/); return p.length > 1 ? p[0].charAt(0) + '. ' + p.slice(1).join(' ') : p[0] || ''; }
+  function fpScale() {
+    var base = S.fsize === 'small' ? 0.7 : S.fsize === 'large' ? 1.25 : S.fsize === 'medium' ? 1 : (visibleCount() <= 1 ? 1 : visibleCount() <= 4 ? 0.85 : 0.7);
+    return Math.max(0.2, Math.min(base, (window.innerWidth - 16) / 1240));
+  }
+  function fpFmt(v, plus) { return (plus ? '+' : '') + (Math.round(v * 10) / 10).toFixed(1); }
+  function fpShow(e) {
+    FP.showing = true;
+    var T = fpTimes();
+    var nums = [];   // { el, from, to, plus }
+    function num(cls, from, to, plus) {
+      var sp = h('span', { class: cls, text: fpFmt(from, plus) });
+      nums.push({ el: sp, from: from, to: to, plus: plus });
+      return sp;
+    }
+    function side(list) { var m = 0; list.forEach(function (l) { if (l.delta > m) m = l.delta; }); return m; }
+    var mine = e.leagues.filter(function (l) { return l.side !== 'opp'; });
+    var opp = e.leagues.filter(function (l) { return l.side === 'opp'; });
+    function col(list, cls) {
+      return h('div', { class: 'fp-col ' + cls }, list.map(function (l) {
+        var name = h('span', { class: 'fp-lg', text: l.name });
+        if (l.colour && FCOL[l.colour]) name.style.color = FCOL[l.colour];
+        var tot = h('span', { class: 'fp-tt' }, num('fp-a', l.mineBefore, l.mineAfter), h('span', { class: 'fp-d', text: '–' }), num('fp-b', l.oppBefore, l.oppAfter));
+        return h('div', { class: 'fp-row' }, name, tot);
+      }));
+    }
+    var sl = h('div', { class: 'fp-side l' }, mine.length ? num('fp-n', 0, side(mine), true) : '');
+    var sr = h('div', { class: 'fp-side r' }, opp.length ? num('fp-n', 0, side(opp), true) : '');
+    if (!mine.length) sl.style.visibility = 'hidden';
+    if (!opp.length) sr.style.visibility = 'hidden';
+    var img = h('img', { class: 'fp-ph', src: '/api/fantasy/headshot/' + encodeURIComponent(e.playerId || 'x'), alt: '', width: '150', height: '150', 'data-id': e.playerId || '' });
+    img.addEventListener('error', function () { img.src = FP_SIL; }, { once: true });
+    var line = h('div', { class: 'fp-nm' }, fpShort(e.name), h('span', { text: ' ' + [e.pos, e.team, e.reason].filter(Boolean).join(' · ') }));
+    var box = h('div', { class: 'fp-box' }, h('div', { class: 'fp-top' }, col(mine, 'l'), sl, img, sr, col(opp, 'r')), line);
+    var el = h('div', { id: 'fpop', class: 'fpop', 'aria-hidden': 'true' }, box);
+    el.style.setProperty('--fps', String(fpScale()));
+    el.style.setProperty('--fpslide', T.slide + 'ms');
+    document.body.appendChild(el);
+    var live = $('#fp-live');
+    if (!live) { live = h('div', { id: 'fp-live', class: 'sr-only', role: 'status', 'aria-live': 'polite' }); document.body.appendChild(live); }
+    live.textContent = fpShort(e.name) + ' scored ' + fpFmt(side(mine) || side(opp)) + ' points';
+    FP.cur = { el: el, nums: nums };
+    void el.offsetWidth;                       // start off the top, then slide down
+    box.classList.add('in');
+    var done = false;
+    function roll() {
+      var t0 = performance.now();
+      (function step(now) {
+        if (done) return;
+        var k = Math.min(1, (now - t0) / Math.max(1, T.roll));
+        var ease = 1 - Math.pow(1 - k, 3);
+        nums.forEach(function (n) { n.el.textContent = fpFmt(n.from + (n.to - n.from) * ease, n.plus); });
+        if (k < 1) requestAnimationFrame(step);
+      })(t0);
+    }
+    setTimeout(roll, T.slide + T.hold0);
+    setTimeout(function () { box.classList.remove('in'); box.classList.add('out'); }, T.slide + T.show);
+    setTimeout(function () {
+      done = true;
+      el.remove();
+      FP.cur = null;
+      FP.showing = false;
+      FP.wake = setTimeout(fpPump, T.gap);
+    }, T.slide + T.show + T.slide);
+  }
+  var FP_SIL = 'data:image/svg+xml;utf8,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 150 150"><defs><linearGradient id="g" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#e9edf5"/><stop offset="1" stop-color="#9aa6bd"/></linearGradient></defs><ellipse cx="75" cy="52" rx="29" ry="33" fill="url(#g)"/><path d="M14 150c2-34 20-52 44-56l17 12 17-12c24 4 42 22 44 56z" fill="url(#g)"/></svg>');
+  function fpTest() {
+    fpIncoming({ id: 'test-' + Date.now(), playerId: 'x', name: 'Sample Player', pos: 'WR', nflTeam: 'SMP', reason: 'TD', delta: 6.4, age: 0,
+      leagues: [{ leagueId: 'a', name: 'Sample League A', side: 'mine', delta: 6.4, mineBefore: 96.4, mineAfter: 102.8, oppBefore: 78.2, oppAfter: 78.2, colour: 'green' },
+        { leagueId: 'b', name: 'Sample League B', side: 'opp', delta: 6.4, mineBefore: 71.0, mineAfter: 71.0, oppBefore: 66.2, oppAfter: 72.6, colour: 'amber' }] }, true);
+  }
 
   // ---------------------------------------------------------------- casting (Google Cast; needs HTTPS)
   function initCast() {
@@ -2295,6 +2451,47 @@
   }
 
   // ---------------------------------------------------------------- settings
+  // Settings block for the Fantasy Manager score pop-ups (admins only)
+  function fantasyBlock() {
+    function numSel(key, list, label) {
+      var sel = h('select');
+      if (list.indexOf(S[key]) < 0) list = list.concat([S[key]]).sort(function (a, b) { return a - b; });
+      list.forEach(function (n) { sel.appendChild(h('option', { value: String(n), text: label(n) })); });
+      sel.value = String(S[key]);
+      sel.addEventListener('change', function () { S[key] = Number(sel.value); saveSoon(); });
+      return sel;
+    }
+    var on = h('input', { type: 'checkbox', id: 'fp-on' });
+    on.checked = !!S.fpop;
+    on.addEventListener('change', function () { S.fpop = on.checked; saveSoon(); fpApply(); });
+    var opp = h('input', { type: 'checkbox', id: 'fp-opp' });
+    opp.checked = !!S.fopp;
+    opp.addEventListener('change', function () { S.fopp = opp.checked; saveSoon(); });
+    var size = h('select', { id: 'fp-size' }, h('option', { value: 'auto', text: 'Automatic (smaller with more screens)' }), h('option', { value: 'small', text: 'Small' }), h('option', { value: 'medium', text: 'Medium' }), h('option', { value: 'large', text: 'Large' }));
+    size.value = S.fsize;
+    size.addEventListener('change', function () { S.fsize = size.value; saveSoon(); });
+    var note = h('div', { class: 'note', id: 'fp-note' });
+    setTimeout(fpStatusNote, 0);
+    var test = h('button', { class: 'btn', type: 'button', id: 'fp-test', text: 'Show a sample pop-up', onclick: fpTest });
+    var min = numSel('fmin', [0, 1, 2, 3, 4, 5, 6, 8, 10], function (n) { return n === 0 ? 'Every score' : n + ' points or more' + (n === 3 ? ' (default)' : ''); });
+    min.id = 'fp-min';
+    var delay = numSel('fdelay', [0, 5, 10, 15, 20, 30, 45, 60, 90, 120, 180], function (n) { return n === 0 ? 'No delay (default)' : n + ' seconds'; });
+    delay.id = 'fp-delay';
+    var age = numSel('fage', [15, 30, 60, 120, 300], function (n) { return n + ' seconds' + (n === 60 ? ' (default)' : ''); });
+    age.id = 'fp-age';
+    if (!FP.avail) return h('div', { class: 'fpset' }, h('div', { class: 'note', text: 'Score pop-ups (Fantasy Manager): not set up on the server (FANTASY_URL and FANTASY_TOKEN).' }));
+    return h('div', { class: 'fpset' },
+      h('label', { class: 'check' }, on, h('span', { text: 'Show a pop-up when a player scores (Fantasy Manager)' })),
+      note,
+      FP.avail ? h('div', null,
+        h('div', { class: 'field' }, h('label', { text: 'Smallest score that pops up' }), min),
+        h('div', { class: 'field' }, h('label', { text: 'Delay (to line up with a delayed stream)' }), delay),
+        h('label', { class: 'check' }, opp, h('span', { text: "Also show players on my opponents' teams" })),
+        h('div', { class: 'field' }, h('label', { text: 'Pop-up size' }), size),
+        h('div', { class: 'field' }, h('label', { text: 'Drop a pop-up that is this late' }), age),
+        h('div', { class: 'viewbtns' }, test)) : null);
+  }
+
   function openSettings() {
     function field(label, control) { return h('div', { class: 'field' }, h('label', { text: label }), control); }
     function check(label, key, after) {
@@ -2376,6 +2573,7 @@
         memNote,
         field('Video', fitSel),
         field('Theme (menus and dialogs; the video area stays black)', themeSel),
+        isAdmin() ? fantasyBlock() : null,
         field('Shared screen (for weak devices)', shSel),
         shNote, shInfo, shBtns,
         field('Stream delivery (applies when a stream reconnects)', trSel),
@@ -3344,11 +3542,12 @@
     });
     pollTimer = setInterval(refreshState, 5000);
     setTimeout(pollEpg, 2500);
+    fpInit();
     if (tiles[S.sel] && !modals.length) tiles[S.sel].el.focus();
   }
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init); else init();
 
   // test hook (harmless in production)
-  window.__mv = { updateReady: updateReady, ovlShow: ovlShow, ovlHide: ovlHide, get ovl() { return ovl; }, get side() { return side; }, castState: castState, openRecordings: openRecordings, get S() { return S; }, get ME() { return ME; }, applyView: applyView, tiles: tiles, LAYOUTS: LAYOUTS, setLayout: setLayout, select: select, assign: assign, toggleZoom: toggleZoom, sharedApply: sharedApply, get shared() { return shared; }, get zoom() { return zoom; }, get modals() { return modals.length; } };
+  window.__mv = { updateReady: updateReady, ovlShow: ovlShow, ovlHide: ovlHide, get ovl() { return ovl; }, get side() { return side; }, castState: castState, openRecordings: openRecordings, get S() { return S; }, get ME() { return ME; }, applyView: applyView, tiles: tiles, LAYOUTS: LAYOUTS, setLayout: setLayout, select: select, assign: assign, toggleZoom: toggleZoom, sharedApply: sharedApply, get shared() { return shared; }, get zoom() { return zoom; }, get modals() { return modals.length; }, get FP() { return FP; }, fpIncoming: fpIncoming, fpTest: fpTest };
 })();

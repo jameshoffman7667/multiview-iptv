@@ -15,6 +15,7 @@ const { emptyDir } = require('./rewind');
 const { Compose, cleanSpec } = require('./compose');
 const { Recordings } = require('./recordings');
 const { Cast } = require('./cast');
+const { Fantasy } = require('./fantasy');
 const xtream = require('./xtream');
 const { Users, Views } = require('./users');
 const { isUpgrade: isWsUpgrade, handshake: wsHandshake, WsSink } = require('./ws');
@@ -38,6 +39,8 @@ function createApp(options = {}) {
   if (!users.enabled && adminUser && adminPass) {
     try { users.create({ username: adminUser, password: adminPass, role: 'admin' }); } catch (e) { console.error('ADMIN_USER/ADMIN_PASSWORD ignored: ' + e.message); }
   }
+  // Fantasy Manager (P-26): optional, read-only link for score pop-ups; admins only
+  const fantasy = new Fantasy({ url: options.fantasyUrl !== undefined ? options.fantasyUrl : env('FANTASY_URL', ''), token: options.fantasyToken !== undefined ? options.fantasyToken : env('FANTASY_TOKEN', ''), reconnectMs: options.fantasyReconnectMs });
   const streamsByUser = new Map(); // username -> Set<res>
   const failures = new Map();      // "ip:<address>" or "user:<name>" -> { n, until, at }
   const LOGIN_TRIES = 8;           // wrong passwords before that address / account is locked out
@@ -583,6 +586,38 @@ function createApp(options = {}) {
       if (prov.type === 'local' || !prov.url) throw httpError(400, 'This channel cannot play directly (it is a local capture card)', 'no_direct');
       return sendJson(req, res, 200, { url: xtream.streamUrl(prov, sid), title: lists.nameOf(pid, sid) || sid, userAgent: xtream.ua(prov) });
     }
+    if (p === '/api/fantasy/status' && req.method === 'GET') {
+      needAdmin(me);
+      return sendJson(req, res, 200, fantasy.status());
+    }
+    if (p === '/api/fantasy/stream' && req.method === 'GET') {
+      needAdmin(me);
+      if (!fantasy.enabled) throw httpError(404, 'Fantasy Manager is not set up (FANTASY_URL and FANTASY_TOKEN)', 'fantasy_off');
+      res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' });
+      const send = (ev, at) => res.write(`id: ${ev.id}\nevent: score\ndata: ${JSON.stringify({ ...ev, age: Math.max(0, Date.now() - at) })}\n\n`);
+      const recent = Math.max(0, Math.min(600, Number(url.searchParams.get('recent')) || 0));
+      if (recent) for (const x of fantasy.since(Date.now() - recent * 1000)) send(x.ev, x.at);
+      res.write(`event: status\ndata: ${JSON.stringify(fantasy.status())}\n\n`);
+      const onScore = (ev, at) => send(ev, at);
+      const onStatus = () => res.write(`event: status\ndata: ${JSON.stringify(fantasy.status())}\n\n`);
+      fantasy.on('score', onScore);
+      fantasy.on('status', onStatus);
+      const hb = setInterval(() => res.write(': hb\n\n'), 15000);
+      const done = () => { clearInterval(hb); fantasy.off('score', onScore); fantasy.off('status', onStatus); };
+      req.on('close', done);
+      res.on('error', done);
+      return;
+    }
+    const fh = /^\/api\/fantasy\/headshot\/([A-Za-z0-9_-]{1,24})$/.exec(p);
+    if (fh && req.method === 'GET') {
+      needAdmin(me);
+      return await new Promise((resolve) => fantasy.headshot(fh[1], (rec) => {
+        if (!rec) { res.writeHead(404, { 'Cache-Control': 'no-store' }); res.end(); return resolve(); }
+        res.writeHead(200, { 'Content-Type': rec.type, 'Cache-Control': 'private, max-age=86400', 'Content-Length': rec.body.length });
+        res.end(rec.body);
+        resolve();
+      }));
+    }
     if (req.method === 'POST' && p === '/api/cast') {
       if (!me) throw httpError(401, 'Login required', 'login_required');
       const body = await readJson(req);
@@ -771,12 +806,13 @@ function createApp(options = {}) {
     users.flush();
     compose.closeAll();
     recordings.closeAll();
+    fantasy.close();
     relay.closeAll();
     server.close();
     server.closeAllConnections();
   }
 
-  return { server, config, lists, relay, compose, recordings, cast, users, views, epg, close };
+  return { server, config, lists, relay, compose, recordings, cast, users, views, epg, fantasy, close };
 }
 
 module.exports = { createApp };

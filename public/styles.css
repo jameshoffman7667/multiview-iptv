@@ -359,3 +359,25 @@ body.pip #ovl, body.pip .side, body.pip .banner, body.pip .hint { display: none 
 html.nativeplay, html.nativeplay body, html.nativeplay .grid { background: transparent; }
 .tile.native { background: transparent; }
 .tile.native video, .tile.native .empty { display: none; }
+
+/* ---- fantasy score pop-ups (P-26): no background or outline, only a shadow so it reads over bright video ---- */
+.fpop { position: fixed; top: 8px; left: 50%; width: 1240px; margin-left: -620px; z-index: 70; pointer-events: none; transform-origin: top center; transform: scale(var(--fps, 1)); color: #fff; font-family: inherit; }
+.fp-box { display: flex; flex-direction: column; align-items: center; transform: translateY(-160%); transition: transform var(--fpslide, 450ms) cubic-bezier(.2,.8,.25,1);
+  filter: drop-shadow(0 2px 3px rgba(0,0,0,.85)) drop-shadow(0 0 10px rgba(0,0,0,.55)); }
+.fp-box.in { transform: translateY(0); }
+.fp-box.out { transform: translateY(-160%); transition-timing-function: cubic-bezier(.55,0,.8,.3); }
+.fp-top { display: flex; align-items: center; justify-content: center; gap: 22px; width: 100%; }
+.fp-col { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; font-size: 20px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.fp-row { display: flex; align-items: baseline; gap: 18px; }
+.fp-col.r .fp-row { flex-direction: row-reverse; }
+.fp-lg { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #fff; }
+.fp-col.l .fp-lg { text-align: left; } .fp-col.r .fp-lg { text-align: right; }
+.fp-tt { display: flex; gap: 8px; white-space: nowrap; }
+.fp-a { color: #35e07a; } .fp-b { color: #ff4d4d; } .fp-d { color: #c9cedb; font-weight: 500; }
+.fp-side { flex: none; font-size: 62px; font-weight: 800; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
+.fp-side.l { color: #35e07a; } .fp-side.r { color: #ff4d4d; }
+.fp-ph { width: 150px; height: 150px; flex: none; object-fit: contain; }
+.fp-nm { margin-top: -2px; font-size: 20px; font-weight: 700; letter-spacing: .02em; }
+.fp-nm span { color: #cfd4e0; font-weight: 500; }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.fpset { margin: 6px 0 10px; }

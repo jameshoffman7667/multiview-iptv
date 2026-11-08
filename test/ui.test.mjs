@@ -1612,6 +1612,151 @@ describe('player overlay, pull-out menu, recordings, PWA', () => {
     await ctx.close();
   });
 
+  test('fullscreen button: top right of the page, after cast and the mini player, toggles fullscreen', async () => {
+    const { ctx, page, errors } = await open(two, { init: `window.__fs = []; Element.prototype.requestFullscreen = function () { window.__fs.push('enter'); return Promise.resolve(); }; document.exitFullscreen = function () { window.__fs.push('exit'); return Promise.resolve(); };` });
+    await page.waitForFunction(() => window.__players.length === 2);
+    await tap(page, 1);
+    await page.waitForFunction(() => window.__mv.ovl.shown);
+    assert.equal(await vis(page, '#ov-full'), true);
+    await page.evaluate(() => { window.__mv.castState.avail = true; window.__mv.ovlShow(); });
+    await page.waitForFunction(() => !document.getElementById('ov-cast').hidden);
+    const c = await centre(page, '#ov-cast');
+    const f = await centre(page, '#ov-full');
+    assert.ok(f.x > c.x && f.x > 1500 && f.y < 100, 'fullscreen button is top right, right of cast');
+    await page.click('#ov-full');
+    await page.waitForFunction(() => window.__fs.length === 1);
+    assert.deepEqual(await page.evaluate(() => window.__fs), ['enter']);
+    await ctx.close();
+  });
+
+  test('fullscreen button is absent where the browser has no fullscreen or in the Android app', async () => {
+    let r = await open(two, { init: `Element.prototype.requestFullscreen = undefined; Element.prototype.webkitRequestFullscreen = undefined;` });
+    await r.page.waitForFunction(() => window.__players.length === 2);
+    await tap(r.page, 1);
+    await r.page.waitForFunction(() => window.__mv.ovl.shown);
+    assert.equal(await vis(r.page, '#ov-full'), false, 'no browser fullscreen');
+    await r.ctx.close();
+    r = await open(two, { init: `window.MVApp = { canPip: function () { return false; }, setAutoPip: function () {}, changeServer: function () {} };` });
+    await r.page.waitForFunction(() => window.__players.length === 2);
+    await tap(r.page, 1);
+    await r.page.waitForFunction(() => window.__mv.ovl.shown);
+    assert.equal(await vis(r.page, '#ov-full'), false, 'Android app is already full screen');
+    await r.ctx.close();
+  });
+
+  const fpEvent = (id, player, name, delta, extra = {}) => Object.assign({ id, playerId: player, name, pos: 'WR', nflTeam: 'CIN', delta, age: 0,
+    leagues: [{ leagueId: 'a', name: 'The Forgotten Titans', side: 'mine', delta, mineBefore: 96.4, mineAfter: Math.round((96.4 + delta) * 10) / 10, oppBefore: 78.2, oppAfter: 78.2, colour: 'green' },
+      { leagueId: 'b', name: 'IRONMAN FF', side: 'opp', delta, mineBefore: 48.5, mineAfter: 48.5, oppBefore: 83.9, oppAfter: Math.round((83.9 + delta) * 10) / 10, colour: 'red' }] }, extra);
+
+  test('score pop-up: one at a time, before values then a roll up, slides in and out, no background, small scores ignored', async () => {
+    const { ctx, page, errors } = await open(two, { init: `window.__fpTiming = { slide: 120, hold0: 250, roll: 300, show: 900, gap: 60 };` });
+    await page.waitForFunction(() => window.__players.length === 2);
+    const ev = fpEvent;
+    await page.evaluate(([a, b, c]) => { window.__mv.fpIncoming(a); window.__mv.fpIncoming(b); window.__mv.fpIncoming(c); }, [ev('e1', '6794', "Ja'Marr Chase", 6.4), ev('e2', '4046', 'Josh Allen', 4.0), ev('e3', '1111', 'Small Play', 2.0)]);
+    await page.waitForSelector('#fpop');
+    assert.equal(await page.evaluate(() => document.querySelectorAll('#fpop').length), 1);
+    // right after it appears: league totals from before the play and 0 points
+    const first = await page.evaluate(() => ({ a: [...document.querySelectorAll('.fp-a')].map((e) => e.textContent), b: [...document.querySelectorAll('.fp-b')].map((e) => e.textContent), n: [...document.querySelectorAll('.fp-n')].map((e) => e.textContent), name: document.querySelector('.fp-nm').textContent }));
+    assert.deepEqual(first.a, ['96.4', '48.5']);
+    assert.deepEqual(first.b, ['78.2', '83.9']);
+    assert.deepEqual(first.n, ['+0.0', '+0.0']);
+    assert.match(first.name, /J\. Chase/);
+    const look = await page.evaluate(() => { const e = document.getElementById('fpop'); const b = e.querySelector('.fp-box'); const r = e.getBoundingClientRect(); return { bg: getComputedStyle(e).backgroundColor, bg2: getComputedStyle(b).backgroundColor, border: getComputedStyle(e).borderTopWidth, pe: getComputedStyle(e).pointerEvents, cx: r.x + r.width / 2, top: r.top, img: '/api/fantasy/headshot/' + document.querySelector('.fp-ph').getAttribute('data-id'),
+      mineSide: !!document.querySelector('.fp-col.l .fp-lg') && document.querySelector('.fp-col.l .fp-lg').textContent, oppSide: document.querySelector('.fp-col.r .fp-lg').textContent, colL: getComputedStyle(document.querySelector('.fp-col.l .fp-lg')).color, colR: getComputedStyle(document.querySelector('.fp-col.r .fp-lg')).color }; });
+    assert.equal(look.bg, 'rgba(0, 0, 0, 0)');
+    assert.equal(look.bg2, 'rgba(0, 0, 0, 0)');
+    assert.equal(look.border, '0px');
+    assert.equal(look.pe, 'none');
+    assert.ok(Math.abs(look.cx - 800) < 3, 'centred ' + look.cx);
+    assert.equal(look.img, '/api/fantasy/headshot/6794');
+    assert.equal(look.mineSide, 'The Forgotten Titans', 'my league on the left');
+    assert.equal(look.oppSide, 'IRONMAN FF', "opponent's league on the right");
+    assert.equal(look.colL, 'rgb(63, 174, 88)');
+    assert.equal(look.colR, 'rgb(214, 83, 59)');
+    // then the numbers roll up to the real values
+    await page.waitForFunction(() => document.querySelector('.fp-n') && document.querySelector('.fp-n').textContent === '+6.4' && document.querySelector('.fp-a').textContent === '102.8');
+    assert.equal(await page.evaluate(() => document.querySelectorAll('.fp-b')[1].textContent), '90.3');
+    // the next player only comes after this one has gone, never together
+    let overlap = false;
+    const t0 = Date.now();
+    while (Date.now() - t0 < 4000) {
+      const n = await page.evaluate(() => document.querySelectorAll('#fpop').length);
+      if (n > 1) overlap = true;
+      const nm = await page.evaluate(() => (document.querySelector('.fp-nm') || {}).textContent || '');
+      if (/J\. Allen/.test(nm)) break;
+      await new Promise((r) => setTimeout(r, 25));
+    }
+    assert.equal(overlap, false, 'never two at once');
+    assert.match(await page.evaluate(() => document.querySelector('.fp-nm').textContent), /J\. Allen/, 'second player followed');
+    await page.waitForFunction(() => !document.getElementById('fpop'), null, { timeout: 4000 });
+    assert.equal(await page.evaluate(() => window.__mv.FP.queue.length), 0, 'the 2.0 point play never queued');
+    assert.deepEqual(errors, []);
+    await ctx.close();
+  });
+
+  test('score pop-up: delay holds it back, the same player scoring again merges, opponents can be left out, a late one is dropped', async () => {
+    const { ctx, page, errors } = await open(two, { init: `window.__fpTiming = { slide: 80, hold0: 100, roll: 100, show: 500, gap: 30 };` });
+    await page.waitForFunction(() => window.__players.length === 2);
+    await page.evaluate(() => { window.__mv.S.fdelay = 1; });
+    const t0 = Date.now();
+    await page.evaluate((e) => window.__mv.fpIncoming(e), fpEvent('d1', '6794', "Ja'Marr Chase", 5.0));
+    await page.evaluate((e) => window.__mv.fpIncoming(e), fpEvent('d2', '6794', "Ja'Marr Chase", 3.0));
+    assert.equal(await page.evaluate(() => window.__mv.FP.queue.length), 1, 'merged into one');
+    assert.equal(await page.evaluate(() => window.__mv.FP.queue[0].leagues[0].delta), 8, 'points added up');
+    await page.waitForSelector('#fpop', { timeout: 5000 });
+    assert.ok(Date.now() - t0 >= 950, 'held back by the delay: ' + (Date.now() - t0));
+    await page.waitForFunction(() => document.querySelector('.fp-n') && document.querySelector('.fp-n').textContent === '+8.0');
+    await page.waitForFunction(() => !document.getElementById('fpop'), null, { timeout: 4000 });
+    // opponents off: only my side shows
+    await page.evaluate(() => { window.__mv.S.fdelay = 0; window.__mv.S.fopp = false; });
+    await page.evaluate((e) => window.__mv.fpIncoming(e), fpEvent('d3', '4046', 'Josh Allen', 6.0));
+    await page.waitForSelector('#fpop');
+    assert.equal(await page.evaluate(() => document.querySelectorAll('.fp-col.r .fp-row').length), 0);
+    assert.equal(await page.evaluate(() => document.querySelectorAll('.fp-col.l .fp-row').length), 1);
+    await page.waitForFunction(() => !document.getElementById('fpop'), null, { timeout: 4000 });
+    // late: due long ago beyond the age limit -> never shown
+    await page.evaluate(() => { window.__mv.S.fage = 5; });
+    await page.evaluate((e) => window.__mv.fpIncoming(e), fpEvent('d4', '9', 'Late Guy', 6.0, { age: 20000 }));
+    await new Promise((r) => setTimeout(r, 300));
+    assert.equal(await page.evaluate(() => !!document.getElementById('fpop')), false);
+    assert.equal(await page.evaluate(() => window.__mv.FP.queue.length), 0);
+    // a duplicate id is ignored
+    await page.evaluate((e) => { window.__mv.fpIncoming(e); window.__mv.fpIncoming(e); }, fpEvent('d5', '7', 'Twice Guy', 6.0));
+    await page.waitForSelector('#fpop');
+    await page.waitForFunction(() => !document.getElementById('fpop'), null, { timeout: 4000 });
+    await new Promise((r) => setTimeout(r, 300));
+    assert.equal(await page.evaluate(() => !!document.getElementById('fpop')), false, 'shown once, not twice');
+    assert.deepEqual(errors, []);
+    await ctx.close();
+  });
+
+  test('score pop-up settings: admins see them and the sample pop-up shows; it waits while a window is open; pop-ups can be switched off', async () => {
+    const { ctx, page, errors } = await open(two, { init: `window.__fpTiming = { slide: 80, hold0: 100, roll: 100, show: 400, gap: 30 };` });
+    await page.waitForFunction(() => window.__players.length === 2);
+    await page.evaluate(() => { window.__mv.FP.avail = true; });
+    await page.evaluate(() => document.getElementById('sm-settings').click());
+    await page.waitForSelector('#fp-on');
+    assert.equal(await page.evaluate(() => document.getElementById('fp-min').value), '3', 'default smallest score is 3 points');
+    assert.equal(await page.evaluate(() => document.getElementById('fp-delay').value), '0');
+    await page.selectOption('#fp-min', '5');
+    await page.selectOption('#fp-delay', '10');
+    assert.deepEqual(await page.evaluate(() => [window.__mv.S.fmin, window.__mv.S.fdelay]), [5, 10]);
+    await page.selectOption('#fp-min', '3');
+    await page.selectOption('#fp-delay', '0');
+    await page.click('#fp-test');
+    await page.waitForTimeout(400);
+    assert.equal(await page.evaluate(() => !!document.getElementById('fpop')), false, 'held while the settings window is open');
+    await page.keyboard.press('Escape');
+    await page.waitForSelector('#fpop', { timeout: 3000 });
+    await page.waitForFunction(() => !document.getElementById('fpop'), null, { timeout: 4000 });
+    await page.evaluate(() => { window.__mv.S.fpop = false; });
+    await page.evaluate((e) => window.__mv.fpIncoming(e), fpEvent('o1', '6794', "Ja'Marr Chase", 7.0));
+    await page.waitForTimeout(300);
+    assert.equal(await page.evaluate(() => !!document.getElementById('fpop')), false, 'off means off');
+    assert.deepEqual(errors, []);
+    await ctx.close();
+  });
+
   test('mini player in the Android app: native call, auto-start flag, page chrome hides while floating', async () => {
     const { ctx, page, errors } = await open(two, { init: `window.__app = []; window.MVApp = { canPip: function () { return true; }, enterPip: function () { window.__app.push('enter'); }, setAutoPip: function (on) { window.__app.push('auto:' + on); }, changeServer: function () {} };` });
     await page.waitForFunction(() => window.__players.length === 2);

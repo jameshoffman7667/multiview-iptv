@@ -13,6 +13,11 @@ services:
     ports:
       - "1234:1234"
     environment:
+      # Fantasy Manager score pop-ups (admins only). Both values come from the server .env; empty = feature off.
+      # FANTASY_URL is Fantasy Manager's LAN address, e.g. http://192.168.4.11:5000 (its client container port).
+      # FANTASY_TOKEN is the read-only token from Fantasy Manager > Account > Multiview access. Never put it in git.
+      - FANTASY_URL=${FANTASY_URL:-}
+      - FANTASY_TOKEN=${FANTASY_TOKEN:-}
       - TZ=America/Toronto
       # Recordings and downloads (kept until you delete them, no size cap): put this on a large, slow disk.
       - REC_DIR=/recordings

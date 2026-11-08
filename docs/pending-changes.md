@@ -5,7 +5,7 @@ Requests logged here are not built yet. Say "build" to fold them into a new vers
 With every push, say whether the compose/stack file must change or whether pulling the new image is enough.
 Every build rewrites deploy/RELEASE.md using the FULL template of the app spec (section 8: Update, Image, Short, Long, Release commit, Type, Port, Public hostname, env vars, Data, Resources, Healthcheck, Verify, PWA, Docker build, Rollback naming the exact previous tag, Known issues, Backup tier). Server tests use `wget` (no curl on vm101). The server's real stack file is the homelab repo's stacks/multiview-iptv/compose.yaml (stack.yml here is only a reference); never tell anyone to update the Dockhand stack. Fixed `Update:` line: `Update: now` only when the user said "build, push and update" for that release, otherwise `Update: later`.
 
-Current released version: 0.9.0 (being pushed)
+Current released version: 0.10.0 (being pushed)
 
 ### P-1 - Rebuild the on-screen menu as a traditional video player overlay
 Requested: 2026-10-18. Tap any screen (single view or multiview) to show a full-screen overlay over everything:
@@ -140,7 +140,7 @@ Status: Built in 0.8.0.
 Requested: 2026-11-08 (James: "The app seems to be missing the full screen button").
 Type: minor (new button)
 Notes / questions: fullscreen today is only in Settings > Fullscreen and the F key; the controls have no button for it (the old one is gone since the controls moved inside each screen). Proposal: a fullscreen / exit-fullscreen button in the page-level strip at the top right, next to cast and the mini player, so it is always at the page edge whichever screen the controls are on. It is hidden where the browser has no fullscreen (iPhone Safari) and in the Android app, which is already full screen. Decided 2026-11-08 (James: "Top right"): the page-level strip at the top right, next to cast and the mini player.
-Status: Pending (ready to build).
+Status: Built in 0.10.0.
 
 ### P-25 - Fantasy ticker along the bottom (Fantasy Manager data)
 Requested: 2026-11-08 (James: scrolling ticker of matchup scores and player scoring for every league, from Fantasy Manager).
@@ -160,6 +160,6 @@ Open: league-name colour (assumed neutral/white now that the team name and score
 
 ### P-26 - Fantasy score pop-ups (headshot, one at a time)
 Requested: 2026-11-08 (pop-up when players score: headshot top centre, green points left, red points right, league rows with my total green / opponent red, league name coloured vs projection, one at a time for 5 s, queue, rolling numbers, slide down/up, delay and minimum-points options).
-Type: minor   Status: Pending (the 4.17.0 API already has everything pop-ups need: score events with before/after totals, headshots, league colour; can be built before the ticker)
+Type: minor   Status: Built in 0.10.0 (needs FANTASY_URL and FANTASY_TOKEN on the server)
 Decisions 2026-11-08: pop-ups are admins only; default minimum is 3 points so only big plays show (option stays adjustable, default delay 0); starters only; negative changes never pop up (the totals still update).
 Notes: spec in docs/fantasy-ticker-scope.md section 5; provider stat lag means pop-ups cannot beat the real play, the Delay option only adds time.
