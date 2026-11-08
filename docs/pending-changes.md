@@ -143,11 +143,21 @@ Notes / questions: fullscreen today is only in Settings > Fullscreen and the F k
 Status: Pending (ready to build).
 
 ### P-25 - Fantasy ticker along the bottom (Fantasy Manager data)
-Requested: 2026-11-08 (James: "a fantasy football ticker plugin that connects to fantasy manager and scrolls across the bottom of the app showing matchup scores and player scoring for each matchup across all leagues").
-Type: minor (new feature, new endpoints, new env FANTASY_URL / FANTASY_TOKEN)   Status: Blocked (waiting on the Fantasy Manager API, see docs/fantasy-manager-api-handoff.md)
-Notes / questions: scope in docs/fantasy-ticker-scope.md and mock-ups in docs/img/. Fantasy Manager is James's own Docker app, so the data comes from its API, not Sleeper. Needs: the API from that app, its address and a read-only token, the league-name colour rule, who may see it (admins only suggested).
+Requested: 2026-11-08 (James: scrolling ticker of matchup scores and player scoring for every league, from Fantasy Manager).
+Type: minor (new feature, new endpoints, new env FANTASY_URL / FANTASY_TOKEN)   Status: Blocked (waiting on the Fantasy Manager API and its doc, see docs/fantasy-manager-api-handoff.md)
+Decisions 2026-11-08: ticker is admins only; starters only for both teams.
+Ticker design (James, 2026-11-08), repeated per league, in this order:
+1. Header block scrolls in: league name, then my team name + my score (both coloured vs projection), then opponent score + opponent team name (white). Team names sit under the corresponding score (my name left, opponent name right).
+2. As it scrolls, the league name stalls at the left edge and the ticker's left edge becomes the fall-off. Then "my score - opponent score" stalls just right of the league name and the right edge of the opponent score becomes the fall-off. Team names fall off; only league name and the two scores stay pinned. Player stats slide in behind the pinned block and disappear behind it, until the next league's name arrives and pushes the pinned block off the left, and the cycle repeats.
+3. After the header comes the whole starting lineup of each team (mine, then the opponent's), in roster-slot order.
+   - Not played yet: name plus game time.
+   - Game in progress: name, total points, counting stats in brackets.
+   - Game finished: score and final stats in light grey.
+4. Score-up effect: when a player comes on screen and has scored since the last time his name was on screen for that side of the matchup (mine vs opponent, across all leagues), his total turns green (mine) or red (opponent) with a glow and rolls up to the new score, and the team total rolls up with it.
+Open: league-name colour (assumed neutral/white now that the team name and score carry the vs-projection colour; confirm), colour rule from Fantasy Manager, address and read-only token.
 
 ### P-26 - Fantasy score pop-ups (headshot, one at a time)
-Requested: 2026-11-08 (James: pop-up when players score: headshot top centre, green points left, red points right, league rows with my total green / opponent red, league name coloured vs projection, one at a time for 5 s, queue, rolling numbers, slide down/up, delay and minimum-points options).
+Requested: 2026-11-08 (pop-up when players score: headshot top centre, green points left, red points right, league rows with my total green / opponent red, league name coloured vs projection, one at a time for 5 s, queue, rolling numbers, slide down/up, delay and minimum-points options).
 Type: minor   Status: Blocked (needs the same API, SSE score events, headshots)
-Notes / questions: full spec in docs/fantasy-ticker-scope.md section 5; mock-ups for single, quad and nine screens in docs/img/. Provider stat lag means pop-ups cannot beat the real play; the Delay option only adds time. Open questions listed in the scope doc (colour rule, who sees it, default threshold and delay, bench players, negative changes).
+Decisions 2026-11-08: pop-ups are admins only; default minimum is 3 points so only big plays show (option stays adjustable, default delay 0); starters only; negative changes never pop up (the totals still update).
+Notes: spec in docs/fantasy-ticker-scope.md section 5; provider stat lag means pop-ups cannot beat the real play, the Delay option only adds time.

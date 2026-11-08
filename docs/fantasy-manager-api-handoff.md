@@ -74,3 +74,6 @@ Return the colour in the API (`colour`) so the rule lives only in Fantasy Manage
 
 ## Deliverable back to me
 A short doc (and the app's release notes): the final endpoint list with example responses, the token setup steps, the colour rule + hex values, the address Multiview should use, and the version. Then I (the Multiview chat) will log and build the ticker (P-25) and pop-ups (P-26) against it.
+
+## Addendum 2026-11-08 - extra fields needed for the ticker design
+Starters only for both teams. Please add to each `players[]` entry in `/api/ticker/summary`: `slot` and `slotOrder` (roster slot such as QB, RB1, FLEX, and its display order), `kickoffAt` (ISO time), `gameStatus` (pre|live|final), and `statLine` (a short counting-stat string such as "12/18, 142 yds, 1 TD" or "5 rec, 61 yds, 1 TD"). Add team display names (`mine.name`, `opp.name`) and totals with projections (already listed). Colour: Multiview now colours my team name and score by vs-projection (and the opponent in white), so please return `colour` on `mine` as well as the league. Pop-ups use a 3.0-point default minimum, set in Multiview; no server-side filter needed. Negative changes need no events.
