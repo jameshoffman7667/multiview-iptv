@@ -43,16 +43,17 @@ html,body{width:1600px;height:900px;background:#000;overflow:hidden;font-family:
 .nxt .sdn{font-size:24px;font-weight:800}.nxt .d{font-size:24px;color:#6b7385;font-weight:500}
 .fade{position:absolute;right:0;top:0;bottom:0;width:0}
 /* popup: no background, no outline - only a soft shadow so it stays readable on bright video */
-#pop{position:absolute;top:10px;left:50%;transform:translateX(-50%) scale(var(--ps,1));transform-origin:top center;width:820px;display:flex;flex-direction:column;align-items:center;
+#pop{position:absolute;top:10px;left:50%;transform:translateX(-50%) scale(var(--ps,1));transform-origin:top center;width:1240px;display:flex;flex-direction:column;align-items:center;
   filter:drop-shadow(0 2px 3px rgba(0,0,0,.85)) drop-shadow(0 0 10px rgba(0,0,0,.55))}
-#pop .top{display:flex;align-items:center;justify-content:center;gap:20px;width:100%}
-#pop .side{flex:1;font-size:62px;font-weight:800;letter-spacing:-.02em;font-variant-numeric:tabular-nums}
+#pop .top{display:flex;align-items:center;justify-content:center;gap:22px;width:100%}
+#pop .col{flex:1;min-width:0}
+#pop .side{flex:none;font-size:62px;font-weight:800;letter-spacing:-.02em;font-variant-numeric:tabular-nums}
 #pop .side.l{text-align:right;color:#35e07a}#pop .side.r{text-align:left;color:#ff4d4d}
 #pop .ph{width:150px;height:150px;flex:none}
 #pop .nm{margin-top:-2px;font-size:20px;font-weight:700;letter-spacing:.02em}#pop .nm span{color:#cfd4e0;font-weight:500}
 #pop .rows{margin-top:8px;width:100%;display:grid;grid-template-columns:1fr 1fr;column-gap:60px}
 .n-g{color:#35e07a}.n-a{color:#ffc447}.n-r{color:#ff5a5a}
-#pop .col{display:flex;flex-direction:column;gap:4px}
+#pop .col{display:flex;flex-direction:column;gap:4px;font-size:20px}
 #pop .rw{display:flex;align-items:baseline;gap:18px;font-size:20px;font-weight:700;font-variant-numeric:tabular-nums}
 #pop .col.l .rw{flex-direction:row}#pop .col.r .rw{flex-direction:row-reverse}
 #pop .rw .lg{flex:1;white-space:nowrap}#pop .col.l .lg{text-align:left}#pop .col.r .lg{text-align:right}
@@ -98,7 +99,6 @@ const R=[['n-r','IRONMAN FF','48.5','83.9'],['n-g','Guardians of the Gridiron','
 const rw=r=>`<div class="rw"><span class="lg ${r[0]}">${r[1]}</span><span class="tt"><span class="a">${r[2]}</span><span class="d">–</span><span class="b">${r[3]}</span></span></div>`;
 const SIL=`<svg class="ph" viewBox="0 0 150 150"><defs><linearGradient id="sg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#e9edf5"/><stop offset="1" stop-color="#9aa6bd"/></linearGradient></defs>
 <ellipse cx="75" cy="52" rx="29" ry="33" fill="url(#sg)"/><path d="M14 150c2-34 20-52 44-56l17 12 17-12c24 4 42 22 44 56z" fill="url(#sg)"/><path d="M44 46c0-24 14-36 31-36s31 12 31 36" fill="none" stroke="#5c6a8a" stroke-width="7" stroke-linecap="round"/></svg>`;
-document.getElementById('pop').innerHTML=`<div class="top"><div class="side l">+6.4</div>${SIL}<div class="side r">+6.4</div></div>
-<div class="nm">J. Chase <span>WR · CIN · 6.4 pts TD</span></div>
-<div class="rows"><div class="col l">${L.map(rw).join('')}</div><div class="col r">${R.map(rw).join('')}</div></div>`;
+document.getElementById('pop').innerHTML=`<div class="top"><div class="col l">${L.map(rw).join('')}</div><div class="side l">+6.4</div>${SIL}<div class="side r">+6.4</div><div class="col r">${R.map(rw).join('')}</div></div>
+<div class="nm">J. Chase <span>WR · CIN · 6.4 pts TD</span></div>`;
 </script></body></html>
