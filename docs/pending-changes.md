@@ -155,6 +155,7 @@ Ticker design (James, 2026-11-08), repeated per league, in this order:
    - Game finished: score and final stats in light grey.
 4. Score-up effect: when a player comes on screen and has scored since the last time his name was on screen for that side of the matchup (mine vs opponent, across all leagues), his total turns green (mine) or red (opponent) with a glow and rolls up to the new score, and the team total rolls up with it.
 Fantasy Manager 4.17.0 gives: summary, SSE score events, headshots, health, colour rule (green #3FAE58, amber #D9A521, red #D6533B; league colour is green/amber/red by expected final vs opponent, 5% of remaining). Missing for this design: roster slot + order, kickoff time, counting-stat line. Address is the Fantasy Manager client port on the LAN; token created in its Account > Multiview access (given to Claude Code, never in the repo).
+Ticker bar is opaque (decided 2026-11-08). Setting "Ticker position": Below the video (default; the video area shrinks so the ticker never covers a score bug) or Overlap the video (for streams that carry their own ticker; the opaque bar covers the bottom of the picture). Pop-ups stay without background; the look in docs/img mock-ups is approved.
 Open: league-name colour (assumed neutral/white now that the team name and score carry the vs-projection colour; confirm), colour rule from Fantasy Manager, address and read-only token.
 
 ### P-26 - Fantasy score pop-ups (headshot, one at a time)
