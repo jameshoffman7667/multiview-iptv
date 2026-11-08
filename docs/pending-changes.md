@@ -138,5 +138,6 @@ Status: Built in 0.8.0.
 
 ### P-24 - Fullscreen button in the player controls
 Requested: 2026-11-08 (James: "The app seems to be missing the full screen button").
-Type: minor (new button)   Status: Pending
-Notes / questions: fullscreen today is only in Settings > Fullscreen and the F key; the controls have no button for it (the old one is gone since the controls moved inside each screen). Proposal: a fullscreen / exit-fullscreen button in the page-level strip at the top right, next to cast and the mini player, so it is always at the page edge whichever screen the controls are on. It is hidden where the browser has no fullscreen (iPhone Safari) and in the Android app, which is already full screen. Question: strip at the top right (proposed), or in the options row under the arrow?
+Type: minor (new button)
+Notes / questions: fullscreen today is only in Settings > Fullscreen and the F key; the controls have no button for it (the old one is gone since the controls moved inside each screen). Proposal: a fullscreen / exit-fullscreen button in the page-level strip at the top right, next to cast and the mini player, so it is always at the page edge whichever screen the controls are on. It is hidden where the browser has no fullscreen (iPhone Safari) and in the Android app, which is already full screen. Decided 2026-11-08 (James: "Top right"): the page-level strip at the top right, next to cast and the mini player.
+Status: Pending (ready to build).
