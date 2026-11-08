@@ -43,17 +43,20 @@ html,body{width:1600px;height:900px;background:#000;overflow:hidden;font-family:
 .nxt .sdn{font-size:24px;font-weight:800}.nxt .d{font-size:24px;color:#6b7385;font-weight:500}
 .fade{position:absolute;right:0;top:0;bottom:0;width:0}
 /* popup: no background, no outline - only a soft shadow so it stays readable on bright video */
-#pop{position:absolute;top:10px;left:50%;transform:translateX(-50%) scale(var(--ps,1));transform-origin:top center;width:640px;display:flex;flex-direction:column;align-items:center;
+#pop{position:absolute;top:10px;left:50%;transform:translateX(-50%) scale(var(--ps,1));transform-origin:top center;width:820px;display:flex;flex-direction:column;align-items:center;
   filter:drop-shadow(0 2px 3px rgba(0,0,0,.85)) drop-shadow(0 0 10px rgba(0,0,0,.55))}
 #pop .top{display:flex;align-items:center;justify-content:center;gap:20px;width:100%}
 #pop .side{flex:1;font-size:62px;font-weight:800;letter-spacing:-.02em;font-variant-numeric:tabular-nums}
 #pop .side.l{text-align:right;color:#35e07a}#pop .side.r{text-align:left;color:#ff4d4d}
 #pop .ph{width:150px;height:150px;flex:none}
 #pop .nm{margin-top:-2px;font-size:20px;font-weight:700;letter-spacing:.02em}#pop .nm span{color:#cfd4e0;font-weight:500}
-#pop .rows{margin-top:8px;width:100%;display:flex;flex-direction:column;gap:3px}
-#pop .row{display:grid;grid-template-columns:1fr auto 1fr;gap:16px;align-items:baseline;font-size:20px;font-weight:700;font-variant-numeric:tabular-nums}
-#pop .row .a{text-align:right;color:#35e07a}#pop .row .c{text-align:center;min-width:250px}#pop .row .b{text-align:left;color:#ff4d4d}
-#pop .row .c small{display:block;font-size:11px;font-weight:600;color:#c9cedb;margin-top:-2px;letter-spacing:.06em;text-transform:uppercase}
+#pop .rows{margin-top:8px;width:100%;display:grid;grid-template-columns:1fr 1fr;column-gap:60px}
+.n-g{color:#35e07a}.n-a{color:#ffc447}.n-r{color:#ff5a5a}
+#pop .col{display:flex;flex-direction:column;gap:4px}
+#pop .rw{display:flex;align-items:baseline;gap:18px;font-size:20px;font-weight:700;font-variant-numeric:tabular-nums}
+#pop .col.l .rw{flex-direction:row}#pop .col.r .rw{flex-direction:row-reverse}
+#pop .rw .lg{flex:1;white-space:nowrap}#pop .col.l .lg{text-align:left}#pop .col.r .lg{text-align:right}
+#pop .rw .tt{display:flex;gap:8px;white-space:nowrap}#pop .rw .tt .a{color:#35e07a}#pop .rw .tt .b{color:#ff4d4d}#pop .rw .tt .d{color:#c9cedb;font-weight:500}
 #cap{position:absolute;right:10px;bottom:64px;font-size:12px;color:#fff;background:rgba(0,0,0,.55);padding:3px 8px;border-radius:3px;z-index:9}
 </style></head><body>
 <div id="grid"></div>
@@ -90,10 +93,12 @@ document.getElementById('ticker').innerHTML=`
  </div><div class="vs"></div>
  <div class="nxt"><span class="ln">The NextFL</span><div class="pair"><div class="sd"><span class="sdn c-a">71.0</span><span class="tn">Team Mybadreligon</span></div><span class="d">–</span><div class="sd"><span class="sdn w">74.6</span><span class="tn">Slim Pickens</span></div></div></div>
 </div>`;
-const rows=[['n-g','The Forgotten Titans','102.4','88.7','Q2 8:41'],['n-a','The Human League','71.0','66.2',''],['n-r','IRONMAN FF','48.5','83.9',''],['n-g','Guardians of the Gridiron','95.6','90.1','']];
+const L=[['n-g','The Forgotten Titans','102.4','88.7'],['n-g','The Human League','71.0','66.2']];
+const R=[['n-r','IRONMAN FF','48.5','83.9'],['n-g','Guardians of the Gridiron','95.6','90.1']];
+const rw=r=>`<div class="rw"><span class="lg ${r[0]}">${r[1]}</span><span class="tt"><span class="a">${r[2]}</span><span class="d">–</span><span class="b">${r[3]}</span></span></div>`;
 const SIL=`<svg class="ph" viewBox="0 0 150 150"><defs><linearGradient id="sg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#e9edf5"/><stop offset="1" stop-color="#9aa6bd"/></linearGradient></defs>
 <ellipse cx="75" cy="52" rx="29" ry="33" fill="url(#sg)"/><path d="M14 150c2-34 20-52 44-56l17 12 17-12c24 4 42 22 44 56z" fill="url(#sg)"/><path d="M44 46c0-24 14-36 31-36s31 12 31 36" fill="none" stroke="#5c6a8a" stroke-width="7" stroke-linecap="round"/></svg>`;
 document.getElementById('pop').innerHTML=`<div class="top"><div class="side l">+6.4</div>${SIL}<div class="side r">+6.4</div></div>
 <div class="nm">J. Chase <span>WR · CIN · 6.4 pts TD</span></div>
-<div class="rows">${rows.map((r,i)=>`<div class="row"><div class="a">${r[2]}</div><div class="c ${r[0]}">${r[1]}</div><div class="b">${r[3]}</div></div>`).join('')}</div>`;
+<div class="rows"><div class="col l">${L.map(rw).join('')}</div><div class="col r">${R.map(rw).join('')}</div></div>`;
 </script></body></html>
