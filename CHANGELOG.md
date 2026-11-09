@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.13.0 - 2026-11-08
+Diagnostics to find where buffering comes from.
+- **Settings > Diagnostics** (P-28, admins only): a window with live tables. *This browser:* per screen the buffer now and its minimum over the last minute, stalls (count, total and longest), dropped frames, incoming rate and startup time. *On the server:* per channel the rate from the provider, connect and first-data times, the longest silence from the provider in the last minute, reconnects and the last errors, viewers and each viewer's queue peak and how often it backed up. Plus the server's CPU, load, memory, event-loop delay and ffmpeg count.
+- **Run 30 s test:** times a 16 MB transfer from the server to this browser, watches for 30 s, then names the likely cause: the provider (or your internet link to it), a busy server, a slow server-to-device link (Wi-Fi), or a device that cannot decode that much; with numbers, and a *Copy results* report to paste into a chat. The report has channel and provider names only, no addresses.
+- Server: `GET /api/diag` and `GET /api/diag/speed` (both admin only), new `src/health.js`. Nothing is stored on disk; no new settings or environment variables.
+- Tests: new `test/diag.test.js` (admin only, per-channel numbers, no addresses, viewer back-up counting, speed block size and cap) and UI tests (stall counting, the verdict for each cause, the window and a short test).
+
+**Upgrading from 0.12.0:** pull the new image; no compose, `.env` or data change.
+
 ## 0.12.0 - 2026-11-08
 Each admin sets their own Fantasy Manager connection in the app instead of server environment variables.
 - **Settings > Fantasy Manager** (P-27, admins only): address and read-only token (from Fantasy Manager > Account > Multiview access), with *Save*, *Test connection* (says ok and the Fantasy Manager version, or why not) and *Remove*. The pop-up and ticker options appear once a connection is saved. Other roles get 403 on every Fantasy Manager route.

@@ -180,7 +180,7 @@ Built with one addition: 169.254.0.0/16 (link-local, includes the cloud metadata
 
 ### P-28 - Diagnostics: find where buffering comes from
 Requested: 2026-11-08 (James: the app buffers more than commercial apps even on the LAN; add diagnostics to pinpoint provider, internet, relay/server, LAN or browser).
-Type: minor (new endpoint and diagnostics panel)   Status: Pending
+Type: minor (new endpoint and diagnostics panel)   Status: Built in 0.13.0 (decisions 2026-11-08: admins only; channel and provider names only, no addresses)
 Proposed scope (to confirm):
 1. Per screen (page side, from the player and video element): buffer seconds over time, stall count and total stall time, longest stall, dropped frames, incoming bitrate (bytes received per second by the page), decoded resolution, player phase, last 10 minutes kept in memory.
 2. Per channel (server side, relay.js): upstream bitrate (bytes per second from the provider), time to first byte, upstream reconnects and errors with the reason, viewers on it, bytes sent to each viewer and how often a viewer's socket backed up (slow reader), failover or SD or transcode in use.

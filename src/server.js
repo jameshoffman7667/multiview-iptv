@@ -16,6 +16,7 @@ const { Compose, cleanSpec } = require('./compose');
 const { Recordings } = require('./recordings');
 const { Cast } = require('./cast');
 const { FantasyHub } = require('./fantasy-hub');
+const { Health } = require('./health');
 const xtream = require('./xtream');
 const { Users, Views } = require('./users');
 const { isUpgrade: isWsUpgrade, handshake: wsHandshake, WsSink } = require('./ws');
@@ -40,6 +41,7 @@ function createApp(options = {}) {
     try { users.create({ username: adminUser, password: adminPass, role: 'admin' }); } catch (e) { console.error('ADMIN_USER/ADMIN_PASSWORD ignored: ' + e.message); }
   }
   // Fantasy Manager (P-26, per user since P-27): each admin saves their own address and token in Settings; nothing is read from the environment
+  const health = new Health();
   const fantasy = new FantasyHub({ dataDir, reconnectMs: options.fantasyReconnectMs, summaryMs: options.fantasySummaryMs, idleMs: options.fantasyIdleMs, cacheMs: options.fantasyCacheMs, allowLoopback: !!options.fantasyAllowLoopback });
   const streamsByUser = new Map(); // username -> Set<res>
   const failures = new Map();      // "ip:<address>" or "user:<name>" -> { n, until, at }
@@ -686,6 +688,25 @@ function createApp(options = {}) {
       const body = await readJson(req);
       return sendJson(req, res, 200, await compose.test(String(body.encoder || '')));
     }
+    if (req.method === 'GET' && p === '/api/diag') return sendJson(req, res, 200, { at: Date.now(), server: health.snapshot(), streams: relay.diag() });
+    if (req.method === 'GET' && p === '/api/diag/speed') {
+      // a block of zeros to time the server -> browser path (Wi-Fi, LAN, reverse proxy); capped so it cannot be abused
+      const mb = Math.max(1, Math.min(32, Number(url.searchParams.get('mb')) || 8));
+      const total = mb * 1024 * 1024;
+      res.writeHead(200, { 'Content-Type': 'application/octet-stream', 'Content-Length': total, 'Cache-Control': 'no-store' });
+      const block = Buffer.alloc(64 * 1024);
+      let left = total;
+      const pump = () => {
+        while (left > 0) {
+          const n = Math.min(left, block.length);
+          left -= n;
+          if (!res.write(n === block.length ? block : block.subarray(0, n))) return res.once('drain', pump);
+        }
+        res.end();
+      };
+      res.on('close', () => { left = 0; });
+      return pump();
+    }
     if (req.method === 'GET' && p === '/api/state') {
       return sendJson(req, res, 200, relay.state());
     }
@@ -833,6 +854,7 @@ function createApp(options = {}) {
     compose.closeAll();
     recordings.closeAll();
     fantasy.close();
+    health.close();
     relay.closeAll();
     server.close();
     server.closeAllConnections();

@@ -32,6 +32,7 @@ class Upstream {
     this.lastData = Date.now();
     this.samples = [];
     this.lastError = '';
+    this.dg = { connectMs: 0, ttfbMs: 0, reconnects: 0, errors: [], buckets: [] }; // diagnostics (P-28): what the provider connection has been doing
     this.abort = null;
     this.idleTimer = null;
     this.wake = null;
@@ -39,6 +40,40 @@ class Upstream {
     this.ready.catch(() => {}); // rejection is consumed by whoever awaits it
     this.readyTimer = setTimeout(() => this.fail(httpError(504, 'Provider did not start the stream in time')), mgr.opts.readyTimeoutMs);
     this.run();
+  }
+
+  noteError(msg) {
+    this.dg.errors.push({ at: Date.now(), msg: String(msg || '').slice(0, 160) });
+    if (this.dg.errors.length > 10) this.dg.errors.shift();
+  }
+
+  // Longest silence from the provider in each 10 s bucket (kept for a minute).
+  noteGap(gap, now) {
+    const b = Math.floor(now / 10000);
+    const bk = this.dg.buckets;
+    if (!bk.length || bk[bk.length - 1].b !== b) { bk.push({ b, max: 0 }); while (bk.length > 7) bk.shift(); }
+    if (gap > bk[bk.length - 1].max) bk[bk.length - 1].max = gap;
+  }
+
+  diag() {
+    const now = Date.now();
+    const bk = this.dg.buckets.filter((x) => x.b >= Math.floor(now / 10000) - 6);
+    return {
+      key: this.key,
+      provider: this.provider.name,
+      sid: this.sid,
+      name: this.mgr.lists.nameOf(this.provider.id, this.sid),
+      state: this.state,
+      kbps: Math.round(this.bytesPerSec() * 8 / 1000),
+      connectMs: this.dg.connectMs,
+      firstByteMs: this.dg.ttfbMs,
+      maxGapMs: bk.reduce((m, x) => Math.max(m, x.max), 0),
+      reconnects: this.dg.reconnects,
+      errors: this.dg.errors.slice(-5).map((e) => ({ ago: Math.round((now - e.at) / 1000), msg: e.msg })),
+      seconds: Math.round((now - this.startedAt) / 1000),
+      viewers: [...this.clients].filter((c) => c.diag).map((c) => c.diag()),
+      viewerCount: this.clients.size,
+    };
   }
 
   get active() { return !this.closed; }
@@ -69,6 +104,8 @@ class Upstream {
       if (this.closed) return;
       if (this.idle) return this.close('no viewers');
       this.attempt++;
+      this.dg.reconnects++;
+      this.noteError(this.lastError);
       const settling = !this.everLive && this.lastErrObj && this.lastErrObj.limit;
       // before the first data fail fast so failover can kick in, except while the provider releases our previous connection
       const allowed = this.everLive ? this.mgr.opts.maxRetries : settling ? 4 : 1;
@@ -97,6 +134,8 @@ class Upstream {
   async pump(signal) {
     let body;
     let cap = null;
+    const t0 = Date.now();
+    let firstChunk = true;
     if (this.provider.type === 'local') {
       cap = this.openLocal(signal);
       body = cap.body;
@@ -122,6 +161,7 @@ class Upstream {
         throw e;
       }
       body = res.body;
+      this.dg.connectMs = Date.now() - t0;
     }
     this.carry = Buffer.alloc(0);
     this.aligned = false;
@@ -135,7 +175,9 @@ class Upstream {
     }, 2000);
     try {
       for await (const chunk of body) {
-        this.lastData = Date.now();
+        const nowc = Date.now();
+        if (firstChunk) { firstChunk = false; this.dg.ttfbMs = nowc - t0; } else this.noteGap(nowc - this.lastData, nowc);
+        this.lastData = nowc;
         this.onChunk(Buffer.from(chunk.buffer, chunk.byteOffset, chunk.byteLength));
         if (this.attempt && Date.now() - connectedAt > 10000) this.attempt = 0;
       }
@@ -448,6 +490,11 @@ class Relay {
     return { providers, streams };
   }
 
+  // Everything the diagnostics view shows about running channels (provider and channel names only, never addresses).
+  diag() {
+    return [...this.map.values()].filter((u) => u.active).map((u) => u.diag());
+  }
+
   closeProvider(providerId, reason) {
     for (const [k, v] of [...this.vod]) if (v.provider.id === providerId) { clearTimeout(v.timer); this.vod.delete(k); }
     for (const u of [...this.map.values()]) if (u.provider.id === providerId) u.close(reason);
@@ -464,6 +511,17 @@ class Client {
     this.res = res;
     this.maxQueue = maxQueue;
     this.dead = false;
+    this.sent = 0;
+    this.peak = 0;
+    this.peakAt = Date.now();
+    this.backups = 0;
+    this.backed = false;
+    this.since = Date.now();
+  }
+
+  diag() {
+    const now = Date.now();
+    return { seconds: Math.round((now - this.since) / 1000), kbpsSent: Math.round(this.sent * 8 / 1000 / Math.max(1, (now - this.since) / 1000)), queueKB: Math.round((this.res.writableLength || 0) / 1024), peakKB: Math.round(this.peak / 1024), backups: this.backups };
   }
 
   // A long burst (minutes of video) is written in one go; do not count it against the slow-viewer limit while it drains.
@@ -475,6 +533,12 @@ class Client {
 
   send(chunk) {
     if (this.dead || this.res.destroyed) return;
+    const q = this.res.writableLength || 0;
+    const now = Date.now();
+    if (now - this.peakAt > 60000) { this.peak = 0; this.peakAt = now; }
+    if (q > this.peak) this.peak = q;
+    if (q > 256 * 1024) { if (!this.backed) { this.backed = true; this.backups++; } } else if (q < 64 * 1024) this.backed = false;
+    this.sent += chunk.length;
     if (this.res.writableLength > this.maxQueue + (this.extra || 0)) {
       this.dead = true;
       log('viewer too slow; dropping it');

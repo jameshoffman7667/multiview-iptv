@@ -415,3 +415,13 @@ body.ftick-below #shared { bottom: var(--tk-h); height: auto; }
 .ft-pts.up-opp { color: #D6533B !important; text-shadow: 0 0 10px #D6533B, 0 0 18px rgba(214,83,59,.7); }
 @media (max-width: 700px) { :root { --tk-h: 48px; } .ft-name { display: block; max-width: 34vw; overflow: hidden; text-overflow: ellipsis; padding: 0 8px; font-size: 13px; line-height: var(--tk-h); }
   .ft-score { gap: 4px; padding: 0 8px 0 2px; } .ft-side { min-width: 56px; } .ft-tot { font-size: 18px; } .ft-tn { font-size: 10px; max-width: 80px; } .ft-dash { font-size: 16px; } .ft-l1 { font-size: 14px; } .ft-l2 { font-size: 11px; } .ft-it { padding: 0 12px; } }
+
+/* ---------- diagnostics (P-28) ---------- */
+.dg h3 { margin: 14px 0 6px; font-size: 14px; }
+.dgt { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.dgt th, .dgt td { text-align: left; padding: 4px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+.dgt th { color: var(--muted, #8b93a7); font-weight: 600; }
+.dgt td.bad { color: var(--bad); font-weight: 600; }
+.dg-report { width: 100%; box-sizing: border-box; margin: 8px 0; font: 12px/1.35 ui-monospace, Menlo, Consolas, monospace; background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 6px; }
+.dg-find { margin-top: 4px; }
+.dg { overflow-x: auto; }

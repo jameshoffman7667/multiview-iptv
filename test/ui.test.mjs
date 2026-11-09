@@ -1973,6 +1973,70 @@ describe('player overlay, pull-out menu, recordings, PWA', () => {
     await ctx.close();
   });
 
+  const dgScreen = (o = {}) => Object.assign({ slot: 1, name: 'ESPN', phase: 'playing', via: 'WebSocket', tx: false, sd: false, res: '1280x720', ahead: 4.1, minAhead: 3.2, stalls: 0, stallMs: 0, longest: 0, dropped: 0, frames: 1000, kbpsIn: 4000, startupMs: 2100, restarts: 0, seconds: 60 }, o);
+  const dgStream = (o = {}) => Object.assign({ key: 'p1:1', provider: 'One', sid: '1', name: 'ESPN', state: 'live', kbps: 4000, connectMs: 80, firstByteMs: 300, maxGapMs: 200, reconnects: 0, errors: [], seconds: 100, viewers: [{ seconds: 60, kbpsSent: 4000, queueKB: 0, peakKB: 20, backups: 0 }], viewerCount: 1 }, o);
+  const dgServer = (o = {}) => Object.assign({ cpuPct: 20, cores: 4, load1: 0.5, rssMB: 120, loopLagP99Ms: 5, loopLagMaxMs: 12, ffmpeg: 0, uptimeSec: 999 }, o);
+  const dgSnap = (sc, st, sv) => ({ at: Date.now(), screens: [dgScreen(sc)], streams: [dgStream(st)], server: dgServer(sv) });
+
+  test('diagnostics: stalls are counted per screen, and the verdict names provider, server, link or device', async () => {
+    const { ctx, page, errors } = await open(two, {});
+    await page.waitForFunction(() => window.__players.length === 2);
+    const info = await page.evaluate(async () => {
+      const t = window.__mv.tiles[0];
+      t.dgStallStart(); await new Promise((r) => setTimeout(r, 300)); t.dgStallEnd();
+      t.dgStallStart(); t.dgStallStart(); await new Promise((r) => setTimeout(r, 400)); t.dgStallEnd(); t.dgStallEnd();
+      t.dgStallStart(); t.dgStallEnd();                    // too short to count
+      return t.dgInfo();
+    });
+    assert.equal(info.stalls, 2);
+    assert.ok(info.stallMs >= 650 && info.longest >= 380 && info.slot === 1);
+    const v = (r) => page.evaluate((x) => window.__mv.diagVerdict(x), r);
+    const run = (first, last, extra = {}) => ({ snaps: [first, last], mbps: 300, ...extra });
+    let r = await v({ snaps: [{ screens: [], streams: [], server: dgServer() }, { screens: [], streams: [], server: dgServer() }] });
+    assert.match(r.summary, /Nothing is playing/);
+    r = await v(run(dgSnap(), dgSnap()));
+    assert.match(r.summary, /No stalls/); assert.equal(r.findings.length, 0);
+    r = await v(run(dgSnap(), dgSnap({ stalls: 3, stallMs: 4000, minAhead: 0.1 }, { maxGapMs: 6500, reconnects: 2, kbps: 900 })));
+    assert.deepEqual(r.findings.map((f) => f.cause), ['provider']); assert.match(r.summary, /3 stall/);
+    r = await v(run(dgSnap(), dgSnap({ stalls: 2, stallMs: 2000, minAhead: 0.2 }, {}, { loopLagP99Ms: 400, cpuPct: 95 })));
+    assert.deepEqual(r.findings.map((f) => f.cause), ['server']);
+    r = await v(run(dgSnap(), dgSnap({ stalls: 2, stallMs: 2000, minAhead: 0.2 }, { viewers: [{ seconds: 60, kbpsSent: 1000, queueKB: 900, peakKB: 2000, backups: 4 }] })));
+    assert.deepEqual(r.findings.map((f) => f.cause), ['link']);
+    r = await v(run(dgSnap(), dgSnap({ stalls: 2, stallMs: 2000, minAhead: 0.2 }), { mbps: 6 }));
+    assert.deepEqual(r.findings.map((f) => f.cause), ['link'], 'a slow speed test against the stream needs');
+    r = await v(run(dgSnap(), dgSnap({ stalls: 1, stallMs: 1000, minAhead: 3, dropped: 120, frames: 2000 })));
+    assert.deepEqual(r.findings.map((f) => f.cause), ['browser']);
+    r = await v(run(dgSnap(), dgSnap({ stalls: 2, stallMs: 2000, minAhead: 0.2 })));
+    assert.equal(r.findings.length, 0); assert.match(r.summary, /no network, server or device problem/);
+    const rep = await page.evaluate((x) => window.__mv.diagReport(x, window.__mv.diagVerdict(x)), run(dgSnap(), dgSnap({ stalls: 1, minAhead: 0.1 })));
+    assert.match(rep, /Verdict:/); assert.match(rep, /ESPN \(One\)/);
+    assert.equal(/https?:\/\//.test(rep.replace(/Mozilla[^\n]*/, '')), false, 'the report holds no web addresses');
+    assert.deepEqual(errors, []);
+    await ctx.close();
+  });
+
+  test('diagnostics window: opens from Settings, live tables, a short test ends with a verdict and a copyable report', async () => {
+    const { ctx, page, errors } = await open(two, { init: `window.__dgSecs = 4;` });
+    await page.waitForFunction(() => window.__players.length === 2);
+    let n = 0;
+    await page.route('**/api/diag', (route) => { n++; return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ at: Date.now(), server: dgServer(), streams: [dgStream(n > 1 ? { maxGapMs: 7000, reconnects: n } : {})] }) }); });
+    await page.route('**/api/diag/speed*', (route) => route.fulfill({ status: 200, contentType: 'application/octet-stream', body: Buffer.alloc(1024 * 1024) }));
+    await page.evaluate(() => document.getElementById('sm-settings').click());
+    await page.waitForSelector('#set-diag');
+    await page.click('#set-diag');
+    await page.waitForSelector('#dg-table table');
+    assert.match(await page.textContent('#dg-table'), /ESPN/);
+    assert.match(await page.textContent('#dg-table'), /event loop delay 5 ms/);
+    await page.click('#dg-run');
+    await page.waitForFunction(() => !document.getElementById('dg-report').hidden, null, { timeout: 20000 });
+    assert.match(await page.textContent('#dg-verdict'), /./);
+    const rep = await page.inputValue('#dg-report');
+    assert.match(rep, /Multiview diagnostics/); assert.match(rep, /Channels on the server/);
+    assert.equal(await vis(page, '#dg-copy'), true);
+    assert.deepEqual(errors.filter((e) => !/clipboard/i.test(e)), []);
+    await ctx.close();
+  });
+
   test('mini player in the Android app: native call, auto-start flag, page chrome hides while floating', async () => {
     const { ctx, page, errors } = await open(two, { init: `window.__app = []; window.MVApp = { canPip: function () { return true; }, enterPip: function () { window.__app.push('enter'); }, setAutoPip: function (on) { window.__app.push('auto:' + on); }, changeServer: function () {} };` });
     await page.waitForFunction(() => window.__players.length === 2);

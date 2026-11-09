@@ -1,4 +1,4 @@
-# IPTV Multiview - functional spec (current state, v0.12.0)
+# IPTV Multiview - functional spec (current state, v0.13.0)
 
 Edited in place on every release; it describes what the app does now, not its history (see `CHANGELOG.md`).
 
@@ -53,6 +53,9 @@ A self-hosted relay and browser UI for Xtream Codes IPTV providers. One shared p
 
 ## Health
 `GET /healthz` on `$PORT`: 200 JSON `{status, version}`, no login, no private data, no outside checks. Image and compose healthchecks require `"status":"ok"`, use 127.0.0.1 and `$PORT`, 30 s start period.
+
+## Diagnostics (admins, P-28)
+`GET /api/diag` (admin only) returns, per running channel, provider and channel name (never addresses), state, upstream kbit/s, connect and first-data times, longest silence in the last minute (10 s buckets), reconnect count and recent errors, and per viewer the bytes sent, current and peak queue and how often it backed up past 256 KB (`Client.diag()`); plus server health (`src/health.js`: process CPU % of one core, machine load, memory, event-loop delay with the 20 ms timer resolution removed, number of ffmpeg processes read from /proc). `GET /api/diag/speed?mb=N` (1-32 MB of zeros, `no-store`) times the server-to-browser path. The page keeps 10 minutes of per-screen samples every 2 s (buffer ahead, incoming rate from the player, dropped frames) and counts stalls (video 'waiting' or the cushion manager's re-buffer, minimum 250 ms) per screen. Settings > Diagnostics opens a window with live tables and *Run 30 s test*: a 16 MB speed transfer, then snapshots every 2 s, then `diagVerdict` (provider: silence > 2 s, reconnects or a rate that fell below 60 % of its peak; server: event-loop delay > 100 ms, CPU > 85 % or load above 90 % of cores; link: backed-up viewers, queue peak > 512 KB or a speed test under 3x the stream rate; device: more than 2 % dropped frames) and a copyable text report without web addresses. Nothing is stored on disk and no new settings or environment variables exist.
 
 ## Known limits
 - Browsers cannot play most provider streams directly (CORS, https page vs http stream, password exposure), so playback goes through the relay.

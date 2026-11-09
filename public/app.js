@@ -313,7 +313,8 @@
     this.el.addEventListener('click', function () { tileClick(self); });
     this.el.addEventListener('contextmenu', function (e) { e.preventDefault(); select(self.idx); if (self.cfg) ovlShow(); });
     this.el.addEventListener('focus', function () { if (S.sel !== self.idx) select(self.idx, true); });
-    this.video.addEventListener('playing', function () { self.hasPlayed = true; if (self.viaWs) { wsWorked = true; wsFails = 0; } });
+    this.video.addEventListener('waiting', function () { if (self.hasPlayed && self.phase === 'playing') self.dgStallStart(); });
+    this.video.addEventListener('playing', function () { self.dgStallEnd(); self.hasPlayed = true; if (self.viaWs) { wsWorked = true; wsFails = 0; } });
     this.video.addEventListener('timeupdate', function () { self.lastTime = Date.now(); });
     this.render();
   }
@@ -402,6 +403,7 @@
     }
     var gen = ++this.gen;
     var c = this.cfg;
+    this.dgInit(c);
     this.phase = 'prebuffer';
     this.phaseAt = Date.now();
     this.startedAt = Date.now();
@@ -615,6 +617,8 @@
   };
 
   Tile.prototype.beginPlay = function () {
+    this.dgStallEnd();
+    if (this.dg && !this.dg.ttp) this.dg.ttp = Date.now() - this.startedAt;
     this.phase = 'playing';
     this.playingSince = Date.now();
     this.setStatus('');
@@ -622,6 +626,53 @@
     var pr;
     try { pr = this.video.play(); } catch (e) { pr = null; }
     if (pr && pr.catch) pr.catch(noop);
+  };
+
+
+  // ---------------------------------------------------------------- diagnostics (P-28, admins): what this screen has been doing
+  // Kept in memory for the last 10 minutes of one channel; nothing is sent anywhere.
+  Tile.prototype.dgInit = function (c) {
+    var key = c.p + '/' + c.sid;
+    if (this.dg && this.dg.key === key) { this.dg.starts++; return; }
+    this.dg = { key: key, name: c.name || c.sid, since: Date.now(), starts: 1, stalls: 0, stallMs: 0, longest: 0, stallAt: 0, ttp: 0, hist: [], lastSample: 0, events: [] };
+  };
+  Tile.prototype.dgStallStart = function () { if (this.dg && !this.dg.stallAt) this.dg.stallAt = Date.now(); };
+  Tile.prototype.dgStallEnd = function () {
+    var d = this.dg;
+    if (!d || !d.stallAt) return;
+    var dur = Date.now() - d.stallAt;
+    d.stallAt = 0;
+    if (dur < 250) return;
+    d.stalls++; d.stallMs += dur; if (dur > d.longest) d.longest = dur;
+    d.events.push({ t: Date.now(), ms: dur });
+    if (d.events.length > 50) d.events.shift();
+  };
+  Tile.prototype.dgSample = function (now, ahead) {
+    var d = this.dg;
+    if (!d || now - d.lastSample < 2000) return;
+    d.lastSample = now;
+    var si = null;
+    try { si = this.player && this.player.statisticsInfo; } catch (e) { si = null; }
+    var q = this.video.getVideoPlaybackQuality ? this.video.getVideoPlaybackQuality() : null;
+    d.hist.push({ t: now, ahead: ahead, kbps: si && si.speed ? Math.round(si.speed * 8) : 0, dropped: q ? q.droppedVideoFrames : 0, total: q ? q.totalVideoFrames : 0 });
+    while (d.hist.length > 300) d.hist.shift();
+  };
+  // one screen's numbers for the table and the test
+  Tile.prototype.dgInfo = function () {
+    var d = this.dg;
+    if (!d || !this.cfg || this.cfg.vod || !this.player) return null;
+    var now = Date.now();
+    var recent = d.hist.filter(function (x) { return now - x.t <= 60000; });
+    var last = d.hist[d.hist.length - 1] || { ahead: 0, kbps: 0, dropped: 0, total: 0 };
+    var kb = recent.filter(function (x) { return x.kbps > 0; });
+    return {
+      slot: this.idx + 1, name: d.name, phase: this.phase, via: this.viaWs ? 'WebSocket' : 'HTTP', tx: !!this.txUsed, sd: !!this.sdUsed,
+      res: this.video.videoWidth ? this.video.videoWidth + 'x' + this.video.videoHeight : '',
+      ahead: Math.round(this.ahead() * 10) / 10, minAhead: recent.length ? Math.round(Math.min.apply(null, recent.map(function (x) { return x.ahead; })) * 10) / 10 : null,
+      stalls: d.stalls + (d.stallAt ? 1 : 0), stallMs: d.stallMs + (d.stallAt ? now - d.stallAt : 0), longest: Math.max(d.longest, d.stallAt ? now - d.stallAt : 0),
+      dropped: last.dropped, frames: last.total, kbpsIn: kb.length ? Math.round(kb.reduce(function (a, x) { return a + x.kbps; }, 0) / kb.length) : 0,
+      startupMs: d.ttp, restarts: d.starts - 1, seconds: Math.round((now - d.since) / 1000)
+    };
   };
 
   // Cushion manager: wait for `bufSec` of video before playing, and re-fill after a stall.
@@ -641,6 +692,7 @@
       if (v.paused && !v.ended && !this.userPaused && now - this.playingSince > 1000) { try { var pr = v.play(); if (pr && pr.catch) pr.catch(noop); } catch (e) { /* ignore */ } }
       if (buf > 0 && this.hasPlayed && ahead < 0.15 && !v.paused) {
         v.pause();
+        this.dgStallStart();
         this.phase = 'rebuffer';
         this.phaseAt = now;
         this.setStatus('Buffering...');
@@ -659,6 +711,7 @@
       else if (w2 > 30000 && ahead <= 0.3) this.onError('timeout');
       else if (need2 > 3) this.setStatus('Buffering ' + fmtSec(ahead, need2) + ' / ' + fmtSec(need2, need2) + ' s');
     }
+    this.dgSample(now, ahead);
     if (document.body.classList.contains('stats')) {
       var q = v.getVideoPlaybackQuality ? v.getVideoPlaybackQuality() : null;
       this.stats.textContent = (v.videoWidth ? v.videoWidth + 'x' + v.videoHeight : '--') + '  buffer ' + ahead.toFixed(1) + 's' + (q ? '  dropped ' + q.droppedVideoFrames : '') + (this.txUsed ? '  480p tx' : this.sdUsed ? '  SD' : '') + '  ' + this.phase;
@@ -2841,6 +2894,148 @@
         h('div', { class: 'viewbtns' }, test)) : null);
   }
 
+
+  // ---------------------------------------------------------------- diagnostics window (P-28, admins only)
+  function diagScreens() { var o = []; tiles.forEach(function (t) { var i = t.dgInfo && t.dgInfo(); if (i) o.push(i); }); return o; }
+  function diagSnap() { return api('/api/diag').then(function (j) { return { at: Date.now(), server: j.server, streams: j.streams, screens: diagScreens() }; }); }
+
+  // Work out where the trouble is from a series of snapshots (taken about every 2 s) and a speed figure in Mbit/s.
+  function diagVerdict(r) {
+    var snaps = r.snaps || [];
+    var first = snaps[0], last = snaps[snaps.length - 1];
+    var out = { findings: [], summary: '', stats: {} };
+    if (!first || !last || !last.screens.length) { out.summary = 'Nothing is playing. Start a channel on at least one screen and run the test again.'; return out; }
+    var stallsAdded = 0, stallMs = 0, minAhead = Infinity, droppedAdded = 0, framesAdded = 0, inKbps = 0;
+    last.screens.forEach(function (s) {
+      var f = first.screens.filter(function (x) { return x.slot === s.slot && x.name === s.name; })[0] || { stalls: 0, stallMs: 0, dropped: 0, frames: 0 };
+      stallsAdded += Math.max(0, s.stalls - f.stalls); stallMs += Math.max(0, s.stallMs - f.stallMs);
+      droppedAdded += Math.max(0, s.dropped - f.dropped); framesAdded += Math.max(0, s.frames - f.frames);
+      if (s.minAhead !== null && s.minAhead < minAhead) minAhead = s.minAhead;
+      inKbps += s.kbpsIn || 0;
+    });
+    var srv = { gap: 0, reconnects: 0, minKbps: Infinity, maxKbps: 0, backups: 0, peakKB: 0, lag: 0, cpu: 0, load: 0, cores: 1, n: 0 };
+    snaps.forEach(function (sn) {
+      sn.streams.forEach(function (st) {
+        srv.gap = Math.max(srv.gap, st.maxGapMs || 0);
+        if (st.kbps > 0) { srv.minKbps = Math.min(srv.minKbps, st.kbps); srv.maxKbps = Math.max(srv.maxKbps, st.kbps); }
+        st.viewers.forEach(function (v) { srv.peakKB = Math.max(srv.peakKB, v.peakKB || 0); });
+      });
+      srv.lag = Math.max(srv.lag, sn.server.loopLagP99Ms || 0); srv.cpu += sn.server.cpuPct || 0; srv.n++; srv.load = Math.max(srv.load, sn.server.load1 || 0); srv.cores = sn.server.cores || 1;
+    });
+    srv.cpu = srv.n ? Math.round(srv.cpu / srv.n) : 0;
+    function sum(sn, f) { return sn.streams.reduce(function (a, st) { return a + f(st); }, 0); }
+    srv.reconnects = Math.max(0, sum(last, function (st) { return st.reconnects; }) - sum(first, function (st) { return st.reconnects; }));
+    srv.backups = Math.max(0, sum(last, function (st) { return st.viewers.reduce(function (a, v) { return a + v.backups; }, 0); }) - sum(first, function (st) { return st.viewers.reduce(function (a, v) { return a + v.backups; }, 0); }));
+    if (srv.minKbps === Infinity) srv.minKbps = 0;
+    var droppedPct = framesAdded > 0 ? droppedAdded / framesAdded * 100 : 0;
+    var needMbps = inKbps / 1000;
+    var mbps = r.mbps || 0;
+    out.stats = { stalls: stallsAdded, stallSeconds: Math.round(stallMs / 100) / 10, minBuffer: minAhead === Infinity ? null : minAhead, droppedPct: Math.round(droppedPct * 10) / 10, upstreamMinKbps: srv.minKbps, upstreamMaxKbps: srv.maxKbps, upstreamGapMs: srv.gap, upstreamReconnects: srv.reconnects, viewerBackups: srv.backups, viewerPeakKB: srv.peakKB, serverCpuPct: srv.cpu, serverLoop99Ms: srv.lag, serverLoad: srv.load, serverCores: srv.cores, speedMbps: Math.round(mbps * 10) / 10, screensMbps: Math.round(needMbps * 10) / 10 };
+    var trouble = stallsAdded > 0 || (minAhead !== Infinity && minAhead < 0.8);
+    var providerBad = srv.gap > 2000 || srv.reconnects > 0 || (srv.maxKbps > 0 && srv.minKbps < srv.maxKbps * 0.6);
+    var serverBad = srv.lag > 100 || srv.cpu > 85 || srv.load > srv.cores * 0.9;
+    var linkBad = srv.backups > 0 || srv.peakKB > 512 || (mbps > 0 && needMbps > 0 && mbps < needMbps * 3);
+    var browserBad = droppedPct > 2;
+    if (providerBad) out.findings.push({ cause: 'provider', text: 'Provider or your internet link to it: the provider went quiet for up to ' + (srv.gap / 1000).toFixed(1) + ' s, reconnected ' + srv.reconnects + ' time(s), and the incoming rate varied between ' + srv.minKbps + ' and ' + srv.maxKbps + ' kbit/s.' });
+    if (serverBad) out.findings.push({ cause: 'server', text: 'The server is busy: CPU ' + srv.cpu + '% of one core, event loop delay up to ' + srv.lag + ' ms, load ' + srv.load + ' on ' + srv.cores + ' cores. Other containers on the same machine, transcoding or many screens can cause this.' });
+    if (linkBad) out.findings.push({ cause: 'link', text: 'Server to this device is slow or uneven: ' + srv.backups + ' backed-up episode(s), a queue peak of ' + srv.peakKB + ' KB, and a speed test of ' + (mbps ? mbps.toFixed(0) + ' Mbit/s' : 'n/a') + ' against about ' + needMbps.toFixed(1) + ' Mbit/s needed. Try Ethernet or a closer access point.' });
+    if (browserBad) out.findings.push({ cause: 'browser', text: 'This device drops ' + droppedPct.toFixed(1) + '% of video frames: it cannot decode that much. Use fewer or smaller screens, the shared screen, a hardware-decoding browser, or SD versions.' });
+    if (!trouble) out.summary = 'No stalls during the test (buffer never below ' + (minAhead === Infinity ? 'n/a' : minAhead + ' s') + '). ' + (out.findings.length ? 'Warnings below show what to watch.' : 'Provider, server, network and this device all looked fine. If you still see trouble, run the test again while it happens.');
+    else if (out.findings.length) out.summary = stallsAdded + ' stall(s) (' + out.stats.stallSeconds + ' s) during the test. Most likely: ' + out.findings.map(function (f) { return f.cause; }).join(', ') + '.';
+    else out.summary = stallsAdded + ' stall(s) during the test but no network, server or device problem showed. Raise "Start playing after" in Settings, check the stream itself (try the same channel in VLC), and run again.';
+    return out;
+  }
+
+  function diagReport(r, v) {
+    var L = ['Multiview diagnostics ' + new Date().toISOString(), 'Browser: ' + navigator.userAgent, 'Layout: ' + S.layout + ', transport ' + S.transport + ', buffer ' + S.bufSec + ' s, workers ' + (S.workers ? 'on' : 'off'), ''];
+    L.push('Verdict: ' + v.summary);
+    v.findings.forEach(function (f) { L.push('  - ' + f.text); });
+    L.push('Numbers: ' + JSON.stringify(v.stats));
+    var last = r.snaps[r.snaps.length - 1];
+    if (last) {
+      L.push('', 'Screens:');
+      last.screens.forEach(function (s) { L.push('  #' + s.slot + ' ' + s.name + ' ' + s.res + ' ' + s.via + (s.tx ? ' 480p' : '') + (s.sd ? ' SD' : '') + ': buffer ' + s.ahead + ' s (min ' + s.minAhead + '), stalls ' + s.stalls + ' (' + (s.stallMs / 1000).toFixed(1) + ' s, longest ' + (s.longest / 1000).toFixed(1) + ' s), dropped ' + s.dropped + '/' + s.frames + ', in ' + s.kbpsIn + ' kbit/s, startup ' + (s.startupMs / 1000).toFixed(1) + ' s, restarts ' + s.restarts); });
+      L.push('', 'Channels on the server:');
+      last.streams.forEach(function (s) { L.push('  ' + s.name + ' (' + s.provider + '): ' + s.state + ', ' + s.kbps + ' kbit/s, connect ' + s.connectMs + ' ms, first data ' + s.firstByteMs + ' ms, longest silence ' + s.maxGapMs + ' ms, reconnects ' + s.reconnects + ', viewers ' + s.viewerCount + (s.errors.length ? ', last errors: ' + s.errors.map(function (e) { return e.msg + ' (' + e.ago + ' s ago)'; }).join('; ') : '')); });
+      L.push('', 'Server: ' + JSON.stringify(last.server));
+    }
+    return L.join('\n');
+  }
+
+  function openDiag() {
+    var timer = null;
+    var table = h('div', { id: 'dg-table' });
+    var verdict = h('div', { id: 'dg-verdict', class: 'note', text: 'Press "Run 30 s test" while the problem is happening, or just watch the live numbers.' });
+    var report = h('textarea', { id: 'dg-report', class: 'dg-report', readonly: true, rows: 8, hidden: true });
+    var run = h('button', { class: 'btn', type: 'button', id: 'dg-run', text: 'Run 30 s test' });
+    var copy = h('button', { class: 'btn', type: 'button', id: 'dg-copy', text: 'Copy results', hidden: true });
+    var last = null;
+    var m = openModal({ title: 'Diagnostics', wide: true, body: h('div', { class: 'dg' }, h('div', { class: 'viewbtns' }, run, copy), verdict, report, table), foot: null, onClose: function () { clearInterval(timer); } });
+    function cell(t, cls) { return h('td', { class: cls || '', text: t }); }
+    function sec(ms) { return (ms / 1000).toFixed(1) + ' s'; }
+    function render(snap) {
+      var t = h('div', null);
+      t.appendChild(h('h3', { text: 'This browser: screens' }));
+      var tb = h('table', { class: 'dgt' }, h('tr', null, ['#', 'Channel', 'State', 'Buffer (min 60 s)', 'Stalls', 'Dropped', 'In kbit/s', 'Startup'].map(function (x) { return h('th', { text: x }); })));
+      snap.screens.forEach(function (s) {
+        tb.appendChild(h('tr', null, cell(String(s.slot)), cell(s.name + ' ' + s.res + (s.tx ? ' 480p' : s.sd ? ' SD' : '')), cell(s.phase + ' ' + s.via), cell(s.ahead + ' s (' + (s.minAhead === null ? '-' : s.minAhead) + ')', s.minAhead !== null && s.minAhead < 0.8 ? 'bad' : ''), cell(s.stalls + (s.stalls ? ' / ' + sec(s.stallMs) + ', max ' + sec(s.longest) : ''), s.stalls ? 'bad' : ''), cell(s.dropped + '/' + s.frames), cell(String(s.kbpsIn)), cell(sec(s.startupMs))));
+      });
+      if (!snap.screens.length) tb.appendChild(h('tr', null, h('td', { colspan: 8, text: 'No live channel is playing on this page.' })));
+      t.appendChild(tb);
+      t.appendChild(h('h3', { text: 'On the server: channels' }));
+      var tb2 = h('table', { class: 'dgt' }, h('tr', null, ['Channel', 'Provider', 'From provider', 'Connect / first data', 'Longest silence (60 s)', 'Reconnects', 'Viewers (queue peak / backups)'].map(function (x) { return h('th', { text: x }); })));
+      snap.streams.forEach(function (s) {
+        tb2.appendChild(h('tr', null, cell(s.name), cell(s.provider + (s.state !== 'live' ? ' (' + s.state + ')' : '')), cell(s.kbps + ' kbit/s'), cell(s.connectMs + ' / ' + s.firstByteMs + ' ms'), cell(s.maxGapMs + ' ms', s.maxGapMs > 2000 ? 'bad' : ''), cell(String(s.reconnects) + (s.errors.length ? ' - ' + s.errors[s.errors.length - 1].msg : ''), s.reconnects ? 'bad' : ''),
+          cell(s.viewerCount + ' (' + s.viewers.map(function (v) { return v.peakKB + ' KB / ' + v.backups; }).join(', ') + ')', s.viewers.some(function (v) { return v.backups; }) ? 'bad' : '')));
+      });
+      if (!snap.streams.length) tb2.appendChild(h('tr', null, h('td', { colspan: 7, text: 'No channel is running on the server.' })));
+      t.appendChild(tb2);
+      var sv = snap.server;
+      t.appendChild(h('div', { class: 'note', text: 'Server: CPU ' + sv.cpuPct + '% of one core (' + sv.cores + ' cores), load ' + sv.load1 + ', memory ' + sv.rssMB + ' MB, event loop delay ' + sv.loopLagP99Ms + ' ms (max ' + sv.loopLagMaxMs + '), ffmpeg running: ' + (sv.ffmpeg === null ? 'unknown' : sv.ffmpeg) }));
+      table.textContent = '';
+      table.appendChild(t);
+    }
+    function poll() { diagSnap().then(function (sn) { last = sn; if (m.box.isConnected) render(sn); }, noop); }
+    poll();
+    timer = setInterval(poll, 2000);
+    var running = false;
+    run.addEventListener('click', function () {
+      if (running) return;
+      running = true; run.disabled = true; copy.hidden = true; report.hidden = true;
+      var r = { snaps: [], mbps: 0 };
+      var left = window.__dgSecs || 30;
+      verdict.textContent = 'Testing the server-to-browser speed...';
+      var t0 = performance.now();
+      fetch('/api/diag/speed?mb=16', { cache: 'no-store', credentials: 'same-origin' }).then(function (x) { return x.arrayBuffer(); }).then(function (b) {
+        r.mbps = b.byteLength * 8 / 1e6 / Math.max(0.05, (performance.now() - t0) / 1000);
+      }, noop).then(function () {
+        diagSnap().then(function (s0) { r.snaps.push(s0); });
+        var iv = setInterval(function () {
+          left -= 2;
+          verdict.textContent = 'Testing... ' + Math.max(0, left) + ' s left. Keep watching normally.';
+          diagSnap().then(function (sn) { r.snaps.push(sn); }, noop);
+          if (left <= 0) {
+            clearInterval(iv);
+            setTimeout(function () {
+              var v = diagVerdict(r);
+              verdict.textContent = v.summary;
+              v.findings.forEach(function (f) { verdict.appendChild(h('div', { class: 'dg-find', text: '- ' + f.text })); });
+              report.value = diagReport(r, v); report.hidden = false; copy.hidden = false;
+              running = false; run.disabled = false;
+            }, 600);
+          }
+        }, 2000);
+      });
+    });
+    copy.addEventListener('click', function () {
+      var done = function () { copy.textContent = 'Copied'; setTimeout(function () { copy.textContent = 'Copy results'; }, 1500); };
+      report.select();
+      if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(report.value).then(done, function () { try { document.execCommand('copy'); done(); } catch (e) { /* select-all is enough */ } });
+      else { try { document.execCommand('copy'); done(); } catch (e) { /* select-all is enough */ } }
+    });
+    return m;
+  }
+
   function openSettings() {
     function field(label, control) { return h('div', { class: 'field' }, h('label', { text: label }), control); }
     function check(label, key, after) {
@@ -2922,6 +3117,7 @@
         memNote,
         field('Video', fitSel),
         field('Theme (menus and dialogs; the video area stays black)', themeSel),
+        isAdmin() ? h('div', { class: 'field' }, h('label', { text: 'Buffering and stalls' }), h('button', { class: 'btn', type: 'button', id: 'set-diag', text: 'Diagnostics...', onclick: function () { m.close(); openDiag(); } })) : null,
         isAdmin() ? fantasyBlock() : null,
         field('Shared screen (for weak devices)', shSel),
         shNote, shInfo, shBtns,
@@ -3898,5 +4094,5 @@
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init); else init();
 
   // test hook (harmless in production)
-  window.__mv = { fpReload: fpReload, updateReady: updateReady, ovlShow: ovlShow, ovlHide: ovlHide, get ovl() { return ovl; }, get side() { return side; }, castState: castState, openRecordings: openRecordings, get S() { return S; }, get ME() { return ME; }, applyView: applyView, tiles: tiles, LAYOUTS: LAYOUTS, setLayout: setLayout, select: select, assign: assign, toggleZoom: toggleZoom, sharedApply: sharedApply, get shared() { return shared; }, get zoom() { return zoom; }, get modals() { return modals.length; }, get FP() { return FP; }, fpIncoming: fpIncoming, fpTest: fpTest, get FT() { return FT; }, ftSet: ftSet, ftCheck: function () { ftMeasure(); ftCheck($('#ft-view')); } };
+  window.__mv = { fpReload: fpReload, updateReady: updateReady, ovlShow: ovlShow, ovlHide: ovlHide, get ovl() { return ovl; }, get side() { return side; }, castState: castState, openRecordings: openRecordings, get S() { return S; }, get ME() { return ME; }, applyView: applyView, tiles: tiles, LAYOUTS: LAYOUTS, setLayout: setLayout, select: select, assign: assign, toggleZoom: toggleZoom, sharedApply: sharedApply, get shared() { return shared; }, get zoom() { return zoom; }, get modals() { return modals.length; }, get FP() { return FP; }, fpIncoming: fpIncoming, fpTest: fpTest, get FT() { return FT; }, diagVerdict: diagVerdict, diagReport: diagReport, openDiag: openDiag, ftSet: ftSet, ftCheck: function () { ftMeasure(); ftCheck($('#ft-view')); } };
 })();
