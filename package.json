@@ -1,6 +1,6 @@
 {
   "name": "iptv-multiview",
-  "version": "0.11.0",
+  "version": "0.12.0",
   "description": "Self-hosted IPTV multiview with a buffering relay for Xtream Codes providers",
   "private": true,
   "license": "MIT",

@@ -15,7 +15,7 @@ Fantasy Manager (docker)  --HTTP+SSE, read-only token-->  multiview server (src/
                                                               v   /api/fantasy/summary, /api/fantasy/stream (SSE), /api/fantasy/headshot/<id>
                                                       page (ticker + pop-up layer), phones, TV app
 ```
-- New env on the multiview container: `FANTASY_URL` (e.g. `http://fantasy-manager:PORT`, same Docker network or host:port) and `FANTASY_TOKEN` (read-only). Names only in the repo; values in the server `.env`.
+- Connection: set per admin in Settings > Fantasy Manager (since 0.12.0, P-27): address and read-only token stored on the server, token encrypted with /data/fantasy.key. There are no environment variables for it.
 - Admin-only setting to turn the feature on; every logged-in user can use it (it shows James's leagues, so default **admins only**, option to allow viewers; see questions).
 - Server polls the summary every 15 s while any game is live (30-60 s otherwise) and holds one SSE connection for events. If Fantasy Manager is down the ticker shows "Fantasy offline" and hides itself after 60 s; nothing else in the app is affected.
 

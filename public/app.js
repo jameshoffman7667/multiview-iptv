@@ -1918,9 +1918,18 @@
   var FP = { avail: false, es: null, seen: {}, seenN: 0, queue: [], showing: false, timer: null, wake: null, status: null, t: { slide: 450, hold0: 500, roll: 900, show: 5000, gap: 250 } };
   var FCOL = { green: '#3FAE58', amber: '#D9A521', red: '#D6533B' };
   function fpTimes() { var t = {}; var o = window.__fpTiming || {}; Object.keys(FP.t).forEach(function (k) { t[k] = o[k] !== undefined ? o[k] : FP.t[k]; }); return t; }
+  // Each admin's own Fantasy Manager connection lives on the server (Settings > Fantasy Manager); nothing is configured for users without one.
   function fpInit() {
-    if (!isAdmin()) return;
-    api('/api/fantasy/status').then(function (st) { FP.avail = !!st.enabled; FP.status = st; fpConnect(); ftInit(); }, noop);
+    if (!isAdmin()) return Promise.resolve();
+    return api('/api/fantasy/status').then(function (st) { FP.avail = !!st.enabled; FP.status = st; fpConnect(); ftInit(); }, noop);
+  }
+  // the connection was saved, changed or removed: start over with the new state
+  function fpReload() {
+    fpDisconnect();
+    FP.avail = false; FP.status = null; FP.queue = [];
+    clearTimeout(FT.timer);
+    FT.seen = {}; ftClear();
+    return fpInit();
   }
   function fpConnect() {
     if (!FP.avail || !S.fpop || FP.es || !window.EventSource) return;
@@ -1935,7 +1944,7 @@
     var n = $('#fp-note');
     if (!n) return;
     var st = FP.status;
-    n.textContent = !FP.avail ? 'Not set up on the server (FANTASY_URL and FANTASY_TOKEN).' : !st ? '' : st.connected ? 'Connected to Fantasy Manager.' : (st.error || 'Not connected to Fantasy Manager yet.');
+    n.textContent = !FP.avail ? 'No Fantasy Manager connection saved yet.' : !st ? '' : st.connected ? 'Connected to Fantasy Manager.' : (st.error || 'Not connected to Fantasy Manager yet.');
     n.className = 'note' + (FP.avail && st && !st.connected ? ' warn' : '');
   }
   function fpIncoming(ev, force) {
@@ -2737,7 +2746,50 @@
 
   // ---------------------------------------------------------------- settings
   // Settings block for the Fantasy Manager score pop-ups (admins only)
+  // Settings > Fantasy Manager: the admin's own address and read-only token, kept on the server (the token is never shown again)
   function fantasyBlock() {
+    var wrap = h('div', { id: 'fmwrap' });
+    fmFill(wrap);
+    return wrap;
+  }
+  function fmFill(wrap, known) {
+    wrap.textContent = '';
+    var url = h('input', { type: 'text', id: 'fm-url', placeholder: 'http://192.168.4.11:5000', autocomplete: 'off', spellcheck: 'false' });
+    var tok = h('input', { type: 'password', id: 'fm-token', placeholder: 'Paste the token', autocomplete: 'off' });
+    var msg = h('div', { class: 'note', id: 'fm-msg', text: '' });
+    var rm = h('button', { class: 'btn', type: 'button', id: 'fm-remove', text: 'Remove', hidden: true });
+    function say(t, bad) { msg.textContent = t; msg.className = 'note' + (bad ? ' warn' : ''); }
+    function fail(e) { say(e && e.message ? e.message : 'Failed', true); }
+    function show(c) {
+      FP.cfg = c;
+      if (c && c.configured) { url.value = c.url; tok.placeholder = 'Token saved (ends ' + c.tokenLast4 + '). Leave empty to keep it.'; rm.hidden = false; if (c.readable === false) say('The saved token cannot be read on the server. Enter it again.', true); }
+      else { tok.placeholder = 'Paste the token'; rm.hidden = true; }
+    }
+    if (known) show(known); else api('/api/fantasy/config').then(show, noop);
+    var save = h('button', { class: 'btn', type: 'button', id: 'fm-save', text: 'Save', onclick: function () {
+      say('Saving...');
+      api('/api/fantasy/config', { method: 'POST', body: { url: url.value, token: tok.value } }).then(function (c) {
+        tok.value = '';
+        fpReload().then(function () { if (wrap.isConnected) { fmFill(wrap, c); var m = $('#fm-msg'); if (m) m.textContent = 'Saved.'; } });
+      }, fail);
+    } });
+    var test = h('button', { class: 'btn', type: 'button', id: 'fm-test', text: 'Test connection', onclick: function () {
+      say('Testing...');
+      api('/api/fantasy/test', { method: 'POST', body: { url: url.value, token: tok.value } }).then(function (r) {
+        if (r && r.ok) say('ok - connected to Fantasy Manager' + (r.version ? ' ' + r.version : ''), false); else say((r && r.error) || 'Failed', true);
+      }, fail);
+    } });
+    rm.addEventListener('click', function () {
+      api('/api/fantasy/config', { method: 'DELETE' }).then(function () { url.value = ''; tok.value = ''; fpReload().then(function () { if (wrap.isConnected) { fmFill(wrap, { configured: false }); var m = $('#fm-msg'); if (m) m.textContent = 'Removed.'; } }); }, fail);
+    });
+    wrap.appendChild(h('div', { class: 'fpset fmconn' },
+      h('div', { class: 'field' }, h('label', { text: 'Fantasy Manager address (private LAN or Tailscale only)' }), url),
+      h('div', { class: 'field' }, h('label', { text: 'Read-only token (Fantasy Manager > Account > Multiview access)' }), tok),
+      msg,
+      h('div', { class: 'viewbtns' }, save, test, rm)));
+    wrap.appendChild(fantasyBody());
+  }
+  function fantasyBody() {
     function numSel(key, list, label) {
       var sel = h('select');
       if (list.indexOf(S[key]) < 0) list = list.concat([S[key]]).sort(function (a, b) { return a - b; });
@@ -2773,7 +2825,7 @@
     var tkSpeed = h('select', { id: 'ft-speed' }, h('option', { value: 'slow', text: 'Slow' }), h('option', { value: 'normal', text: 'Normal' }), h('option', { value: 'fast', text: 'Fast' }));
     tkSpeed.value = S.fspeed;
     tkSpeed.addEventListener('change', function () { S.fspeed = tkSpeed.value; saveSoon(); });
-    if (!FP.avail) return h('div', { class: 'fpset' }, h('div', { class: 'note', text: 'Score pop-ups (Fantasy Manager): not set up on the server (FANTASY_URL and FANTASY_TOKEN).' }));
+    if (!FP.avail) return h('div', null);
     return h('div', { class: 'fpset' },
       h('label', { class: 'check' }, on, h('span', { text: 'Show a pop-up when a player scores (Fantasy Manager)' })),
       note,
@@ -3846,5 +3898,5 @@
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init); else init();
 
   // test hook (harmless in production)
-  window.__mv = { updateReady: updateReady, ovlShow: ovlShow, ovlHide: ovlHide, get ovl() { return ovl; }, get side() { return side; }, castState: castState, openRecordings: openRecordings, get S() { return S; }, get ME() { return ME; }, applyView: applyView, tiles: tiles, LAYOUTS: LAYOUTS, setLayout: setLayout, select: select, assign: assign, toggleZoom: toggleZoom, sharedApply: sharedApply, get shared() { return shared; }, get zoom() { return zoom; }, get modals() { return modals.length; }, get FP() { return FP; }, fpIncoming: fpIncoming, fpTest: fpTest, get FT() { return FT; }, ftSet: ftSet, ftCheck: function () { ftMeasure(); ftCheck($('#ft-view')); } };
+  window.__mv = { fpReload: fpReload, updateReady: updateReady, ovlShow: ovlShow, ovlHide: ovlHide, get ovl() { return ovl; }, get side() { return side; }, castState: castState, openRecordings: openRecordings, get S() { return S; }, get ME() { return ME; }, applyView: applyView, tiles: tiles, LAYOUTS: LAYOUTS, setLayout: setLayout, select: select, assign: assign, toggleZoom: toggleZoom, sharedApply: sharedApply, get shared() { return shared; }, get zoom() { return zoom; }, get modals() { return modals.length; }, get FP() { return FP; }, fpIncoming: fpIncoming, fpTest: fpTest, get FT() { return FT; }, ftSet: ftSet, ftCheck: function () { ftMeasure(); ftCheck($('#ft-view')); } };
 })();

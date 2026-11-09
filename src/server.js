@@ -15,7 +15,7 @@ const { emptyDir } = require('./rewind');
 const { Compose, cleanSpec } = require('./compose');
 const { Recordings } = require('./recordings');
 const { Cast } = require('./cast');
-const { Fantasy } = require('./fantasy');
+const { FantasyHub } = require('./fantasy-hub');
 const xtream = require('./xtream');
 const { Users, Views } = require('./users');
 const { isUpgrade: isWsUpgrade, handshake: wsHandshake, WsSink } = require('./ws');
@@ -39,8 +39,8 @@ function createApp(options = {}) {
   if (!users.enabled && adminUser && adminPass) {
     try { users.create({ username: adminUser, password: adminPass, role: 'admin' }); } catch (e) { console.error('ADMIN_USER/ADMIN_PASSWORD ignored: ' + e.message); }
   }
-  // Fantasy Manager (P-26): optional, read-only link for score pop-ups; admins only
-  const fantasy = new Fantasy({ url: options.fantasyUrl !== undefined ? options.fantasyUrl : env('FANTASY_URL', ''), token: options.fantasyToken !== undefined ? options.fantasyToken : env('FANTASY_TOKEN', ''), reconnectMs: options.fantasyReconnectMs, summaryMs: options.fantasySummaryMs });
+  // Fantasy Manager (P-26, per user since P-27): each admin saves their own address and token in Settings; nothing is read from the environment
+  const fantasy = new FantasyHub({ dataDir, reconnectMs: options.fantasyReconnectMs, summaryMs: options.fantasySummaryMs, idleMs: options.fantasyIdleMs, cacheMs: options.fantasyCacheMs, allowLoopback: !!options.fantasyAllowLoopback });
   const streamsByUser = new Map(); // username -> Set<res>
   const failures = new Map();      // "ip:<address>" or "user:<name>" -> { n, until, at }
   const LOGIN_TRIES = 8;           // wrong passwords before that address / account is locked out
@@ -586,30 +586,48 @@ function createApp(options = {}) {
       if (prov.type === 'local' || !prov.url) throw httpError(400, 'This channel cannot play directly (it is a local capture card)', 'no_direct');
       return sendJson(req, res, 200, { url: xtream.streamUrl(prov, sid), title: lists.nameOf(pid, sid) || sid, userAgent: xtream.ua(prov) });
     }
+    // Fantasy Manager connection of the signed-in admin (P-27). Only admins may set, test, remove or use it; the token is never sent back.
+    const fUser = me ? fantasy.userKey(me) : '';
     if (p === '/api/fantasy/status' && req.method === 'GET') {
       needAdmin(me);
-      return sendJson(req, res, 200, fantasy.status());
+      return sendJson(req, res, 200, fantasy.status(fUser));
+    }
+    if (p === '/api/fantasy/config') {
+      needAdmin(me);
+      if (req.method === 'GET') return sendJson(req, res, 200, fantasy.info(fUser));
+      if (req.method === 'POST') { const body = await readJson(req); return sendJson(req, res, 200, await fantasy.set(fUser, body.url, body.token)); }
+      if (req.method === 'DELETE') return sendJson(req, res, 200, fantasy.remove(fUser));
+    }
+    if (p === '/api/fantasy/test' && req.method === 'POST') {
+      needAdmin(me);
+      const body = await readJson(req);
+      return sendJson(req, res, 200, await fantasy.test(fUser, body.url, body.token));
     }
     if (p === '/api/fantasy/summary' && req.method === 'GET') {
       needAdmin(me);
-      if (!fantasy.enabled) throw httpError(404, 'Fantasy Manager is not set up (FANTASY_URL and FANTASY_TOKEN)', 'fantasy_off');
-      const sum = fantasy.summary;
-      return sendJson(req, res, 200, sum ? Object.assign({}, sum, { ageSeconds: Math.round((Date.now() - fantasy.summaryAt) / 1000) }) : { leagues: [], ageSeconds: null });
+      const f = fantasy.session(fUser);
+      if (!f) throw httpError(404, 'Fantasy Manager is not set up (Settings > Fantasy Manager)', 'fantasy_off');
+      const sum = await f.waitSummary(4000);
+      return sendJson(req, res, 200, sum ? Object.assign({}, sum, { ageSeconds: Math.round((Date.now() - f.summaryAt) / 1000) }) : { leagues: [], ageSeconds: null });
     }
     if (p === '/api/fantasy/stream' && req.method === 'GET') {
       needAdmin(me);
-      if (!fantasy.enabled) throw httpError(404, 'Fantasy Manager is not set up (FANTASY_URL and FANTASY_TOKEN)', 'fantasy_off');
+      const f = fantasy.hold(fUser);
+      if (!f) throw httpError(404, 'Fantasy Manager is not set up (Settings > Fantasy Manager)', 'fantasy_off');
       res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' });
       const send = (ev, at) => res.write(`id: ${ev.id}\nevent: score\ndata: ${JSON.stringify({ ...ev, age: Math.max(0, Date.now() - at) })}\n\n`);
       const recent = Math.max(0, Math.min(600, Number(url.searchParams.get('recent')) || 0));
-      if (recent) for (const x of fantasy.since(Date.now() - recent * 1000)) send(x.ev, x.at);
-      res.write(`event: status\ndata: ${JSON.stringify(fantasy.status())}\n\n`);
+      if (recent) for (const x of f.since(Date.now() - recent * 1000)) send(x.ev, x.at);
+      res.write(`event: status\ndata: ${JSON.stringify(f.status())}\n\n`);
       const onScore = (ev, at) => send(ev, at);
-      const onStatus = () => res.write(`event: status\ndata: ${JSON.stringify(fantasy.status())}\n\n`);
-      fantasy.on('score', onScore);
-      fantasy.on('status', onStatus);
+      const onStatus = () => res.write(`event: status\ndata: ${JSON.stringify(f.status())}\n\n`);
+      f.on('score', onScore);
+      f.on('status', onStatus);
       const hb = setInterval(() => res.write(': hb\n\n'), 15000);
-      const done = () => { clearInterval(hb); fantasy.off('score', onScore); fantasy.off('status', onStatus); };
+      let ended = false;
+      const done = () => { if (ended) return; ended = true; clearInterval(hb); f.off('score', onScore); f.off('status', onStatus); f.off('closed', onClosed); fantasy.release(fUser, f); };
+      const onClosed = () => { done(); res.end(); };   // the connection was changed or removed in Settings: the page asks again
+      f.on('closed', onClosed);
       req.on('close', done);
       res.on('error', done);
       return;
@@ -617,7 +635,9 @@ function createApp(options = {}) {
     const fh = /^\/api\/fantasy\/headshot\/([A-Za-z0-9_-]{1,24})$/.exec(p);
     if (fh && req.method === 'GET') {
       needAdmin(me);
-      return await new Promise((resolve) => fantasy.headshot(fh[1], (rec) => {
+      const f = fantasy.session(fUser);
+      if (!f) { res.writeHead(404, { 'Cache-Control': 'no-store' }); return res.end(); }
+      return await new Promise((resolve) => f.headshot(fh[1], (rec) => {
         if (!rec) { res.writeHead(404, { 'Cache-Control': 'no-store' }); res.end(); return resolve(); }
         res.writeHead(200, { 'Content-Type': rec.type, 'Cache-Control': 'private, max-age=86400', 'Content-Length': rec.body.length });
         res.end(rec.body);

@@ -1,7 +1,8 @@
 'use strict';
-// Fantasy Manager link (P-26): this server holds one read-only connection to Fantasy Manager's score event stream
-// (GET /api/ticker/stream, Server-Sent Events) and hands the events on to admin pages. The address and token never
-// leave the server. Nothing here writes to Fantasy Manager.
+// Fantasy Manager link (P-26, per user since P-27): one Fantasy object is one read-only connection to a Fantasy Manager's
+// score event stream (GET /api/ticker/stream, Server-Sent Events) and summary. src/fantasy-hub.js creates one per admin
+// who has saved an address and token, only while that admin has a page open. The address and token never leave the
+// server. Nothing here writes to Fantasy Manager.
 const http = require('http');
 const https = require('https');
 const { EventEmitter } = require('events');
@@ -118,6 +119,7 @@ class Fantasy extends EventEmitter {
   constructor(opts = {}) {
     super();
     this.base = cleanBase(opts.url);
+    this.lookup = opts.lookup || null;      // DNS guard (only private, LAN and Tailscale addresses)
     this.token = String(opts.token || '').trim();
     this.enabled = !!(this.base && this.token);
     this.connected = false;
@@ -148,7 +150,7 @@ class Fantasy extends EventEmitter {
 
   request(path, headers, cb) {
     const u = new URL(this.base + path);
-    return this.lib().request({ hostname: u.hostname, port: u.port || undefined, path: u.pathname + u.search, method: 'GET', headers: { Authorization: 'Bearer ' + this.token, ...headers }, timeout: 20000 }, cb);
+    return this.lib().request({ hostname: u.hostname, port: u.port || undefined, path: u.pathname + u.search, method: 'GET', headers: { Authorization: 'Bearer ' + this.token, ...headers }, timeout: 20000, ...(this.lookup ? { lookup: this.lookup } : {}) }, cb);
   }
 
   connect() {
@@ -266,8 +268,20 @@ class Fantasy extends EventEmitter {
     req.end();
   }
 
+  // resolves when a summary is there (or after ms)
+  waitSummary(ms) {
+    if (this.summary) return Promise.resolve(this.summary);
+    return new Promise((resolve) => {
+      const t = setTimeout(() => { this.off('summary', on); resolve(this.summary); }, ms);
+      const on = () => { clearTimeout(t); resolve(this.summary); };
+      this.once('summary', on);
+    });
+  }
+
   close() {
+    if (this.closed) return;
     this.closed = true;
+    this.emit('closed');
     clearTimeout(this.timer);
     clearTimeout(this.watch);
     clearTimeout(this.sumTimer);
@@ -276,4 +290,32 @@ class Fantasy extends EventEmitter {
   }
 }
 
-module.exports = { Fantasy, SseParser, cleanEvent, cleanSummary, cleanBase };
+// One quick check of an address and token without keeping a connection: GET /api/ticker/health.
+function probe(base, token, lookup) {
+  return new Promise((resolve) => {
+    let u;
+    try { u = new URL(base + '/api/ticker/health'); } catch { return resolve({ ok: false, error: 'Bad address' }); }
+    const lib = u.protocol === 'https:' ? https : http;
+    let settled = false;
+    const done = (r) => { if (!settled) { settled = true; resolve(r); } };
+    const req = lib.request({ hostname: u.hostname, port: u.port || undefined, path: u.pathname, method: 'GET', headers: { Authorization: 'Bearer ' + token, Accept: 'application/json' }, timeout: 8000, ...(lookup ? { lookup } : {}) }, (res) => {
+      if (res.statusCode === 401 || res.statusCode === 403) { res.resume(); return done({ ok: false, error: 'Fantasy Manager refused the token' }); }
+      if (res.statusCode === 404) { res.resume(); return done({ ok: false, error: 'That address answers, but it is not a Fantasy Manager with the ticker API (needs 4.17.0 or later)' }); }
+      if (res.statusCode !== 200) { res.resume(); return done({ ok: false, error: 'Fantasy Manager answered ' + res.statusCode }); }
+      const parts = []; let n = 0;
+      res.on('data', (c) => { n += c.length; if (n < 65536) parts.push(c); });
+      res.on('end', () => {
+        let j = null;
+        try { j = JSON.parse(Buffer.concat(parts).toString('utf8')); } catch { /* not json */ }
+        if (!j || j.status !== 'ok') return done({ ok: false, error: 'That address did not answer like Fantasy Manager' });
+        done({ ok: true, version: String(j.version || '').slice(0, 20) });
+      });
+      res.on('error', () => done({ ok: false, error: 'Connection dropped' }));
+    });
+    req.on('timeout', () => req.destroy(new Error('timeout')));
+    req.on('error', (e) => done({ ok: false, error: e && e.guard ? e.message : 'Cannot reach Fantasy Manager (' + ((e && (e.code || e.message)) || 'error') + ')' }));
+    req.end();
+  });
+}
+
+module.exports = { probe, Fantasy, SseParser, cleanEvent, cleanSummary, cleanBase };

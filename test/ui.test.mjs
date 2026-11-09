@@ -1922,6 +1922,57 @@ describe('player overlay, pull-out menu, recordings, PWA', () => {
     await ctx.close();
   });
 
+  test('Settings > Fantasy Manager: save, test and remove a connection; the token is never shown again', async () => {
+    const { ctx, page, errors } = await open(two, {});
+    await page.waitForFunction(() => window.__players.length === 2);
+    let cfg = { configured: false, url: '', tokenSaved: false, tokenLast4: '' };
+    const posted = [];
+    await page.route('**/api/fantasy/config', async (route) => {
+      const r = route.request();
+      if (r.method() === 'POST') {
+        const b = r.postDataJSON(); posted.push(b);
+        if (/^http:\/\/(127|localhost)/.test(b.url)) return route.fulfill({ status: 400, contentType: 'application/json', body: JSON.stringify({ error: 'bad_address', message: 'localhost is not allowed' }) });
+        cfg = { configured: true, url: b.url, tokenSaved: true, tokenLast4: String(b.token || 'wxyz').slice(-4), readable: true };
+      } else if (r.method() === 'DELETE') cfg = { configured: false, url: '', tokenSaved: false, tokenLast4: '' };
+      return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(cfg) });
+    });
+    await page.route('**/api/fantasy/test', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(route.request().postDataJSON().token === 'goodtoken123' ? { ok: true, version: '4.17.1' } : { ok: false, error: 'Fantasy Manager refused the token' }) }));
+    await page.route('**/api/fantasy/status', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ enabled: cfg.configured, connected: false, lastEventAt: null, summaryAt: null, error: '' }) }));
+    await page.route('**/api/fantasy/stream*', (route) => route.abort());
+    await page.route('**/api/fantasy/summary', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ leagues: [] }) }));
+    await page.evaluate(() => document.getElementById('sm-settings').click());
+    await page.waitForSelector('#fm-url');
+    assert.equal(await vis(page, '#fm-remove'), false, 'nothing to remove yet');
+    assert.equal(await page.evaluate(() => !!document.getElementById('fp-on')), false, 'pop-up options appear once a connection exists');
+    await page.fill('#fm-url', 'http://127.0.0.1:5000'); await page.fill('#fm-token', 'goodtoken123');
+    await page.click('#fm-save');
+    await page.waitForFunction(() => /not allowed/.test(document.getElementById('fm-msg').textContent));
+    await page.fill('#fm-url', 'http://192.168.4.11:5000');
+    await page.click('#fm-test');
+    await page.waitForFunction(() => /^ok - connected to Fantasy Manager 4\.17\.1/.test(document.getElementById('fm-msg').textContent));
+    await page.fill('#fm-token', 'badtoken');
+    await page.click('#fm-test');
+    await page.waitForFunction(() => /refused the token/.test(document.getElementById('fm-msg').textContent));
+    await page.fill('#fm-token', 'goodtoken123');
+    await page.click('#fm-save');
+    await page.waitForFunction(() => document.getElementById('fm-msg').textContent === 'Saved.');
+    const after = await page.evaluate(() => ({ token: document.getElementById('fm-token').value, ph: document.getElementById('fm-token').placeholder, url: document.getElementById('fm-url').value, type: document.getElementById('fm-token').type, opts: !!document.getElementById('fp-on'), tkpos: !!document.getElementById('ft-pos'), html: document.documentElement.innerHTML.includes('goodtoken123') }));
+    assert.equal(after.token, ''); assert.match(after.ph, /ends n123/); assert.equal(after.url, 'http://192.168.4.11:5000'); assert.equal(after.type, 'password');
+    assert.equal(after.html, false, 'the saved token is nowhere in the page');
+    assert.ok(after.opts && after.tkpos, 'pop-up and ticker options appear once saved');
+    assert.equal(await page.evaluate(() => window.__mv.FP.avail), true);
+    assert.equal(await vis(page, '#fm-remove'), true);
+    assert.equal(posted[posted.length - 1].token, 'goodtoken123');
+    assert.equal(await page.evaluate(() => JSON.stringify(localStorage).includes('goodtoken123')), false, 'never in browser storage');
+    await page.click('#fm-remove');
+    await page.waitForFunction(() => document.getElementById('fm-msg').textContent === 'Removed.');
+    assert.equal(await page.evaluate(() => window.__mv.FP.avail), false);
+    assert.equal(await page.evaluate(() => document.getElementById('fm-url').value), '');
+    assert.equal(await vis(page, '#fm-remove'), false);
+    assert.deepEqual(errors.filter((e) => !/fantasy|stream|ERR_FAILED|aborted/i.test(e)), []);
+    await ctx.close();
+  });
+
   test('mini player in the Android app: native call, auto-start flag, page chrome hides while floating', async () => {
     const { ctx, page, errors } = await open(two, { init: `window.__app = []; window.MVApp = { canPip: function () { return true; }, enterPip: function () { window.__app.push('enter'); }, setAutoPip: function (on) { window.__app.push('auto:' + on); }, changeServer: function () {} };` });
     await page.waitForFunction(() => window.__players.length === 2);
