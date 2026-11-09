@@ -177,3 +177,14 @@ Proposals (answer or say "go with your proposals"):
 Notes: all settings (size, delay, minimum, ticker position) stay per device as now; only the connection moves to the server.
 Decisions 2026-11-08 (James): key file /data/fantasy.key, no SECRET_KEY variable; the env variables were never set on this server, so they are simply deleted (no fallback, no log line, no migration); address check refuses (not warns), only admins can set, test, remove or use a connection (403 for others), Tailscale 100.64.0.0/10 allowed, localhost and 127.x refused, no FANTASY_ALLOW_HOSTS; connection per user opened only while that user has a page open, last summary cached 60 s.
 Built with one addition: 169.254.0.0/16 (link-local, includes the cloud metadata address) is also refused.
+
+### P-28 - Diagnostics: find where buffering comes from
+Requested: 2026-11-08 (James: the app buffers more than commercial apps even on the LAN; add diagnostics to pinpoint provider, internet, relay/server, LAN or browser).
+Type: minor (new endpoint and diagnostics panel)   Status: Pending
+Proposed scope (to confirm):
+1. Per screen (page side, from the player and video element): buffer seconds over time, stall count and total stall time, longest stall, dropped frames, incoming bitrate (bytes received per second by the page), decoded resolution, player phase, last 10 minutes kept in memory.
+2. Per channel (server side, relay.js): upstream bitrate (bytes per second from the provider), time to first byte, upstream reconnects and errors with the reason, viewers on it, bytes sent to each viewer and how often a viewer's socket backed up (slow reader), failover or SD or transcode in use.
+3. Server health: CPU load and memory of the process, ffmpeg children running, event-loop lag, so a busy server shows up.
+4. Settings > Diagnostics (admins): live table plus a "Run test" that measures provider-to-server speed for the selected channel for 30 s and server-to-browser speed over the same time, then states a verdict (provider slow / relay slow / browser or LAN slow / all fine) with the numbers; a button to copy or download the results as text to paste into chat.
+5. No new settings on the server, no new env variables; nothing stored on disk beyond memory (kept 10 minutes).
+Questions: admins only (proposal: yes, since it shows provider URLs' behaviour); include the provider address in results? (proposal: no, channel and provider names only).
