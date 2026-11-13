@@ -249,6 +249,151 @@ describe('browser', () => {
     await ctx.close();
   });
 
+  // ---- Auto quality (P-29). The page's clock is driven by hand: autoTick(now, ahead) with times 40 s ahead of the real clock.
+  const AUTO_STATE = { layout: '1', tiles: [{ p: 'p1', sid: '2', name: 'CNN', q: 'auto' }] };
+  async function autoPlaying(extra = {}) {
+    const o = await openPage({ state: { ...AUTO_STATE, ...extra } });
+    await o.page.waitForFunction(() => window.__players.length === 1);
+    await o.page.evaluate(() => { document.querySelector('video').__ahead = 3.5; });
+    await o.page.waitForFunction(() => window.__mv.tiles[0].phase === 'playing', null, { timeout: 4000 });
+    return o;
+  }
+  const feed = (page, from, n, fn) => page.evaluate(({ from, n, fn }) => {
+    const t = window.__mv.tiles[0];
+    const f = new Function('k', 'return ' + fn);
+    for (let k = 0; k < n; k++) t.autoTick(Date.now() + 40000 + (from + k) * 1000, f(from + k));
+  }, { from, n, fn });
+  const playersN = (page) => page.evaluate(() => window.__players.length);
+  async function swapUp(page) {
+    await page.evaluate(() => { document.querySelector('video').__ahead = 11; });
+    await feed(page, 0, 24, '11');
+    await page.waitForFunction(() => window.__players.length === 2, null, { timeout: 3000 });
+    await page.evaluate(() => { window.__players[1].v.__ahead = 3; });
+    await page.waitForFunction(() => window.__mv.tiles[0].au.q === 'full', null, { timeout: 3000 });
+  }
+
+  test('auto quality: starts on the SD step with a 3 s cushion; a channel without an SD version plays as chosen', async () => {
+    const { ctx, page, errors } = await openPage({ state: { layout: '1', tiles: [{ p: 'p1', sid: '2', name: 'CNN', q: 'auto' }] } });
+    await page.waitForFunction(() => window.__players.length === 1);
+    const u = await page.evaluate(() => window.__players[0].ds.url);
+    assert.match(u, /buf=3&/);
+    assert.match(u, /q=sd/);
+    assert.equal(await page.evaluate(() => window.__mv.tiles[0].au.q), 'sd');
+    await ctx.close();
+    const o = await openPage({ state: { layout: '1', tiles: [{ p: 'p1', sid: '1', name: 'ESPN', q: 'auto' }] } });
+    await o.page.waitForFunction(() => window.__players.length === 1);
+    const u2 = await o.page.evaluate(() => window.__players[0].ds.url);
+    assert.match(u2, /buf=4/, 'one step only: the normal cushion');
+    assert.doesNotMatch(u2, /q=sd/);
+    assert.equal(await o.page.evaluate(() => window.__mv.tiles[0].au), null);
+    assert.deepEqual([...errors, ...o.errors], []);
+    await o.ctx.close();
+  });
+
+  test('auto quality: the Settings switch applies it to channels with no quality chosen; the menu offers Auto', async () => {
+    const { ctx, page, errors } = await openPage({ state: { layout: '1', autoQ: true, tiles: [{ p: 'p1', sid: '2', name: 'CNN' }] } });
+    await page.waitForFunction(() => window.__players.length === 1);
+    assert.match(await page.evaluate(() => window.__players[0].ds.url), /buf=3&.*q=sd/);
+    await page.evaluate(() => { window.__mv.ovlShow(); });
+    await page.click('#ov-arrow');
+    await page.click('#ov-o-quality');
+    const items = await page.$$eval('#ov-sub button, .ov-sub button', (b) => b.map((x) => x.textContent));
+    assert.ok(items.some((t) => /^Auto \(adaptive/.test(t)), 'Auto (adaptive) is offered: ' + items.join('|'));
+    assert.ok(items.some((t) => /^Standard/.test(t)));
+    assert.deepEqual(errors, []);
+    await ctx.close();
+  });
+
+  test('auto quality: a healthy buffer (10 s for 20 s) swaps up to full quality with no gap, and the old stream is closed', async () => {
+    const { ctx, page, errors } = await autoPlaying();
+    await swapUp(page);
+    assert.doesNotMatch(await page.evaluate(() => window.__players[1].ds.url), /q=sd/);
+    assert.equal(await page.evaluate(() => window.__players[0].destroyed), true, 'old stream closed');
+    assert.equal(await page.evaluate(() => document.querySelectorAll('.tile video').length), 1, 'one picture');
+    assert.equal(await page.evaluate(() => window.__mv.tiles[0].video === window.__players[1].v), true);
+    assert.equal(await page.evaluate(() => window.__mv.tiles[0].phase), 'playing');
+    assert.equal(await page.evaluate(() => window.__mv.tiles[0].sdUsed), false);
+    assert.match(await page.evaluate(() => window.__mv.tiles[0].dgInfo().switches[0]), /sd to full: buffer over 10 s/);
+    assert.deepEqual(errors, []);
+    await ctx.close();
+  });
+
+  test('auto quality: it does not step up before 20 s of healthy buffer, and while waiting it plays slightly slower to build the cushion', async () => {
+    const { ctx, page, errors } = await autoPlaying();
+    await page.evaluate(() => { document.querySelector('video').__ahead = 6; });
+    await feed(page, 0, 10, '11');
+    assert.equal(await playersN(page), 1, '10 s is not enough');
+    await page.evaluate(() => { document.querySelector('video').__ahead = 8; });
+    await page.waitForFunction(() => document.querySelector('video').playbackRate < 1, null, { timeout: 3000 });
+    assert.equal(await page.evaluate(() => document.querySelector('video').playbackRate), 0.95);
+    await page.evaluate(() => { document.querySelector('video').__ahead = 12.5; });
+    await page.waitForFunction(() => document.querySelector('video').playbackRate === 1, null, { timeout: 3000 });
+    assert.deepEqual(errors, []);
+    await ctx.close();
+  });
+
+  test('auto quality: a buffer under 5 s that is not growing for 10 s steps down; a growing one does not', async () => {
+    const { ctx, page, errors } = await autoPlaying();
+    await swapUp(page);
+    await page.evaluate(() => { document.querySelector('video').__ahead = 3; });
+    await feed(page, 0, 13, '3 + k * 0.3'); // growing: healthy
+    assert.equal(await playersN(page), 2, 'a growing buffer is left alone');
+    await page.evaluate(() => { window.__mv.tiles[0].au.samples = []; });
+    await feed(page, 20, 13, '3.2 - k * 0.02 + 0.4'); // draining
+    await page.waitForFunction(() => window.__players.length === 3, null, { timeout: 3000 });
+    assert.match(await page.evaluate(() => window.__players[2].ds.url), /q=sd/);
+    await page.evaluate(() => { window.__players[2].v.__ahead = 3; });
+    await page.waitForFunction(() => window.__mv.tiles[0].au.q === 'sd', null, { timeout: 3000 });
+    assert.equal(await page.evaluate(() => window.__players[1].destroyed), true);
+    assert.match(await page.evaluate(() => window.__mv.tiles[0].dgInfo().switches.slice(-1)[0]), /full to sd: buffer under 5 s for 10 s/);
+    assert.ok(await page.evaluate(() => window.__mv.tiles[0].auLock > Date.now() + 50000), 'no step up for about a minute');
+    assert.deepEqual(errors, []);
+    await ctx.close();
+  });
+
+  test('auto quality: a stall steps down at once', async () => {
+    const { ctx, page, errors } = await autoPlaying();
+    await swapUp(page);
+    await page.evaluate(() => { document.querySelector('video').dispatchEvent(new Event('playing')); document.querySelector('video').__ahead = 0.05; });
+    await page.waitForFunction(() => window.__players.length === 3, null, { timeout: 3000 });
+    assert.match(await page.evaluate(() => window.__players[2].ds.url), /q=sd/);
+    await page.evaluate(() => { window.__players[2].v.__ahead = 3; });
+    await page.waitForFunction(() => window.__mv.tiles[0].au.q === 'sd', null, { timeout: 3000 });
+    assert.match(await page.evaluate(() => window.__mv.tiles[0].dgInfo().switches.slice(-1)[0]), /full to sd: stall/);
+    assert.deepEqual(errors, []);
+    await ctx.close();
+  });
+
+  test('auto quality: when the new stream cannot open (provider full) the switch is skipped and the picture keeps playing', async () => {
+    const { ctx, page, errors } = await autoPlaying();
+    await page.evaluate(() => { document.querySelector('video').__ahead = 11; });
+    await feed(page, 0, 24, '11');
+    await page.waitForFunction(() => window.__players.length === 2, null, { timeout: 3000 });
+    await page.evaluate(() => window.__players[1].handlers.error('NetworkError', 'HttpStatusCodeInvalid', { code: 503 }));
+    assert.equal(await page.evaluate(() => window.__players[1].destroyed), true, 'standby closed');
+    assert.equal(await page.evaluate(() => window.__players[0].destroyed), false, 'current stream untouched');
+    assert.equal(await page.evaluate(() => window.__mv.tiles[0].phase), 'playing');
+    assert.equal(await page.evaluate(() => window.__mv.tiles[0].au.q), 'sd');
+    assert.equal(await page.evaluate(() => document.querySelectorAll('.tile video').length), 1);
+    assert.match(await page.evaluate(() => window.__mv.tiles[0].dgInfo().switches[0]), /skipped/);
+    assert.ok(await page.evaluate(() => window.__mv.tiles[0].auLock > Date.now() + 50000));
+    assert.deepEqual(errors, []);
+    await ctx.close();
+  });
+
+  test('auto quality: a restart (Reload, error) closes a half-built switch', async () => {
+    const { ctx, page, errors } = await autoPlaying();
+    await page.evaluate(() => { document.querySelector('video').__ahead = 11; });
+    await feed(page, 0, 24, '11');
+    await page.waitForFunction(() => window.__players.length === 2, null, { timeout: 3000 });
+    await page.evaluate(() => window.__mv.tiles[0].reload());
+    await page.waitForFunction(() => window.__players.length === 3, null, { timeout: 3000 });
+    assert.equal(await page.evaluate(() => window.__players[1].destroyed), true);
+    assert.equal(await page.evaluate(() => !!window.__mv.tiles[0].switching), false);
+    assert.deepEqual(errors, []);
+    await ctx.close();
+  });
+
   test('errors map to messages: busy provider retries, missing channel stops', async () => {
     const { ctx, page } = await openPage({ state: { layout: '1', tiles: [{ p: 'p1', sid: '1', name: 'ESPN' }] } });
     await page.waitForFunction(() => window.__players.length === 1);
@@ -1160,7 +1305,7 @@ describe('player overlay, pull-out menu, recordings, PWA', () => {
     assert.deepEqual([...xs].sort((a, b) => a - b), xs, 'left to right in the numbered order');
     assert.ok((await centre(page, '#ov-o-layout')).y < pos.seek.y, 'the row expands upward');
     assert.equal(await page.evaluate(() => document.querySelector('#ov-o-layout svg').getAttribute('viewBox')), '0 0 20 20', 'layout icon shows the 2 x 2 layout');
-    assert.equal(await page.textContent('#ov-o-quality .ic-tv text'), 'AUTO');
+    assert.equal(await page.textContent('#ov-o-quality .ic-tv text'), 'STD');
     await page.click('#ov-arrow');
     assert.equal(await vis(page, '#ov-o-layout'), false, 'tapping again closes the row');
     assert.deepEqual(errors, []);
@@ -1202,7 +1347,7 @@ describe('player overlay, pull-out menu, recordings, PWA', () => {
     await tap(page, 0);
     await page.click('#ov-arrow');
     await page.click('#ov-o-quality');
-    assert.equal(await page.locator('#ov-o-quality ~ .ov-sub .ovitem').count(), 4);
+    assert.equal(await page.locator('#ov-o-quality ~ .ov-sub .ovitem').count(), 5);
     await page.click('#ov-o-quality ~ .ov-sub .ovitem:has-text("SD when available")');
     assert.equal(await page.evaluate(() => window.__mv.S.tiles[0].q), 'sd');
     await page.waitForFunction(() => /q=sd/.test(window.__players[window.__players.length - 1].ds.url));

@@ -63,7 +63,7 @@
   applyTheme();
   var ME = null; // set after /api/me: { admin, user, open, authRequired }
   function loadState() {
-    var d = { layout: '3x3', tiles: [], sel: 0, muted: false, bufSec: 4, keepSec: 0, transport: 'auto', fit: 'contain', failover: true, smallSd: true, vol: 1, shared: '', theme: 'system', local: false, fpop: true, fmin: 3, fdelay: 0, fopp: true, fsize: 'auto', fage: 60, ftick: true, fpos: 'below', fspeed: 'normal', workers: true, stats: false, labels: false, epgOn: true, favs: {}, pk: {} };
+    var d = { layout: '3x3', tiles: [], sel: 0, muted: false, bufSec: 4, keepSec: 0, transport: 'auto', fit: 'contain', failover: true, smallSd: true, autoQ: false, vol: 1, shared: '', theme: 'system', local: false, fpop: true, fmin: 3, fdelay: 0, fopp: true, fsize: 'auto', fage: 60, ftick: true, fpos: 'below', fspeed: 'normal', workers: true, stats: false, labels: false, epgOn: true, favs: {}, pk: {} };
     var j = {};
     try { j = JSON.parse(localStorage.getItem(LS_KEY)) || {}; } catch (e) { j = {}; }
     Object.keys(d).forEach(function (k) { if (j[k] !== undefined && typeof j[k] === typeof d[k]) d[k] = j[k]; });
@@ -90,7 +90,7 @@
   function cleanTile(t) {
     if (!t || typeof t.p !== 'string' || t.sid == null) return null;
     var o = { p: t.p, sid: String(t.sid), name: String(t.name || ''), icon: String(t.icon || '') };
-    if (t.q === 'sd' || t.q === 'full' || t.q === '480') o.q = t.q;
+    if (t.q === 'sd' || t.q === 'full' || t.q === '480' || t.q === 'auto') o.q = t.q;
     if (t.vod === 'movie' || t.vod === 'series') { o.vod = t.vod; o.ext = String(t.ext || 'mp4').replace(/[^a-z0-9]/gi, '').slice(0, 5) || 'mp4'; }
     return o;
   }
@@ -236,6 +236,31 @@
 
   // ---------------------------------------------------------------- tiles
   var BACKOFF = [1000, 2000, 4000, 8000, 15000];
+  // Auto quality (P-29): short start cushion, step down when the buffer stays low or a stall happens, step up when it stays healthy.
+  var AUTO = { cushion: 3, upBuf: 10, fill: 12, refill: 10.3, upHold: 20000, downBuf: 5, downHold: 10000, lock: 60000, failLock: 20000, ready: 2, rate: 0.95 };
+  var AUTO_RANK = { '480': 0, sd: 1, full: 2 };
+  var autoCache = {};
+  function autoStartStep(st) { for (var i = 0; i < st.length; i++) if (st[i] !== '480') return st[i]; return st[0]; }
+  function playerCfg() {
+    return {
+      enableWorker: !!S.workers,
+      enableStashBuffer: true,
+      liveBufferLatencyChasing: false,
+      autoCleanupSourceBuffer: true,
+      autoCleanupMaxBackwardDuration: 20,
+      autoCleanupMinBackwardDuration: 10,
+      fixAudioTimestampGap: true
+    };
+  }
+  function aheadOf(v) {
+    var b;
+    try { b = v.buffered; } catch (e) { return 0; }
+    var t = v.currentTime;
+    for (var i = 0; i < b.length; i++) {
+      if (b.end(i) > t) return b.end(i) - Math.max(t, b.start(i));
+    }
+    return 0;
+  }
   var wsBlocked = false;   // set when WebSockets repeatedly fail before any video (e.g. a proxy that blocks them)
   var wsFails = 0;
   var wsWorked = false;
@@ -288,9 +313,7 @@
     this.lastTime = 0;
     this.mediaErrors = 0;
     var self = this;
-    this.video = h('video', { playsinline: true, muted: true, preload: 'auto' });
-    this.video.muted = true;
-    this.video.setAttribute('disablepictureinpicture', '');
+    this.video = this.makeVideo();
     this.num = h('div', { class: 'num', text: String(idx + 1) });
     this.labName = h('span', { class: 'lname' });
     this.labNow = h('span', { class: 'lnow' });
@@ -313,11 +336,20 @@
     this.el.addEventListener('click', function () { tileClick(self); });
     this.el.addEventListener('contextmenu', function (e) { e.preventDefault(); select(self.idx); if (self.cfg) ovlShow(); });
     this.el.addEventListener('focus', function () { if (S.sel !== self.idx) select(self.idx, true); });
-    this.video.addEventListener('waiting', function () { if (self.hasPlayed && self.phase === 'playing') self.dgStallStart(); });
-    this.video.addEventListener('playing', function () { self.dgStallEnd(); self.hasPlayed = true; if (self.viaWs) { wsWorked = true; wsFails = 0; } });
-    this.video.addEventListener('timeupdate', function () { self.lastTime = Date.now(); });
     this.render();
   }
+
+  // The <video> of a screen; Auto quality builds a second one and swaps it in when the new stream is ready.
+  Tile.prototype.makeVideo = function () {
+    var self = this;
+    var v = h('video', { playsinline: true, muted: true, preload: 'auto' });
+    v.muted = true;
+    v.setAttribute('disablepictureinpicture', '');
+    v.addEventListener('waiting', function () { if (self.video === v && self.hasPlayed && self.phase === 'playing') self.dgStallStart(); });
+    v.addEventListener('playing', function () { if (self.video !== v) return; self.dgStallEnd(); self.hasPlayed = true; if (self.viaWs) { wsWorked = true; wsFails = 0; } });
+    v.addEventListener('timeupdate', function () { if (self.video === v) self.lastTime = Date.now(); });
+    return v;
+  };
 
   Tile.prototype.render = function () {
     var c = this.cfg;
@@ -359,16 +391,7 @@
     if (v) this.start(); else this.stop();
   };
 
-  Tile.prototype.ahead = function () {
-    var v = this.video;
-    var b;
-    try { b = v.buffered; } catch (e) { return 0; }
-    var t = v.currentTime;
-    for (var i = 0; i < b.length; i++) {
-      if (b.end(i) > t) return b.end(i) - Math.max(t, b.start(i));
-    }
-    return 0;
-  };
+  Tile.prototype.ahead = function () { return aheadOf(this.video); };
 
   // A small tile (a ninth of the screen or less, not zoomed) asks for the provider's SD version of the channel when one exists.
   function isSmallTile(idx) {
@@ -379,13 +402,193 @@
   Tile.prototype.wantSd = function () {
     var c = this.cfg;
     if (!c || c.vod) return false;
-    if (c.q === 'sd') return true;
-    if (c.q === 'full' || c.q === '480') return false;
+    var q = this.effQ();
+    if (q === 'sd') return true;
+    if (q === 'full' || q === '480') return false;
     return !!S.smallSd && isSmallTile(this.idx);
+  };
+
+  // ---------------------------------------------------------------- Auto quality (P-29)
+  // A channel on Auto has steps, lowest first: 480p transcode (server GPU, only used when the buffer keeps draining),
+  // the SD version (when a provider has one) and the chosen quality. It starts on the lowest non-transcode step.
+  Tile.prototype.isAuto = function () { var c = this.cfg; return !!c && !c.vod && (c.q === 'auto' || (!c.q && !!S.autoQ)); };
+  Tile.prototype.autoSteps = function () {
+    var o = this.autoOpts;
+    if (!o) return ['full'];
+    var st = [];
+    if (o.tx) st.push('480');
+    if (o.sd) st.push('sd');
+    st.push('full');
+    if (o.sd && S.smallSd && isSmallTile(this.idx)) st.pop(); // a small tile does not need more than SD
+    return st;
+  };
+  Tile.prototype.autoActive = function () { return this.isAuto() && !!this.autoOpts && this.autoSteps().length > 1; };
+  Tile.prototype.effQ = function () {
+    var c = this.cfg;
+    if (!c) return '';
+    if (!this.isAuto()) return c.q || '';
+    var st = this.autoSteps();
+    return this.au && st.indexOf(this.au.q) >= 0 ? this.au.q : autoStartStep(st);
+  };
+  Tile.prototype.loadAutoOpts = function (cb) {
+    var self = this;
+    var c = this.cfg;
+    var key = c.p + '/' + c.sid;
+    var e = autoCache[key];
+    if (e && Date.now() - e.at < 300000) { this.autoOpts = e; this.autoKey = key; cb(); return; }
+    api('/api/quality-options?p=' + enc(c.p) + '&sid=' + enc(c.sid)).then(function (r) {
+      autoCache[key] = { sd: !!(r && r.sd), tx: !!(r && r.tx), at: Date.now() };
+    }, function () {
+      autoCache[key] = { sd: false, tx: false, at: Date.now() - 240000 }; // ask again in a minute
+    }).then(function () { self.autoOpts = autoCache[key]; self.autoKey = key; cb(); });
+  };
+  // one step down after a stall (never during a rewind)
+  Tile.prototype.autoStall = function () {
+    var a = this.au;
+    if (!a) return;
+    a.stallAt = Date.now();
+    var st = this.autoSteps();
+    var i = st.indexOf(a.q);
+    if (i > 0 && !(this.back > 0)) this.autoSwitch(st[i - 1], 'stall');
+  };
+  // called from the 0.4 s timer while playing
+  Tile.prototype.autoTick = function (now, ahead) {
+    var a = this.au;
+    var v = this.video;
+    if (!a || this.back > 0 || this.userPaused || this.switching) return;
+    var s = a.samples;
+    if (!s.length || now - s[s.length - 1].t >= 1000) {
+      s.push({ t: now, a: ahead });
+      while (s.length && now - s[0].t > 25000) s.shift();
+    }
+    var st = this.autoSteps();
+    var i = st.indexOf(a.q);
+    if (i < 0) return;
+    var canUp = i < st.length - 1 && now >= (this.auLock || 0);
+    // while a higher step is waiting, play a little slower so the cushion grows (live video arrives in real time)
+    var rate = v.playbackRate;
+    if (canUp && ahead < AUTO.refill) rate = AUTO.rate;
+    else if (ahead >= AUTO.fill || !canUp) rate = 1;
+    if (v.playbackRate !== rate) { try { v.playbackRate = rate; } catch (e) { /* ignore */ } }
+    function avg(list) { var t = 0; list.forEach(function (x) { t += x.a; }); return list.length ? t / list.length : 0; }
+    if (i > 0 && now - a.at > 5000) { // down: low for 10 s and not growing
+      var w = s.filter(function (x) { return now - x.t <= AUTO.downHold; });
+      if (w.length >= 8 && now - w[0].t >= AUTO.downHold - 1500 && w.every(function (x) { return x.a < AUTO.downBuf; }) && avg(w.slice(-3)) <= avg(w.slice(0, 3)) + 0.1) {
+        this.autoSwitch(st[i - 1], 'buffer under ' + AUTO.downBuf + ' s for ' + AUTO.downHold / 1000 + ' s');
+        return;
+      }
+    }
+    if (canUp && now - a.at > AUTO.upHold && now - (a.stallAt || 0) > AUTO.upHold) { // up: healthy for 20 s
+      var u = s.filter(function (x) { return now - x.t <= AUTO.upHold; });
+      if (u.length >= 15 && now - u[0].t >= AUTO.upHold - 1500 && u.every(function (x) { return x.a >= AUTO.upBuf; })) this.autoSwitch(st[i + 1], 'buffer over ' + AUTO.upBuf + ' s for ' + AUTO.upHold / 1000 + ' s');
+    }
+  };
+  // Open the new step on a second video, wait until it has ~2 s buffered, then swap (no black gap). If the provider
+  // has no free connection or the new stream is slow, the switch is skipped and the current stream keeps playing.
+  Tile.prototype.autoSwitch = function (q, reason) {
+    var self = this;
+    var a = this.au;
+    var mp = window.mpegts;
+    if (!a || this.switching || this.back > 0 || !this.player || q === a.q || !mp) return;
+    var from = a.q;
+    var up = AUTO_RANK[q] > AUTO_RANK[from];
+    var gen = this.gen;
+    var sw = { done: false, player: null, video: null, timer: null };
+    this.switching = sw;
+    function kill() {
+      sw.done = true;
+      clearInterval(sw.timer);
+      var p2 = sw.player;
+      if (p2) { try { p2.pause(); p2.unload(); p2.detachMediaElement(); p2.destroy(); } catch (e) { /* gone */ } }
+      if (sw.video) { try { sw.video.removeAttribute('src'); sw.video.load(); } catch (e) { /* ignore */ } }
+    }
+    function abort(why) {
+      if (sw.done) return;
+      kill();
+      if (self.switching === sw) self.switching = null;
+      self.auLock = Date.now() + (up ? AUTO.lock : AUTO.failLock);
+      self.dgSwitch(from, q, reason + ' - skipped: ' + why, false);
+    }
+    sw.kill = kill;
+    this.source(q, function (src) {
+      if (sw.done) return;
+      if (self.gen !== gen) { abort('restarted'); return; }
+      var v2 = self.makeVideo();
+      var p2;
+      try { p2 = mp.createPlayer({ type: 'mpegts', isLive: true, url: src.url }, playerCfg()); } catch (e) { abort(e.message); return; }
+      sw.video = v2;
+      sw.player = p2;
+      p2.on(mp.Events.ERROR, function (type, detail, info) {
+        if (!sw.done) abort(String(detail || type));
+        else if (self.player === p2) self.onError(type, detail, info);
+      });
+      p2.on(mp.Events.LOADING_COMPLETE, function () {
+        if (!sw.done) abort('ended');
+        else if (self.player === p2) self.onError('ended');
+      });
+      p2.attachMediaElement(v2);
+      p2.load();
+      var t0 = Date.now();
+      sw.timer = setInterval(function () {
+        if (sw.done) return;
+        if (self.gen !== gen || self.switching !== sw) { abort('restarted'); return; }
+        if (aheadOf(v2) >= AUTO.ready) finish(src, v2, p2);
+        else if (Date.now() - t0 > 15000) abort('the new stream was too slow');
+      }, 250);
+    });
+    function finish(src, v2, p2) {
+      sw.done = true;
+      clearInterval(sw.timer);
+      if (self.switching === sw) self.switching = null;
+      var v1 = self.video;
+      var p1 = self.player;
+      v2.style.visibility = v1.style.visibility;
+      if (v1.parentNode) v1.parentNode.insertBefore(v2, v1);
+      self.gen++; // events of the old player are ignored from now on
+      self.video = v2;
+      self.player = p2;
+      self.sdUsed = src.sd;
+      self.txUsed = src.tx;
+      a.q = q;
+      a.at = Date.now();
+      a.last = a.at;
+      a.samples = [];
+      self.dgStallEnd();
+      self.phase = 'playing';
+      self.playingSince = Date.now();
+      self.hasPlayed = true;
+      self.lastTime = Date.now();
+      self.setStatus('');
+      try { p1.pause(); p1.unload(); p1.detachMediaElement(); p1.destroy(); } catch (e) { /* gone */ }
+      try { v1.removeAttribute('src'); v1.load(); } catch (e) { /* ignore */ }
+      if (v1.parentNode) v1.parentNode.removeChild(v1);
+      applyAudio();
+      if (!self.userPaused) { var pr; try { pr = v2.play(); } catch (e) { pr = null; } if (pr && pr.catch) pr.catch(noop); }
+      self.auLock = up ? 0 : Date.now() + AUTO.lock; // after a step down, wait before trying again
+      self.dgSwitch(from, q, reason, true);
+      ovlSync();
+    }
+  };
+  Tile.prototype.abortSwitch = function () {
+    var sw = this.switching;
+    if (!sw) return;
+    this.switching = null;
+    if (sw.kill) sw.kill(); else sw.done = true;
+  };
+  Tile.prototype.dgSwitch = function (from, to, reason, ok) {
+    var d = this.dg;
+    if (!d) return;
+    d.switches.push({ t: Date.now(), from: from, to: to, reason: reason, ok: ok });
+    if (d.switches.length > 30) d.switches.shift();
   };
   // after a layout, zoom or setting change: switch the stream only when the wanted quality changed
   Tile.prototype.applyQuality = function () {
     if (!this.cfg || !this.visible || this.cfg.vod || this.phase === 'idle' || this.phase === 'vod') return;
+    if (this.isAuto() && this.autoActive() && this.au && this.player) { // Auto: only the tile size can change what is allowed
+      var want = this.effQ();
+      if (want !== this.au.q) this.autoSwitch(want, 'tile size changed');
+      return;
+    }
     if (this.wantSd() !== this.sdUsed) this.start();
   };
 
@@ -401,8 +604,24 @@
       this.setStatus('This browser cannot play live MPEG-TS (no MSE live playback)', true);
       return;
     }
-    var gen = ++this.gen;
     var c = this.cfg;
+    if (this.isAuto() && (!this.autoOpts || this.autoKey !== c.p + '/' + c.sid)) { // Auto: learn which steps this channel has first
+      var g0 = this.gen;
+      this.phase = 'prebuffer';
+      this.phaseAt = Date.now();
+      this.setStatus('Connecting...');
+      this.loadAutoOpts(function () { if (self.gen === g0 && self.cfg === c) self.start(); });
+      return;
+    }
+    var gen = ++this.gen;
+    if (this.autoActive()) {
+      var st = this.autoSteps();
+      var prev = this.au;
+      var keyA = c.p + '/' + c.sid;
+      var q0 = prev && prev.key === keyA && Date.now() - prev.last < 120000 && st.indexOf(prev.q) >= 0 ? prev.q : autoStartStep(st);
+      this.au = { key: keyA, q: q0, at: Date.now(), last: Date.now(), samples: [], stallAt: 0 };
+    } else this.au = null;
+    try { this.video.playbackRate = 1; } catch (e) { /* ignore */ }
     this.dgInit(c);
     this.phase = 'prebuffer';
     this.phaseAt = Date.now();
@@ -414,23 +633,11 @@
     // connections per address, which a 3x3 grid would hit; plain HTTP stays as a fallback.
     var useWs = S.transport !== 'http' && !wsBlocked && typeof WebSocket !== 'undefined';
     this.viaWs = useWs;
-    this.sdUsed = this.wantSd();
-    var path = encodeURIComponent(c.p) + '/' + encodeURIComponent(c.sid) + '.ts?buf=' + S.bufSec + (S.failover ? '' : '&failover=0') + (this.sdUsed ? '&q=sd' : '') + (this.back > 0 ? '&back=' + Math.round(this.back) : '');
-    var url = useWs ? (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws/stream/' + path : location.origin + '/stream/' + path;
-    this.txUsed = false;
     function begin(url) {
       if (gen !== self.gen) return;
       var player;
       try {
-        player = mp.createPlayer({ type: 'mpegts', isLive: true, url: url }, {
-          enableWorker: !!S.workers,
-          enableStashBuffer: true,
-          liveBufferLatencyChasing: false,
-          autoCleanupSourceBuffer: true,
-          autoCleanupMaxBackwardDuration: 20,
-          autoCleanupMinBackwardDuration: 10,
-          fixAudioTimestampGap: true
-        });
+        player = mp.createPlayer({ type: 'mpegts', isLive: true, url: url }, playerCfg());
       } catch (e) {
         self.setStatus('Player error: ' + e.message, true);
         return;
@@ -443,20 +650,34 @@
       self.tickTimer = setInterval(function () { self.tick(); }, 400);
       applyAudio();
     }
-    if (c.q === '480') {
-      // the server re-encodes this one channel at 480p (needs a GPU encoder there); if it declines, play the original
-      api('/api/compose', { method: 'POST', body: { kind: 'tile', res: 480, cols: 1, rows: 1, audio: 0, cells: [{ x: 1, y: 1, w: 1, h: 1, p: c.p, sid: c.sid }] } }).then(function (r) {
-        if (gen !== self.gen) return;
-        self.txUsed = true;
-        begin(useWs ? (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + r.ws : location.origin + r.stream);
-      }, function (e) {
-        if (gen !== self.gen) return;
-        banner('480p transcode not available: ' + e.message + ' - playing the original', 7000);
-        begin(url);
-      });
-      return;
-    }
-    begin(url);
+    this.source(this.effQ(), function (src) {
+      if (gen !== self.gen) return;
+      self.sdUsed = src.sd;
+      self.txUsed = src.tx;
+      if (src.err) {
+        banner('480p transcode not available: ' + src.err.message + ' - playing the original', 7000);
+        if (self.au) { self.autoOpts.tx = false; self.au.q = 'full'; }
+      }
+      begin(src.url);
+    });
+  };
+
+  // The stream address for quality step q ('', 'sd', 'full', '480'); the 480p step asks the server to start a transcode first.
+  // Gives back { url, sd, tx } and changes nothing on the tile, so Auto can prepare a second stream beside the playing one.
+  Tile.prototype.source = function (q, cb) {
+    var c = this.cfg;
+    var useWs = this.viaWs;
+    var sd = q === 'sd' ? true : (q === 'full' || q === '480') ? false : (!!S.smallSd && isSmallTile(this.idx));
+    var buf = this.autoActive() ? AUTO.cushion : S.bufSec;
+    var path = encodeURIComponent(c.p) + '/' + encodeURIComponent(c.sid) + '.ts?buf=' + buf + (S.failover ? '' : '&failover=0') + (sd ? '&q=sd' : '') + (this.back > 0 ? '&back=' + Math.round(this.back) : '');
+    var url = useWs ? (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws/stream/' + path : location.origin + '/stream/' + path;
+    if (q !== '480') { cb({ url: url, sd: sd, tx: false }); return; }
+    // the server re-encodes this one channel at 480p (needs a GPU encoder there); if it declines, play the original
+    api('/api/compose', { method: 'POST', body: { kind: 'tile', res: 480, cols: 1, rows: 1, audio: 0, cells: [{ x: 1, y: 1, w: 1, h: 1, p: c.p, sid: c.sid }] } }).then(function (r) {
+      cb({ url: useWs ? (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + r.ws : location.origin + r.stream, sd: false, tx: true });
+    }, function (e) {
+      cb({ url: url, sd: false, tx: false, err: e });
+    });
   };
 
   // A movie or episode: the browser plays the provider's file through the server's range proxy.
@@ -547,6 +768,7 @@
     v0.onplaying = v0.onwaiting = v0.oncanplay = v0.onerror = v0.onloadedmetadata = null;
     clearInterval(this.tickTimer);
     clearTimeout(this.retryTimer);
+    this.abortSwitch();
     this.gen++;
     var p = this.player;
     this.player = null;
@@ -634,7 +856,7 @@
   Tile.prototype.dgInit = function (c) {
     var key = c.p + '/' + c.sid;
     if (this.dg && this.dg.key === key) { this.dg.starts++; return; }
-    this.dg = { key: key, name: c.name || c.sid, since: Date.now(), starts: 1, stalls: 0, stallMs: 0, longest: 0, stallAt: 0, ttp: 0, hist: [], lastSample: 0, events: [] };
+    this.dg = { key: key, name: c.name || c.sid, since: Date.now(), starts: 1, stalls: 0, stallMs: 0, longest: 0, stallAt: 0, ttp: 0, hist: [], lastSample: 0, events: [], switches: [] };
   };
   Tile.prototype.dgStallStart = function () { if (this.dg && !this.dg.stallAt) this.dg.stallAt = Date.now(); };
   Tile.prototype.dgStallEnd = function () {
@@ -666,7 +888,7 @@
     var last = d.hist[d.hist.length - 1] || { ahead: 0, kbps: 0, dropped: 0, total: 0 };
     var kb = recent.filter(function (x) { return x.kbps > 0; });
     return {
-      slot: this.idx + 1, name: d.name, phase: this.phase, via: this.viaWs ? 'WebSocket' : 'HTTP', tx: !!this.txUsed, sd: !!this.sdUsed,
+      slot: this.idx + 1, name: d.name, phase: this.phase, via: this.viaWs ? 'WebSocket' : 'HTTP', tx: !!this.txUsed, sd: !!this.sdUsed, auto: this.au ? this.au.q : '', switches: d.switches.slice(-5).map(function (x) { return Math.round((now - x.t) / 1000) + ' s ago ' + x.from + ' to ' + x.to + (x.ok ? '' : ' (not done)') + ': ' + x.reason; }),
       res: this.video.videoWidth ? this.video.videoWidth + 'x' + this.video.videoHeight : '',
       ahead: Math.round(this.ahead() * 10) / 10, minAhead: recent.length ? Math.round(Math.min.apply(null, recent.map(function (x) { return x.ahead; })) * 10) / 10 : null,
       stalls: d.stalls + (d.stallAt ? 1 : 0), stallMs: d.stallMs + (d.stallAt ? now - d.stallAt : 0), longest: Math.max(d.longest, d.stallAt ? now - d.stallAt : 0),
@@ -681,7 +903,8 @@
     if (!this.player || this.zoomPaused) return;
     var now = Date.now();
     var ahead = this.ahead();
-    var buf = S.bufSec;
+    var auto = this.autoActive();
+    var buf = auto ? AUTO.cushion : S.bufSec;
     if (this.phase === 'prebuffer') {
       var need = buf > 0 ? buf * 0.8 : 0;
       var waited = now - this.phaseAt;
@@ -696,7 +919,8 @@
         this.phase = 'rebuffer';
         this.phaseAt = now;
         this.setStatus('Buffering...');
-      } else if (!this.back && ahead > Math.max(S.keepSec || 0, buf) + 8) {
+        if (auto) this.autoStall();
+      } else if (!this.back && ahead > (auto ? Math.max(S.keepSec || 0, AUTO.fill + 4) : Math.max(S.keepSec || 0, buf) + 8)) {
         var b = v.buffered;
         if (b.length) v.currentTime = Math.max(b.start(b.length - 1), b.end(b.length - 1) - Math.max(buf, 1)); // drifted behind live: catch up
       } else if (this.hasPlayed && now - this.lastTime > 12000 && !v.paused) {
@@ -704,6 +928,7 @@
         return;
       }
       if ((this.retry || this.mediaErrors) && now - this.playingSince > 20000) { this.retry = 0; this.mediaErrors = 0; }
+      if (auto && this.phase === 'playing') this.autoTick(now, ahead);
     } else if (this.phase === 'rebuffer') {
       var need2 = Math.min(Math.max(buf, 1), buf > 15 ? 15 : 3);
       var w2 = now - this.phaseAt;
@@ -1138,7 +1363,11 @@
 
   // The controls act on the screen the overlay sits on (a first tap puts them on a screen without selecting it).
   function curTile() { return tiles[ovl.shown && ovl.idx != null && tiles[ovl.idx] ? ovl.idx : S.sel]; }
-  function qualityLabel(c) { return !c ? '' : ({ sd: 'SD', full: 'FULL', '480': '480p' }[c.q || ''] || 'AUTO'); }
+  function qualityLabel(c, t) {
+    if (!c) return '';
+    if (c.q === 'auto' || (!c.q && S.autoQ && !c.vod)) return 'AUTO' + (t && t.au ? ' ' + ({ sd: 'SD', full: 'FULL', '480': '480p' }[t.au.q] || '') : '');
+    return { sd: 'SD', full: 'FULL', '480': '480p' }[c.q || ''] || 'STD';
+  }
   function fmtClockMs(ms) { try { return new Date(ms).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }); } catch (e) { return ''; } }
   function fmtDur(s) {
     s = Math.max(0, Math.round(s));
@@ -1328,11 +1557,11 @@
     if (key === 'quality') {
       if (c.vod) return;
       subOpen('quality', function (box) {
-        [['', 'Auto (small tiles use SD)'], ['sd', 'SD when available'], ['full', 'As chosen (full quality)'], ['480', '480p transcode (server GPU)']].forEach(function (q) {
+        [['auto', 'Auto (adaptive: starts low, steps up and down)'], ['', 'Standard (small tiles use SD)'], ['sd', 'SD when available'], ['full', 'As chosen (full quality)'], ['480', '480p transcode (server GPU)']].forEach(function (q) {
           box.appendChild(subItem(q[1], function () {
             if (q[0]) c.q = q[0]; else delete c.q;
             saveSoon();
-            if (c.q === '480' || t.txUsed) t.start(); else t.applyQuality();
+            if (c.q === '480' || t.txUsed || c.q === 'auto' || t.au) t.start(); else t.applyQuality();
             sharedSync();
             subClose();
             ovlSync();
@@ -1521,7 +1750,7 @@
     oo.expand.btn.classList.toggle('on', zoom >= 0);
     oo.expand.btn.title = zoom >= 0 ? 'Back to the grid' : 'Expand';
     oo.quality.btn.disabled = !c || !!(c && c.vod);
-    setIcon(oo.quality.btn, 'tv', qualityLabel(c));
+    setIcon(oo.quality.btn, 'tv', qualityLabel(c, t));
     oo.reload.btn.disabled = !c;
     var fav = !!(c && !c.vod && S.favs[favKey(c)]);
     oo.fav.wrap.hidden = !admin;
@@ -2954,7 +3183,7 @@
     var last = r.snaps[r.snaps.length - 1];
     if (last) {
       L.push('', 'Screens:');
-      last.screens.forEach(function (s) { L.push('  #' + s.slot + ' ' + s.name + ' ' + s.res + ' ' + s.via + (s.tx ? ' 480p' : '') + (s.sd ? ' SD' : '') + ': buffer ' + s.ahead + ' s (min ' + s.minAhead + '), stalls ' + s.stalls + ' (' + (s.stallMs / 1000).toFixed(1) + ' s, longest ' + (s.longest / 1000).toFixed(1) + ' s), dropped ' + s.dropped + '/' + s.frames + ', in ' + s.kbpsIn + ' kbit/s, startup ' + (s.startupMs / 1000).toFixed(1) + ' s, restarts ' + s.restarts); });
+      last.screens.forEach(function (s) { L.push('  #' + s.slot + ' ' + s.name + ' ' + s.res + ' ' + s.via + (s.tx ? ' 480p' : '') + (s.sd ? ' SD' : '') + (s.auto ? ' AUTO-' + s.auto : '') + ': buffer ' + s.ahead + ' s (min ' + s.minAhead + '), stalls ' + s.stalls + ' (' + (s.stallMs / 1000).toFixed(1) + ' s, longest ' + (s.longest / 1000).toFixed(1) + ' s), dropped ' + s.dropped + '/' + s.frames + ', in ' + s.kbpsIn + ' kbit/s, startup ' + (s.startupMs / 1000).toFixed(1) + ' s, restarts ' + s.restarts); (s.switches || []).forEach(function (w) { L.push('      switch ' + w); }); });
       L.push('', 'Channels on the server:');
       last.streams.forEach(function (s) { L.push('  ' + s.name + ' (' + s.provider + '): ' + s.state + ', ' + s.kbps + ' kbit/s, connect ' + s.connectMs + ' ms, first data ' + s.firstByteMs + ' ms, longest silence ' + s.maxGapMs + ' ms, reconnects ' + s.reconnects + ', viewers ' + s.viewerCount + (s.errors.length ? ', last errors: ' + s.errors.map(function (e) { return e.msg + ' (' + e.ago + ' s ago)'; }).join('; ') : '')); });
       L.push('', 'Server: ' + JSON.stringify(last.server));
@@ -2978,7 +3207,7 @@
       t.appendChild(h('h3', { text: 'This browser: screens' }));
       var tb = h('table', { class: 'dgt' }, h('tr', null, ['#', 'Channel', 'State', 'Buffer (min 60 s)', 'Stalls', 'Dropped', 'In kbit/s', 'Startup'].map(function (x) { return h('th', { text: x }); })));
       snap.screens.forEach(function (s) {
-        tb.appendChild(h('tr', null, cell(String(s.slot)), cell(s.name + ' ' + s.res + (s.tx ? ' 480p' : s.sd ? ' SD' : '')), cell(s.phase + ' ' + s.via), cell(s.ahead + ' s (' + (s.minAhead === null ? '-' : s.minAhead) + ')', s.minAhead !== null && s.minAhead < 0.8 ? 'bad' : ''), cell(s.stalls + (s.stalls ? ' / ' + sec(s.stallMs) + ', max ' + sec(s.longest) : ''), s.stalls ? 'bad' : ''), cell(s.dropped + '/' + s.frames), cell(String(s.kbpsIn)), cell(sec(s.startupMs))));
+        tb.appendChild(h('tr', null, cell(String(s.slot)), cell(s.name + ' ' + s.res + (s.tx ? ' 480p' : s.sd ? ' SD' : '') + (s.auto ? ' [auto]' : '')), cell(s.phase + ' ' + s.via), cell(s.ahead + ' s (' + (s.minAhead === null ? '-' : s.minAhead) + ')', s.minAhead !== null && s.minAhead < 0.8 ? 'bad' : ''), cell(s.stalls + (s.stalls ? ' / ' + sec(s.stallMs) + ', max ' + sec(s.longest) : ''), s.stalls ? 'bad' : ''), cell(s.dropped + '/' + s.frames), cell(String(s.kbpsIn)), cell(sec(s.startupMs))));
       });
       if (!snap.screens.length) tb.appendChild(h('tr', null, h('td', { colspan: 8, text: 'No live channel is playing on this page.' })));
       t.appendChild(tb);
@@ -3124,6 +3353,7 @@
         field('Stream delivery (applies when a stream reconnects)', trSel),
         check('Use another provider when the chosen one is full', 'failover', function () { tiles.forEach(function (t) { if (t.cfg && t.retry) t.start(); }); }),
         check('Small tiles prefer the SD version of a channel (less to download and decode)', 'smallSd', function () { tiles.forEach(function (t) { t.applyQuality(); }); }),
+        check('Auto quality for every channel that has no quality chosen (starts low, steps up as the buffer grows, steps down when it drains)', 'autoQ', function () { tiles.forEach(function (t) { if (t.cfg && !t.cfg.vod && !t.cfg.q) t.start(); }); }),
         check('Use web workers (lighter on the page; turn off if video will not start)', 'workers'),
         localSupported() && isAdmin() ? check('Local mode: play the selected screen directly from the provider (not through the server)', 'local', function () { tiles.forEach(function (t) { t.localFailed = false; }); localRefresh(); }) : null,
         localSupported() && isAdmin() ? h('div', { class: 'note', text: 'Local mode skips the server for the selected screen only: no rewind, recording or cast for it, and it uses its own provider connection. It falls back to the server by itself if the direct stream fails.' }) : null,

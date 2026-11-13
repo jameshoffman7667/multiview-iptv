@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.14.0 - 2026-11-12
+Auto quality: start low, step up as the buffer grows, step down when it drains.
+- **Quality > Auto (adaptive)** (P-29), per channel, or Settings > *Auto quality for every channel that has no quality chosen* (off by default). The old choice is now called *Standard* (overlay label `STD`; Auto shows `AUTO SD`, `AUTO FULL` or `AUTO 480p`).
+- **Start low:** the channel opens on its SD version (or as chosen when it has none) with a 3 s start cushion instead of the long "Start playing after" wait.
+- **Step up** one level when the buffer stays at 10 s or more for 20 s with no stall; while it waits the video plays at 0.95x so the cushion can grow. **Step down** one level when the buffer stays under 5 s and is not growing for 10 s, or on a stall; then no step up for 60 s.
+- Steps: 480p server transcode (only with a GPU encoder; used only when the buffer keeps draining), SD version, as chosen. Small tiles never go above SD while *Small tiles prefer SD* is on.
+- **No gap:** the new stream opens on a second video and replaces the picture once it has 2 s buffered. It briefly uses a second provider connection; if the provider is full, the stream errors or it is slow (15 s), the switch is skipped and the current stream keeps playing.
+- Not used for movies/episodes, while rewound, in the shared screen or in published one-stream views. Diagnostics show each screen's step and its last switches with the reason.
+- Server: `GET /api/quality-options` (login; viewers only for channels shared with them). No new settings or environment variables on the server.
+- Tests: new `test/autoquality.test.js` (endpoint) and UI tests (start step and cushion, Settings default, step up with no gap, 20 s hold, slow-play cushion build, step down only when not growing, stall, skipped switch, restart closes a half-built switch).
+
+**Upgrading from 0.13.0:** pull the new image; no compose, `.env` or data change. The browser setting `autoQ` is new and defaults to off.
+
 ## 0.13.0 - 2026-11-08
 Diagnostics to find where buffering comes from.
 - **Settings > Diagnostics** (P-28, admins only): a window with live tables. *This browser:* per screen the buffer now and its minimum over the last minute, stalls (count, total and longest), dropped frames, incoming rate and startup time. *On the server:* per channel the rate from the provider, connect and first-data times, the longest silence from the provider in the last minute, reconnects and the last errors, viewers and each viewer's queue peak and how often it backed up. Plus the server's CPU, load, memory, event-loop delay and ffmpeg count.

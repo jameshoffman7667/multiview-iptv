@@ -562,6 +562,18 @@ function createApp(options = {}) {
       streamErrors.delete(k);
       return sendJson(req, res, 200, v && Date.now() - v.at < 30000 ? { error: v.error, message: v.message } : {});
     }
+    if (req.method === 'GET' && p === '/api/quality-options') {
+      // which quality steps Auto can use for a channel: an SD version at a provider, and the GPU 480p transcode
+      if (!me) throw httpError(401, 'Login required', 'login_required');
+      const pid = url.searchParams.get('p') || '';
+      const sid = url.searchParams.get('sid') || '';
+      const prov = config.get(pid);
+      if (!prov || !prov.enabled) throw httpError(404, 'Unknown or disabled provider');
+      if (me.role !== 'admin' && !views.allows(me, prov.id, sid)) throw httpError(403, 'Not allowed');
+      let tx = false;
+      try { compose.encoderFor('tile'); tx = true; } catch (e) { tx = false; }
+      return sendJson(req, res, 200, { sd: !!lists.lowerVariant(prov.id, sid), tx });
+    }
     if (req.method === 'GET' && p === '/api/epg') {
       if (!me) throw httpError(401, 'Login required', 'login_required');
       const prov = config.get(url.searchParams.get('provider') || '');
