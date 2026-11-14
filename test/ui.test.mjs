@@ -97,12 +97,13 @@ describe('browser', () => {
   });
 
   const vis2 = (page, sel) => page.evaluate((q) => { const e = document.querySelector(q); return !!e && !e.hidden && e.offsetParent !== null; }, sel);
-  async function openPage({ fake = true, state, viewport = { width: 1920, height: 1080 } } = {}) {
+  async function openPage({ fake = true, init, state, viewport = { width: 1920, height: 1080 } } = {}) {
     const ctx = await browser.newContext({ viewport, serviceWorkers: 'block' });
     const errors = [];
     if (fake) {
       await ctx.route('**/vendor/mpegts.js', (route) => route.fulfill({ contentType: 'text/javascript', body: FAKE_MPEGTS }));
       await ctx.addInitScript(MEDIA_STUBS);
+      if (init) await ctx.addInitScript(init);
     }
     if (state) await ctx.addInitScript(`if (!localStorage.getItem('mv.state.v1')) localStorage.setItem('mv.state.v1', ${JSON.stringify(JSON.stringify(state))});`);
     const page = await ctx.newPage();
@@ -607,6 +608,55 @@ describe('browser', () => {
     assert.equal(await page.evaluate(() => window.__mv.modals), 0);
     assert.deepEqual(errors, []);
     await ctx.close();
+  });
+
+  test('downloads: a button on every movie and episode, one for the season, none for Live; Settings holds the device limit', async () => {
+    const { ctx, page, errors } = await openPage();
+    await page.evaluate(() => window.__mv.setLayout('1'));
+    await tapPicker(page, 0);
+    await page.waitForSelector('.modal .tabs');
+    assert.equal(await page.locator('.chlist .dlb').count(), 0, 'Live channels have no download button');
+    await page.click('.tab:has-text("Movies")');
+    await page.waitForFunction(() => document.querySelectorAll('.chlist .pick').length === 2);
+    assert.equal(await page.locator('.chlist .dlb').count(), 2, 'one per movie');
+    const [dl] = await Promise.all([page.waitForEvent('download'), page.click('.chlist .dlb >> nth=0')]);
+    assert.match(dl.suggestedFilename(), /Big Movie|501/);
+    await dl.cancel().catch(() => {});
+    await page.keyboard.press('Escape');
+    await page.keyboard.press('c');
+    await page.waitForSelector('.modal .tabs');
+    await page.click('.tab:has-text("Series")');
+    await page.waitForFunction(() => document.querySelectorAll('.chlist .pick').length === 1);
+    assert.equal(await page.locator('.chlist .dlb').count(), 0, 'a series is opened first; its episodes carry the buttons');
+    await page.click('.chlist .pick');
+    await page.waitForFunction(() => document.querySelectorAll('.modal-back:last-of-type .pick').length === 2);
+    assert.equal(await page.locator('.modal-back:last-of-type .dlb').count(), 2, 'one per episode');
+    assert.match(await page.textContent('#dl-season'), /Download this season \(2 episodes\)/);
+    await page.selectOption('.modal-back:last-of-type select', '1');
+    await page.waitForFunction(() => document.querySelectorAll('.modal-back:last-of-type .pick').length === 1);
+    assert.match(await page.textContent('#dl-season'), /\(1 episode\)/, 'the season button follows the season being viewed');
+    assert.deepEqual(errors.filter((e) => !/ERR_ABORTED|aborted|download/i.test(e)), []);
+    await ctx.close();
+  });
+
+  test('downloads: Settings has the per-device limit (default 3), and the Android TV app shows no download buttons', async () => {
+    let r = await openPage();
+    await r.page.keyboard.press('Escape');
+    await r.page.evaluate(() => document.getElementById('sm-settings').click());
+    await r.page.waitForSelector('#set-dlmax');
+    assert.equal(await r.page.inputValue('#set-dlmax'), '3');
+    await r.page.selectOption('#set-dlmax', '5');
+    assert.equal(await r.page.evaluate(() => window.__mv.S.dlMax), 5);
+    assert.deepEqual(r.errors, []);
+    await r.ctx.close();
+    r = await openPage({ init: `window.MVApp = { canPip: function () { return false; }, setAutoPip: function () {}, changeServer: function () {} };` });
+    await r.page.evaluate(() => window.__mv.setLayout('1'));
+    await tapPicker(r.page, 0);
+    await r.page.waitForSelector('.modal .tabs');
+    await r.page.click('.tab:has-text("Movies")');
+    await r.page.waitForFunction(() => document.querySelectorAll('.chlist .pick').length === 2);
+    assert.equal(await r.page.locator('.dlb').count(), 0);
+    await r.ctx.close();
   });
 
   test('long buffer: settings offer minutes, the stream asks for that much, a memory note appears', async () => {

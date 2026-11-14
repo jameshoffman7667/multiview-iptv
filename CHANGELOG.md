@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.16.0 - 2026-11-14
+Download buttons for movies, episodes and whole seasons (P-31).
+- **Buttons:** in the Change channel popup every movie (Movies tab) and every episode has a download button; the episode list has "Download this season (N episodes)" for the season you are viewing. File names look like `Show - S01E03 - Title`. Live and Guide items have none. The Android TV app hides them (native TV downloads are logged as P-32).
+- **Queue, not a ZIP:** a season is a queue of normal browser downloads. A bar at the bottom shows progress, failures and Cancel. Settings > "Max concurrent downloads" (this device, 1 to 6, default 3).
+- **Always one connection left for watching:** a download that would take the provider's last free connection waits in the queue (a 1-connection provider can only be used when idle).
+- **Admin controls:** Settings has a server-wide cap of running downloads (default 0 = off), and Settings > Users has a "Can download" switch per user (everyone can by default).
+- **How it knows when a file ends:** each download first asks the server for a one-time ticket (`/api/dl/ticket`), then the page polls `/api/dl/state`.
+- Tests: new `test/downloads.test.js` and two browser tests.
+
+**Upgrading from 0.15.0:** pulling the image is enough. No compose or `.env` change. `/data/downloads.json` appears when an admin first saves the cap; the per-user switch is stored in `users.json`.
+
 ## 0.15.0 - 2026-11-13
 The Android TV app is published for your F-Droid repo.
 - **APK name:** each release now has `multiview-iptv-<version>.apk` (what the F-Droid updater downloads). `iptv-multiview.apk` stays as the same file under the old name for the README's Downloader link.

@@ -63,7 +63,7 @@
   applyTheme();
   var ME = null; // set after /api/me: { admin, user, open, authRequired }
   function loadState() {
-    var d = { layout: '3x3', tiles: [], sel: 0, muted: false, bufSec: 4, keepSec: 0, transport: 'auto', fit: 'contain', failover: true, smallSd: true, autoQ: false, vol: 1, shared: '', theme: 'system', local: false, fpop: true, fmin: 3, fdelay: 0, fopp: true, fsize: 'auto', fage: 60, ftick: true, fpos: 'below', fspeed: 'normal', workers: true, stats: false, labels: false, epgOn: true, favs: {}, pk: {} };
+    var d = { layout: '3x3', tiles: [], sel: 0, muted: false, bufSec: 4, keepSec: 0, transport: 'auto', fit: 'contain', failover: true, smallSd: true, autoQ: false, dlMax: 3, vol: 1, shared: '', theme: 'system', local: false, fpop: true, fmin: 3, fdelay: 0, fopp: true, fsize: 'auto', fage: 60, ftick: true, fpos: 'below', fspeed: 'normal', workers: true, stats: false, labels: false, epgOn: true, favs: {}, pk: {} };
     var j = {};
     try { j = JSON.parse(localStorage.getItem(LS_KEY)) || {}; } catch (e) { j = {}; }
     Object.keys(d).forEach(function (k) { if (j[k] !== undefined && typeof j[k] === typeof d[k]) d[k] = j[k]; });
@@ -84,6 +84,7 @@
     d.sel = clamp(Math.floor(d.sel) || 0, 0, SLOTS - 1);
     d.bufSec = clamp(Number(d.bufSec) || 0, 0, 300);
     d.keepSec = clamp(Number(d.keepSec) || 0, 0, 900);
+    d.dlMax = clamp(Math.floor(Number(d.dlMax)) || 3, 1, 6);
     return d;
   }
   // a tile's saved settings; vod/ext mark a movie or episode (played from the provider's file, not as live TV)
@@ -1615,12 +1616,82 @@
       banner('Downloading "' + (c.name || c.sid) + '" to the server (see Recordings & Downloads)', 6000);
     }, function (e) { banner('Could not download: ' + e.message, 7000); });
   }
+  // ---- downloads to this device (P-31): a queue that keeps up to "Max concurrent downloads" running. A browser cannot say when a
+  // download ends, so each one first gets a ticket from the server, which also counts running downloads, applies the server-wide
+  // cap and keeps one provider connection free for watching, and reports which of this user's downloads are still running.
+  var DL = { queue: [], run: {}, total: 0, done: 0, failed: [], waitMsg: '', pumping: false, timer: null, waitUntil: 0 };
+  function dlOk() { return !window.MVApp && !(ME && ME.download === false); }
+  function dlItem(c) { return { p: c.p, sid: String(c.sid), ext: c.ext || 'mp4', name: c.name || String(c.sid) }; }
+  function dlEnqueue(items) {
+    if (!dlOk() || !items.length) return;
+    items.forEach(function (it) { DL.queue.push(it); DL.total++; });
+    dlBar();
+    dlPump();
+  }
+  function dlPump() {
+    var max = clamp(Math.floor(Number(S.dlMax)) || 3, 1, 6);
+    if (DL.pumping || !DL.queue.length || Object.keys(DL.run).length >= max || Date.now() < DL.waitUntil) { dlSchedule(); dlBar(); return; }
+    DL.pumping = true;
+    var it = DL.queue.shift();
+    api('/api/dl/ticket', { method: 'POST', body: it }).then(function (r) {
+      if (r.wait) { DL.queue.unshift(it); DL.waitUntil = Date.now() + 6000; DL.waitMsg = r.reason; return; }
+      DL.waitMsg = '';
+      DL.run[r.job] = it;
+      var a = h('a', { href: r.url, download: '' });
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+    }).catch(function (e) { DL.failed.push(it.name + ': ' + e.message); }).then(function () { DL.pumping = false; dlBar(); dlPump(); });
+  }
+  function dlSchedule() {
+    if (DL.timer || (!DL.queue.length && !Object.keys(DL.run).length)) return;
+    DL.timer = setTimeout(dlTick, 2500);
+  }
+  function dlTick() {
+    DL.timer = null;
+    var ids = Object.keys(DL.run);
+    var next = ids.length ? api('/api/dl/state').then(function (r) {
+      ids.forEach(function (id) {
+        var st = r.jobs && r.jobs[id];
+        if (st === 'ticket' || st === 'active') return;
+        var it = DL.run[id];
+        delete DL.run[id];
+        if (st === 'done') DL.done++;
+        else DL.failed.push(it.name + (st === 'failed' ? ': the download did not finish' : ': the browser did not start it (allow multiple downloads for this site)'));
+      });
+    }).catch(function () { /* try again at the next tick */ }) : Promise.resolve();
+    next.then(function () { dlBar(); dlPump(); });
+  }
+  function dlReset() { DL.queue = []; DL.total = 0; DL.done = 0; DL.failed = []; DL.waitMsg = ''; dlBar(); }
+  function dlBar() {
+    var box = $('#dlbar');
+    if (!DL.total && !DL.failed.length) { if (box) box.remove(); return; }
+    if (!box) { box = h('div', { id: 'dlbar', class: 'dlbar', role: 'status' }); document.body.appendChild(box); }
+    var running = Object.keys(DL.run).length;
+    var waiting = DL.queue.length;
+    var idle = !running && !waiting && !DL.pumping;
+    box.textContent = '';
+    box.appendChild(h('span', { text: idle ? 'Downloads finished: ' + DL.done + ' of ' + DL.total + (DL.failed.length ? ', ' + DL.failed.length + ' failed' : '')
+      : 'Downloading: ' + DL.done + ' of ' + DL.total + ' done, ' + running + ' running' + (waiting ? ', ' + waiting + ' waiting' + (DL.waitMsg ? ' (' + DL.waitMsg + ')' : '') : '') }));
+    if (DL.failed.length) box.appendChild(h('div', { class: 'dlfail', text: DL.failed.slice(0, 4).join('; ') + (DL.failed.length > 4 ? '; and ' + (DL.failed.length - 4) + ' more' : '') }));
+    box.appendChild(h('button', { class: 'btn', type: 'button', text: idle ? 'Close' : 'Cancel waiting', onclick: function () {
+      if (idle) { dlReset(); return; }
+      DL.total -= DL.queue.length;
+      DL.queue = [];
+      dlBar();
+    } }));
+  }
+  function dlBtn(c) {
+    if (!dlOk()) return null;
+    return h('button', { class: 'dlb', type: 'button', title: 'Download to this device', 'aria-label': 'Download ' + (c.name || ''), text: '⬇', onclick: function (ev) {
+      ev.stopPropagation();
+      dlEnqueue([dlItem(c)]);
+      banner('Added to downloads: ' + (c.name || ''), 3000);
+    } });
+  }
   function downloadToDevice(c) {
-    var a = h('a', { href: '/vod/' + enc(c.p) + '/' + enc(c.sid + '.' + (c.ext || 'mp4')) + '?dl=1&name=' + enc(c.name || c.sid), download: '' });
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    banner('Download to this device started - see your browser downloads', 5000);
+    dlEnqueue([dlItem(c)]);
+    banner('Download added (see the bar at the bottom of the page)', 5000);
   }
 
   // ---- live rewind and VOD position
@@ -2711,7 +2782,7 @@
           provs.length > 1 && !pk.prov ? h('span', { class: 'chip', text: provName(r.p) }) : null);
         var row;
         if (isVod()) {
-          row = h('div', { class: 'ch' }, pick);
+          row = h('div', { class: 'ch' }, pick, pk.tab === 'movie' ? dlBtn({ p: r.p, sid: r.sid, ext: r.ext, name: r.name }) : null);
         } else {
           var fav = !!S.favs[favKey(r)];
           var star = h('button', { class: 'star' + (fav ? ' on' : ''), type: 'button', title: 'Favorite', text: fav ? '★' : '☆', onclick: function () { toggleFav(r); var on = !!S.favs[favKey(r)]; star.classList.toggle('on', on); star.textContent = on ? '★' : '☆'; } });
@@ -2994,16 +3065,26 @@
     var seasonSel = h('select', { 'aria-label': 'Season' });
     var list = h('div', { class: 'chlist' });
     var data = null;
+    function pad2(n) { n = String(n == null ? '' : n); return n.length < 2 ? ('0' + n).slice(-2) : n; }
+    // what an episode is called when it is downloaded: "Show - S01E03 - Title"
+    function epFile(s, ep) { return { p: series.p, sid: 'series:' + ep.id, ext: ep.ext, name: series.name + ' - S' + pad2(s.season) + 'E' + pad2(ep.num || '?') + ' - ' + ep.title }; }
+    var seasonDl = dlOk() ? h('button', { class: 'btn', type: 'button', id: 'dl-season', text: 'Download this season', onclick: function () {
+      var s = data && data.seasons[Number(seasonSel.value)];
+      if (!s || !s.episodes.length) return;
+      dlEnqueue(s.episodes.map(function (ep) { return dlItem(epFile(s, ep)); }));
+      banner('Added ' + s.episodes.length + ' episode' + (s.episodes.length === 1 ? '' : 's') + ' of season ' + s.season + ' to the downloads', 4000);
+    } }) : null;
     var m = openModal({
       title: series.name,
       wide: true,
-      body: [h('div', { class: 'filters' }, seasonSel), info, list],
+      body: [h('div', { class: 'filters' }, seasonSel, seasonDl), info, list],
       foot: h('button', { class: 'btn', type: 'button', text: 'Back', onclick: function () { m.close(); } })
     });
     function showSeason() {
       list.textContent = '';
       var s = data.seasons[Number(seasonSel.value)];
       if (!s) return;
+      if (seasonDl) seasonDl.textContent = 'Download this season (' + s.episodes.length + ' episode' + (s.episodes.length === 1 ? '' : 's') + ')';
       s.episodes.forEach(function (ep) {
         var label = 'E' + (ep.num || '?') + '  ' + ep.title;
         list.appendChild(h('div', { class: 'ch' }, h('button', { class: 'pick', type: 'button', onclick: function () {
@@ -3011,7 +3092,7 @@
           done();
           assign(slot, { p: series.p, sid: 'series:' + ep.id, name: series.name + ' S' + s.season + 'E' + (ep.num || '?') + ' ' + ep.title, icon: series.icon || '', vod: 'series', ext: ep.ext });
           select(slot);
-        } }, h('span', { class: 'nm', text: label }), ep.minutes ? h('span', { class: 'chip', text: ep.minutes + ' min' }) : null)));
+        } }, h('span', { class: 'nm', text: label }), ep.minutes ? h('span', { class: 'chip', text: ep.minutes + ' min' }) : null), dlBtn(epFile(s, ep))));
       });
       var first = list.querySelector('.pick');
       if (first) first.focus();
@@ -3029,6 +3110,22 @@
   // ---------------------------------------------------------------- settings
   // Settings block for the Fantasy Manager score pop-ups (admins only)
   // Settings > Fantasy Manager: the admin's own address and read-only token, kept on the server (the token is never shown again)
+  // Settings (admins): the server-wide cap on running downloads, all users together (0 = no cap)
+  function dlCapBlock() {
+    var wrap = h('div', { class: 'field', id: 'dlcap' });
+    var inp = h('input', { type: 'number', min: '0', max: '50', id: 'dlcap-n', value: '0' });
+    var msg = h('div', { class: 'note', text: 'Loading...' });
+    api('/api/dl/settings').then(function (r) {
+      inp.value = String(r.cap);
+      msg.textContent = r.running + ' download' + (r.running === 1 ? '' : 's') + ' running now. 0 = no cap. Downloads always leave one provider connection free for watching.';
+    }).catch(function (e) { msg.textContent = e.message; });
+    wrap.appendChild(h('label', { text: 'Downloads at once on the server, all users (0 = no cap)' }));
+    wrap.appendChild(h('div', { class: 'row' }, inp, h('button', { class: 'btn', type: 'button', id: 'dlcap-save', text: 'Save', onclick: function () {
+      api('/api/dl/settings', { method: 'PUT', body: { cap: Number(inp.value) || 0 } }).then(function (r) { inp.value = String(r.cap); banner('Saved: ' + (r.cap ? r.cap + ' downloads at once' : 'no cap'), 3000); }, function (e) { banner(e.message, 5000); });
+    } })));
+    wrap.appendChild(msg);
+    return wrap;
+  }
   function fantasyBlock() {
     var wrap = h('div', { id: 'fmwrap' });
     fmFill(wrap);
@@ -3274,6 +3371,10 @@
       return h('label', { class: 'check' }, cb, h('span', { text: label }));
     }
     function secLabel(n) { return n === 0 ? 'Off (lowest delay, may stutter)' : n < 60 ? n + ' seconds' : n % 60 === 0 ? (n / 60) + ' minute' + (n === 60 ? '' : 's') : n + ' seconds'; }
+    var dlSel = h('select', { id: 'set-dlmax' });
+    [1, 2, 3, 4, 5, 6].forEach(function (n) { dlSel.appendChild(h('option', { value: String(n), text: n + (n === 3 ? ' (default)' : '') })); });
+    dlSel.value = String(S.dlMax);
+    dlSel.addEventListener('change', function () { S.dlMax = Number(dlSel.value); saveSoon(); dlPump(); });
     var bufSel = h('select');
     [0, 2, 4, 8, 15, 30, 60, 120, 300].forEach(function (n) { bufSel.appendChild(h('option', { value: String(n), text: secLabel(n) + (n === 4 ? ' (default)' : '') })); });
     bufSel.value = String(S.bufSec);
@@ -3354,6 +3455,8 @@
         check('Use another provider when the chosen one is full', 'failover', function () { tiles.forEach(function (t) { if (t.cfg && t.retry) t.start(); }); }),
         check('Small tiles prefer the SD version of a channel (less to download and decode)', 'smallSd', function () { tiles.forEach(function (t) { t.applyQuality(); }); }),
         check('Auto quality for every channel that has no quality chosen (starts low, steps up as the buffer grows, steps down when it drains)', 'autoQ', function () { tiles.forEach(function (t) { if (t.cfg && !t.cfg.vod && !t.cfg.q) t.start(); }); }),
+        dlOk() ? field('Max concurrent downloads (this device; the rest wait in the queue)', dlSel) : null,
+        isAdmin() ? dlCapBlock() : null,
         check('Use web workers (lighter on the page; turn off if video will not start)', 'workers'),
         localSupported() && isAdmin() ? check('Local mode: play the selected screen directly from the provider (not through the server)', 'local', function () { tiles.forEach(function (t) { t.localFailed = false; }); localRefresh(); }) : null,
         localSupported() && isAdmin() ? h('div', { class: 'note', text: 'Local mode skips the server for the selected screen only: no rewind, recording or cast for it, and it uses its own provider connection. It falls back to the server by itself if the direct stream fails.' }) : null,
@@ -4173,8 +4276,10 @@
         pass: h('input', { type: 'password', value: '', placeholder: u ? '(unchanged)' : '', autocomplete: 'new-password' }),
         role: h('select', null, h('option', { value: 'viewer', text: 'Viewer (watches published multiviews)' }), h('option', { value: 'admin', text: 'Admin (full control)' })),
         max: h('input', { type: 'number', min: '0', max: '50', value: String(u ? u.maxStreams : 9) }),
-        off: h('input', { type: 'checkbox' })
+        off: h('input', { type: 'checkbox' }),
+        dl: h('input', { type: 'checkbox' })
       };
+      f.dl.checked = !(u && u.download === false);
       f.role.value = u ? u.role : 'viewer';
       f.off.checked = !!(u && u.disabled);
       if (u) f.name.disabled = true;
@@ -4185,6 +4290,7 @@
         h('div', { class: 'field' }, h('label', { text: u ? 'New password (leave blank to keep)' : 'Password (at least 6 characters)' }), f.pass),
         h('div', { class: 'field' }, h('label', { text: 'Role' }), f.role),
         h('div', { class: 'field' }, h('label', { text: 'Max streams at once (0 = no limit)' }), f.max),
+        h('label', { class: 'check' }, f.dl, h('span', { text: 'Can download movies and episodes to a device' })),
         u ? h('label', { class: 'check' }, f.off, h('span', { text: 'Disabled (cannot log in)' })) : null,
         msg
       ], [
@@ -4196,7 +4302,7 @@
         } }) : null,
         h('button', { class: 'btn', type: 'button', text: 'Back', onclick: list }),
         h('button', { class: 'btn primary', type: 'button', text: 'Save', onclick: function () {
-          var body = { role: f.role.value, maxStreams: Number(f.max.value) || 0 };
+          var body = { role: f.role.value, maxStreams: Number(f.max.value) || 0, download: f.dl.checked };
           if (f.pass.value) body.password = f.pass.value;
           if (u) {
             body.disabled = f.off.checked;

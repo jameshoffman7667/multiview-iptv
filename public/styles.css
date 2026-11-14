@@ -152,6 +152,10 @@ body.stats .tile .stats { display: block; }
 .ch .chip { flex: none; font-size: 11px; padding: 1px 7px; border-radius: 9px; background: var(--chip); color: var(--dim); }
 .ch .star { flex: none; width: 40px; border: 1px solid transparent; border-radius: 8px; background: var(--panel2); font-size: 18px; color: var(--star); }
 .ch .star.on { color: var(--warn); }
+.ch .dlb { flex: none; width: 40px; border: 1px solid transparent; border-radius: 8px; background: var(--panel2); font-size: 16px; color: var(--text); cursor: pointer; }
+.ch .dlb:hover, .ch .dlb:focus { border-color: var(--accent); }
+.dlbar { position: fixed; left: 50%; transform: translateX(-50%); bottom: 12px; z-index: 40; max-width: 92%; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 8px 12px; border-radius: 10px; background: var(--panel); border: 1px solid var(--line, #444); box-shadow: 0 4px 16px rgba(0,0,0,.4); font-size: 13px; }
+.dlbar .dlfail { flex-basis: 100%; color: var(--warn); font-size: 12px; }
 .more-row { padding: 10px; text-align: center; }
 
 /* banner + hint */

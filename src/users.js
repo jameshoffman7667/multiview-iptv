@@ -45,7 +45,7 @@ class Users {
   }
 
   view(u) {
-    return { username: u.username, role: u.role, maxStreams: u.maxStreams, disabled: !!u.disabled };
+    return { username: u.username, role: u.role, maxStreams: u.maxStreams, disabled: !!u.disabled, download: u.download !== false };
   }
 
   list() { return this.users.map((u) => this.view(u)); }
@@ -68,11 +68,12 @@ class Users {
     return Math.min(n, 50);
   }
 
-  create({ username, password, role, maxStreams }) {
+  create({ username, password, role, maxStreams, download }) {
     const name = this.validName(username);
     if (this.find(name)) throw httpError(409, 'That username already exists');
     const r = role === 'admin' ? 'admin' : 'viewer';
     const u = { username: name, role: r, ...hashPassword(this.validPass(password)), maxStreams: this.maxStreams(maxStreams, r), disabled: false, created: Date.now() };
+    if (download === false) u.download = false;
     this.users.push(u);
     this.save();
     return u;
@@ -86,6 +87,7 @@ class Users {
     if (patch.role === 'admin' || patch.role === 'viewer') next.role = patch.role;
     if (patch.maxStreams !== undefined) next.maxStreams = this.maxStreams(patch.maxStreams, next.role);
     if (patch.disabled !== undefined) next.disabled = !!patch.disabled;
+    if (patch.download !== undefined) next.download = !!patch.download; // false: no downloads to a device (admins always can)
     const wasAdmin = u.role === 'admin' && !u.disabled;
     if (wasAdmin && !(next.role === 'admin' && !next.disabled) && !this.users.some((x) => x !== u && x.role === 'admin' && !x.disabled)) {
       throw httpError(400, 'There must be at least one active admin');

@@ -14,6 +14,7 @@ const { Relay, Client } = require('./relay');
 const { emptyDir } = require('./rewind');
 const { Compose, cleanSpec } = require('./compose');
 const { Recordings } = require('./recordings');
+const { Downloads } = require('./downloads');
 const { Cast } = require('./cast');
 const { FantasyHub } = require('./fantasy-hub');
 const { Health } = require('./health');
@@ -76,6 +77,9 @@ function createApp(options = {}) {
   const compose = new Compose(relay, { ...(options.compose || {}), idleMs: options.composeIdleMs !== undefined ? options.composeIdleMs : Number(env('COMPOSE_IDLE_SECONDS', 8)) * 1000 });
   // Recordings and downloads live in REC_DIR (keep it on a large, slow disk). Kept until deleted.
   const recDir = options.recDir || env('REC_DIR', path.join(dataDir, 'recordings'));
+  const downloads = new Downloads(dataDir);
+  // downloads to a device: on for everyone unless an admin switched it off for that user (admins always can)
+  const canDownload = (me) => !!me && (me.open || me.role === 'admin' || me.download !== false);
   const recordings = new Recordings({ dir: recDir, dataDir, relay, config, lists, epg, tickMs: options.recTickMs || 10000 });
   const cast = new Cast(relay, compose);
   const maxQueue = (options.maxClientQueueMB !== undefined ? options.maxClientQueueMB : Number(env('CLIENT_QUEUE_MB', 8))) * MB;
@@ -315,15 +319,21 @@ function createApp(options = {}) {
     if (me.role !== 'admin' && !views.allows(me, providerId, sid)) throw httpError(403, 'That title is not in a multiview shared with you', 'not_allowed');
     const prov = config.get(providerId);
     if (!prov || !prov.enabled || prov.type === 'local') throw httpError(404, 'Unknown or disabled provider');
+    const isDl = url.searchParams.get('dl') === '1';
+    if (isDl && !canDownload(me)) throw httpError(403, 'Downloads are switched off for your login', 'download_off');
+    const job = isDl ? url.searchParams.get('job') || '' : '';
+    if (job && !downloads.valid(job, me.username || '')) throw httpError(410, 'This download ticket has expired - start the download again', 'ticket_expired');
     const release = relay.acquireVod(prov, sid); // throws a 503 when the provider is full
     const ac = new AbortController();
     const rec = { providerId, res };
     vodResponses.add(rec);
+    if (job) downloads.start(job);
     let mine = null;
     if (me.username) { mine = streamsByUser.get(me.username); if (!mine) { mine = new Set(); streamsByUser.set(me.username, mine); } mine.add(res); }
     res.on('close', () => {
       ac.abort();
       release();
+      if (job) downloads.end(job, res.writableFinished);
       vodResponses.delete(rec);
       if (mine) { mine.delete(res); if (!mine.size) streamsByUser.delete(me.username); }
     });
@@ -392,7 +402,39 @@ function createApp(options = {}) {
         user: me && !me.open ? { username: me.username, role: me.role } : null,
         admin: !!me && me.role === 'admin',
         open: !users.enabled,
+        download: canDownload(me),
       });
+    }
+    if (p === '/api/dl/ticket' && req.method === 'POST') {
+      // permission to start one download of a movie or episode now; answers { ok, url } or { wait, reason }
+      if (!me) throw httpError(401, 'Login required', 'login_required');
+      if (!canDownload(me)) throw httpError(403, 'Downloads are switched off for your login', 'download_off');
+      const body = await readJson(req);
+      const pid = String(body.p || '');
+      const fm = /^(movie|series):([A-Za-z0-9_-]{1,40})$/.exec(String(body.sid || ''));
+      if (!fm) throw httpError(400, 'Only movies and episodes can be downloaded');
+      const ext = String(body.ext || 'mp4').replace(/[^a-z0-9]/gi, '').slice(0, 5) || 'mp4';
+      const prov = config.get(pid);
+      if (!prov || !prov.enabled || prov.type === 'local') throw httpError(404, 'Unknown or disabled provider');
+      if (me.role !== 'admin' && !views.allows(me, pid, String(body.sid))) throw httpError(403, 'That title is not in a multiview shared with you', 'not_allowed');
+      const why = downloads.mustWait(prov, relay.activeCount(prov.id));
+      if (why) return sendJson(req, res, 200, { wait: true, reason: why });
+      const name = String(body.name || body.sid).slice(0, 120);
+      const job = downloads.ticket(me.username || '', prov.id, name);
+      const q = `?dl=1&job=${job}&name=${encodeURIComponent(name)}`;
+      return sendJson(req, res, 200, { ok: true, job, url: `/vod/${encodeURIComponent(pid)}/${encodeURIComponent(`${fm[1]}:${fm[2]}.${ext}`)}${q}` });
+    }
+    if (p === '/api/dl/state' && req.method === 'GET') {
+      if (!me) throw httpError(401, 'Login required', 'login_required');
+      return sendJson(req, res, 200, { jobs: downloads.states(me.username || ''), cap: downloads.cap });
+    }
+    if (p === '/api/dl/settings') {
+      needAdmin(me);
+      if (req.method === 'PUT') {
+        const body = await readJson(req);
+        downloads.setCap(body.cap);
+      } else if (req.method !== 'GET') throw httpError(405, 'Method not allowed');
+      return sendJson(req, res, 200, { cap: downloads.cap, running: downloads.runningAll() });
     }
     if (req.method === 'POST' && p === '/api/login') {
       const body = await readJson(req);
@@ -497,6 +539,7 @@ function createApp(options = {}) {
       const pid = String(body.p || '');
       const sid = String(body.sid || '');
       if (me.role !== 'admin' && !views.allows(me, pid, sid)) throw httpError(403, 'That title is not in a multiview shared with you', 'not_allowed');
+      if (body.kind === 'download' && !canDownload(me)) throw httpError(403, 'Downloads are switched off for your login', 'download_off');
       return sendJson(req, res, 200, { item: await recordings.create(me, body) });
     }
     const m = /^\/api\/recordings\/([a-f0-9]{12})(?:\/(stop|update))?$/.exec(p);
@@ -872,7 +915,7 @@ function createApp(options = {}) {
     server.closeAllConnections();
   }
 
-  return { server, config, lists, relay, compose, recordings, cast, users, views, epg, fantasy, close };
+  return { server, config, lists, relay, compose, recordings, downloads, cast, users, views, epg, fantasy, close };
 }
 
 module.exports = { createApp };

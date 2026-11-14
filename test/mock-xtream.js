@@ -45,7 +45,7 @@ class MockProvider {
       { id: 3, name: 'UK| BBC One', cat: '20' },
     ];
     this.xmltv = opts.xmltv !== undefined ? opts.xmltv : true;  // serve /xmltv.php (false: 404, so get_short_epg is used)
-    this.vodBytes = 100000;
+    this.vodBytes = opts.vodBytes || 100000;
     this.vodRequests = []; // Range headers seen on /movie and /series
     this.active = 0;
     this.peak = 0;
