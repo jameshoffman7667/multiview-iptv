@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.15.0 - 2026-11-13
+The Android TV app is published for your F-Droid repo.
+- **APK name:** each release now has `multiview-iptv-<version>.apk` (what the F-Droid updater downloads). `iptv-multiview.apk` stays as the same file under the old name for the README's Downloader link.
+- **versionCode** is now `MAJOR*100000000 + MINOR*10000 + PATCH` (was `MAJOR*10000 + MINOR*100 + PATCH`), so it is higher than every old code (0.14.0 was 1400, 0.15.0 is 150000). The job fails above MINOR/PATCH 9999 or MAJOR 20.
+- **Release key only:** the Android job signs with the four repository secrets (`ANDROID_KEYSTORE_B64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, `ANDROID_KEY_PASSWORD`; the old name `ANDROID_KEYSTORE_BASE64` is no longer read). It never signs with a debug key: without the secrets it skips with a green notice naming the missing ones. The APK is read back (package, signed, versionName, versionCode, minSdk) before it is uploaded.
+- **Manual rebuild:** the existing `android_only` run now takes `tag` and `overwrite`; it refuses to replace an APK already on the release unless `overwrite` is on.
+- No change to the server, the web app, the compose file or `.env`. No phone TWA: phones use the PWA.
+- Tests: new `test/android.test.js` (versionCode rule and limits, higher than the old formula, asset name, signing and overwrite guard in the workflow).
+
+**Upgrading from 0.14.0:** pulling the image is enough on the server. The Shield app was signed with a debug key, so the first release-signed APK needs one uninstall and reinstall (Droid-ify or Neo Store).
+
 ## 0.14.0 - 2026-11-12
 Auto quality: start low, step up as the buffer grows, step down when it drains.
 - **Quality > Auto (adaptive)** (P-29), per channel, or Settings > *Auto quality for every channel that has no quality chosen* (off by default). The old choice is now called *Standard* (overlay label `STD`; Auto shows `AUTO SD`, `AUTO FULL` or `AUTO 480p`).

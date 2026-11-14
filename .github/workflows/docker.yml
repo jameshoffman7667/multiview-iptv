@@ -15,6 +15,14 @@ on:
         description: "Only build and attach the Android app (skips the tests and the Docker image)"
         type: boolean
         default: false
+      tag:
+        description: "With android_only: existing release tag whose APK to (re)build, e.g. v0.15.0 (empty = the version in package.json)"
+        type: string
+        default: ""
+      overwrite:
+        description: "With android_only: replace an APK that is already attached to that release"
+        type: boolean
+        default: false
 
 # One release run at a time, so a push and a hand-pushed tag for the same version cannot both release it.
 concurrency:
@@ -107,7 +115,11 @@ jobs:
           fi
           echo "Release: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/tag/v$VERSION" >> "$GITHUB_STEP_SUMMARY"
 
-  # Android TV / Nvidia Shield app. Built after the image is published so a problem here never blocks the Docker release.
+  # Android TV / Nvidia Shield app (native, package app.iptvmultiview.tv). Built after the image is published so a problem here
+  # never blocks the Docker release. Always signed with the release key from the repository secrets; it is skipped (green, with a
+  # notice naming the missing secrets) when they are not all set, and never signed with a debug key.
+  # The APK is named multiview-iptv-<version>.apk (what the F-Droid updater downloads); iptv-multiview.apk is the same file
+  # under the old name for the README's Downloader link.
   android:
     needs: [meta, image]
     if: ${{ always() && (needs.image.result == 'success' || (github.event_name == 'workflow_dispatch' && inputs.android_only)) }}
@@ -116,49 +128,124 @@ jobs:
       contents: write
     env:
       GH_TOKEN: ${{ github.token }}
+      APP: multiview-iptv
+      OVERWRITE: ${{ github.event_name == 'workflow_dispatch' && inputs.overwrite || 'false' }}
     steps:
-      - uses: actions/checkout@v4
-      - id: ver
+      - name: Work out the version and tag
+        id: ver
+        env:
+          DISPATCH_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || '' }}
+          RELEASE_VERSION: ${{ needs.meta.outputs.version }}
         run: |
-          VER="$(node -p "require('./package.json').version")"
-          IFS=. read -r MA MI PA <<< "$VER"
-          echo "version=$VER" >> "$GITHUB_OUTPUT"
-          echo "code=$((MA * 10000 + MI * 100 + PA))" >> "$GITHUB_OUTPUT"
+          set -euo pipefail
+          if [ -n "$DISPATCH_TAG" ]; then
+            [[ "$DISPATCH_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::tag '$DISPATCH_TAG' is not vX.Y.Z"; exit 1; }
+            gh release view "$DISPATCH_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null || { echo "::error::no GitHub release $DISPATCH_TAG"; exit 1; }
+            echo "tag=$DISPATCH_TAG" >> "$GITHUB_OUTPUT"
+            echo "version=${DISPATCH_TAG#v}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=" >> "$GITHUB_OUTPUT"
+            echo "version=$RELEASE_VERSION" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.ver.outputs.tag }}
+      - id: v
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          set -euo pipefail
+          [ -n "$VERSION" ] || VERSION="$(node -p "require('./package.json').version")"
+          CODE="$(node scripts/android-version.js "$VERSION")"
+          echo "versionName=$VERSION versionCode=$CODE"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "code=$CODE" >> "$GITHUB_OUTPUT"
+      # Skips (green, with a notice) until James has set all four secrets.
+      - name: Check the signing secrets
+        id: gate
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          missing=""
+          for n in KEYSTORE_B64 KEYSTORE_PASSWORD KEY_ALIAS KEY_PASSWORD; do
+            [ -n "${!n}" ] || missing="$missing ANDROID_$n"
+          done
+          if [ -n "$missing" ]; then
+            echo "::notice::Missing secrets:$missing. Android build skipped (a debug-signed APK is never built)"
+            echo "build=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "build=true" >> "$GITHUB_OUTPUT"
+          fi
       - uses: actions/setup-java@v4
+        if: steps.gate.outputs.build == 'true'
         with:
           distribution: temurin
           java-version: 17
       - name: Accept Android SDK licences (the runner image already has the SDK)
+        if: steps.gate.outputs.build == 'true'
         run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
       - uses: gradle/actions/setup-gradle@v4
+        if: steps.gate.outputs.build == 'true'
         with:
           gradle-version: 8.9
-      - name: Signing key (optional)
+      - name: Build and sign the APK
+        if: steps.gate.outputs.build == 'true'
         env:
-          KS: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
-          KS_PASS: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-          KEY_PASS: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          KS: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          VERSION: ${{ steps.v.outputs.version }}
+          CODE: ${{ steps.v.outputs.code }}
         run: |
-          if [ -n "$KS" ]; then
-            echo "$KS" | base64 -d > "$RUNNER_TEMP/release.keystore"
-            echo "ANDROID_KEYSTORE_FILE=$RUNNER_TEMP/release.keystore" >> "$GITHUB_ENV"
-            echo "ANDROID_KEYSTORE_PASSWORD=$KS_PASS" >> "$GITHUB_ENV"
-            echo "ANDROID_KEY_ALIAS=$KEY_ALIAS" >> "$GITHUB_ENV"
-            echo "ANDROID_KEY_PASSWORD=$KEY_PASS" >> "$GITHUB_ENV"
-            echo "Using the release signing key from repository secrets"
-          else
-            echo "No ANDROID_KEYSTORE_BASE64 secret: signing with the debug key (updates need the old app uninstalled first)"
-          fi
-      - name: Build the APK
-        working-directory: android
-        run: gradle --no-daemon assembleRelease -PappVersion=${{ steps.ver.outputs.version }} -PappVersionCode=${{ steps.ver.outputs.code }}
+          set -euo pipefail
+          printf %s "$KS" | base64 -d > "$RUNNER_TEMP/release.keystore"
+          export ANDROID_KEYSTORE_FILE="$RUNNER_TEMP/release.keystore"
+          (cd android && gradle --no-daemon assembleRelease -PappVersion="$VERSION" -PappVersionCode="$CODE")
+          cp android/app/build/outputs/apk/release/app-release.apk "$APP-$VERSION.apk"
+          rm -f "$RUNNER_TEMP/release.keystore"
+      # Read the finished APK back before it is published (package id, versionCode, minSdk, signed).
+      - name: Inspect the APK
+        if: steps.gate.outputs.build == 'true'
+        env:
+          VERSION: ${{ steps.v.outputs.version }}
+          CODE: ${{ steps.v.outputs.code }}
+        run: |
+          set -euo pipefail
+          pip install -q androguard
+          python3 - "$APP-$VERSION.apk" "$VERSION" "$CODE" <<'PY'
+          import sys
+          from androguard.core.apk import APK
+          a = APK(sys.argv[1])
+          print("package", a.get_package(), "versionName", a.get_androidversion_name(), "versionCode", a.get_androidversion_code(), "minSdk", a.get_min_sdk_version(), "signed", a.is_signed())
+          assert a.get_package() == "app.iptvmultiview.tv", "package id changed"
+          assert a.is_signed(), "APK is not signed"
+          assert a.get_androidversion_name() == sys.argv[2], "versionName differs from the release version"
+          assert str(a.get_androidversion_code()) == sys.argv[3], "versionCode differs from the formula"
+          assert int(a.get_min_sdk_version()) >= 24, "minSdk below 24"
+          PY
       - name: Attach to the GitHub release
+        if: steps.gate.outputs.build == 'true'
+        env:
+          VERSION: ${{ steps.v.outputs.version }}
         run: |
-          VER="${{ steps.ver.outputs.version }}"
-          cp android/app/build/outputs/apk/release/app-release.apk iptv-multiview.apk
-          awk -v v="$VER" '$0 ~ "^## " v " " {f=1; next} /^## / {f=0} f' CHANGELOG.md > notes.md
-          [ -s notes.md ] || echo "IPTV Multiview $VER" > notes.md
-          printf '\nAndroid TV / Nvidia Shield app: `iptv-multiview.apk` (sideload it, see the README).\n' >> notes.md
-          gh release view "v$VER" >/dev/null 2>&1 || gh release create "v$VER" --target "$GITHUB_SHA" --title "v$VER" --notes-file notes.md
-          gh release upload "v$VER" iptv-multiview.apk --clobber
+          set -euo pipefail
+          TAG="v$VERSION"
+          APK="$APP-$VERSION.apk"
+          awk -v v="$VERSION" '$0 ~ "^## " v " " {f=1; next} /^## / {f=0} f' CHANGELOG.md > notes.md
+          [ -s notes.md ] || echo "IPTV Multiview $VERSION" > notes.md
+          printf '\nAndroid TV / Nvidia Shield app: `%s` (F-Droid repo) or `iptv-multiview.apk` (same file, for sideloading, see the README).\n' "$APK" >> notes.md
+          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --target "$GITHUB_SHA" --title "$TAG" --notes-file notes.md
+          # overwrite guard: the F-Droid updater may already have downloaded an APK with this name
+          if gh release view "$TAG" --json assets --jq '.assets[].name' | grep -qx "$APK"; then
+            if [ "$OVERWRITE" != "true" ]; then
+              echo "::error::$APK is already attached to $TAG. Re-run with overwrite=true only if the APK was never installed or downloaded (same versionCode)."
+              exit 1
+            fi
+            echo "::warning::Replacing $APK on $TAG (overwrite=true)"
+          fi
+          cp "$APK" iptv-multiview.apk
+          gh release upload "$TAG" "$APK" iptv-multiview.apk --clobber

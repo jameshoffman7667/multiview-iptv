@@ -1,4 +1,4 @@
-# IPTV Multiview - functional spec (current state, v0.14.0)
+# IPTV Multiview - functional spec (current state, v0.15.0)
 
 Edited in place on every release; it describes what the app does now, not its history (see `CHANGELOG.md`).
 
@@ -57,6 +57,15 @@ A self-hosted relay and browser UI for Xtream Codes IPTV providers. One shared p
 
 ## Diagnostics (admins, P-28)
 `GET /api/diag` (admin only) returns, per running channel, provider and channel name (never addresses), state, upstream kbit/s, connect and first-data times, longest silence in the last minute (10 s buckets), reconnect count and recent errors, and per viewer the bytes sent, current and peak queue and how often it backed up past 256 KB (`Client.diag()`); plus server health (`src/health.js`: process CPU % of one core, machine load, memory, event-loop delay with the 20 ms timer resolution removed, number of ffmpeg processes read from /proc). `GET /api/diag/speed?mb=N` (1-32 MB of zeros, `no-store`) times the server-to-browser path. The page keeps 10 minutes of per-screen samples every 2 s (buffer ahead, incoming rate from the player, dropped frames) and counts stalls (video 'waiting' or the cushion manager's re-buffer, minimum 250 ms) per screen. Settings > Diagnostics opens a window with live tables and *Run 30 s test*: a 16 MB speed transfer, then snapshots every 2 s, then `diagVerdict` (provider: silence > 2 s, reconnects or a rate that fell below 60 % of its peak; server: event-loop delay > 100 ms, CPU > 85 % or load above 90 % of cores; link: backed-up viewers, queue peak > 512 KB or a speed test under 3x the stream rate; device: more than 2 % dropped frames) and a copyable text report without web addresses. Nothing is stored on disk and no new settings or environment variables exist.
+
+## Android (TV app)
+- **What it is:** a native Android TV / Nvidia Shield app in `android/` (a full-screen web view around the page, a TV launcher icon, local mode and native cast). It is not a phone app: there is **no TWA, no `twa-manifest.json`, no Bubblewrap, no `assetlinks.json` and no Cloudflare Access bypass**; phones use the PWA.
+- **Package id:** `app.iptvmultiview.tv` (never changes). versionName = the release version.
+- **versionCode** = `MAJOR*100000000 + MINOR*10000 + PATCH` (`scripts/android-version.js`; the job fails above MINOR/PATCH 9999 or MAJOR 20). It replaced `MAJOR*10000 + MINOR*100 + PATCH` in 0.15.0 and is higher than the old code for every version (0.14.0 was 1400, 0.15.0 is 150000). 0.15.0 is 150000.
+- **Signing:** only the release key (alias `multiview`) from the repository secrets `ANDROID_KEYSTORE_B64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, `ANDROID_KEY_PASSWORD`. Never a debug key: without all four secrets the `android` job skips with a green notice listing the missing names, and `build.gradle` refuses to build a release APK without the key. Switching from the old debug-signed APK needs one uninstall and reinstall on the Shield.
+- **Release files:** `multiview-iptv-<version>.apk` (what the F-Droid updater downloads) and `iptv-multiview.apk` (same file, the README's Downloader link) on the `vX.Y.Z` release. The job runs after the image is published, so it never blocks the Docker release. It reads the APK back (package id, signed, versionName, versionCode, minSdk 24 or more) before it uploads.
+- **Rebuild an APK only** (a build that failed or an APK nobody has installed): Actions > Build and push image > Run workflow with *android_only* on, *tag* = the existing tag (e.g. `v0.15.0`, empty = the version in package.json) and *overwrite* off. It refuses to replace an APK already attached to the release unless *overwrite* is on (only if the F-Droid updater has not downloaded it). The versionCode does not change on a rebuild, so a crash already on the Shield needs a patch release.
+- **Known limits:** the first F-Droid APK is untested until James confirms it installs and opens on the Shield. If it breaks, get a logcat (`adb logcat -b crash`) before changing anything.
 
 ## Known limits
 - Browsers cannot play most provider streams directly (CORS, https page vs http stream, password exposure), so playback goes through the relay.

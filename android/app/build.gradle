@@ -2,7 +2,7 @@ plugins {
     id 'com.android.application'
 }
 
-// The release workflow passes the version (-PappVersion=0.14.0 -PappVersionCode=1400).
+// The release workflow passes the version (-PappVersion=0.15.0 -PappVersionCode=150000; versionCode = MAJOR*100000000 + MINOR*10000 + PATCH).
 def appVersion = (project.findProperty('appVersion') ?: '0.0.0').toString()
 def appVersionCode = (project.findProperty('appVersionCode') ?: '1').toString().toInteger()
 
@@ -24,11 +24,11 @@ android {
     }
 
     signingConfigs {
-        // Stable signing key from repository secrets when present, so updates install over older versions.
-        // Without the secrets the debug key is used (an update then needs the old app uninstalled first).
-        if (System.getenv('ANDROID_KEYSTORE_FILE')) {
-            release {
-                storeFile file(System.getenv('ANDROID_KEYSTORE_FILE'))
+        // The release key from the repository secrets. There is no debug-key fallback: without the key the build stops.
+        release {
+            def ks = System.getenv('ANDROID_KEYSTORE_FILE')
+            if (ks) {
+                storeFile file(ks)
                 storePassword System.getenv('ANDROID_KEYSTORE_PASSWORD')
                 keyAlias System.getenv('ANDROID_KEY_ALIAS')
                 keyPassword System.getenv('ANDROID_KEY_PASSWORD')
@@ -39,7 +39,7 @@ android {
     buildTypes {
         release {
             minifyEnabled false
-            signingConfig System.getenv('ANDROID_KEYSTORE_FILE') ? signingConfigs.release : signingConfigs.debug
+            signingConfig signingConfigs.release
         }
     }
 
@@ -50,6 +50,13 @@ android {
 
     lint {
         abortOnError false
+    }
+}
+
+// Never a debug-signed (or unsigned) release APK: stop when the release key is not there.
+gradle.taskGraph.whenReady { graph ->
+    if (graph.allTasks.any { it.name == 'assembleRelease' || it.name == 'packageRelease' } && !System.getenv('ANDROID_KEYSTORE_FILE')) {
+        throw new GradleException('ANDROID_KEYSTORE_FILE is not set: refusing to build a release APK without the release key (never debug-signed)')
     }
 }
 

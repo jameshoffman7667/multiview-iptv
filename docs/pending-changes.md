@@ -5,7 +5,7 @@ Requests logged here are not built yet. Say "build" to fold them into a new vers
 With every push, say whether the compose/stack file must change or whether pulling the new image is enough.
 Every build rewrites deploy/RELEASE.md using the FULL template of the app spec (section 8: Update, Image, Short, Long, Release commit, Type, Port, Public hostname, env vars, Data, Resources, Healthcheck, Verify, PWA, Docker build, Rollback naming the exact previous tag, Known issues, Backup tier). Server tests use `wget` (no curl on vm101). The server's real stack file is the homelab repo's stacks/multiview-iptv/compose.yaml (stack.yml here is only a reference); never tell anyone to update the Dockhand stack. Fixed `Update:` line: `Update: now` only when the user said "build, push and update" for that release, otherwise `Update: later`.
 
-Current released version: 0.14.0 (being pushed)
+Current released version: 0.15.0 (being pushed)
 
 ### P-1 - Rebuild the on-screen menu as a traditional video player overlay
 Requested: 2026-10-18. Tap any screen (single view or multiview) to show a full-screen overlay over everything:
@@ -202,3 +202,8 @@ Proposed scope (to confirm):
 Limits to know: these are separate streams, not one adaptive HLS ladder, so a switch restarts the stream (no seamless bitrate change inside one stream) and only helps when the provider has an SD/lower version or the server GPU transcodes. If the slowness is provider-to-server, a lower rung of the same provider may not help much; the P-28 diagnostics test says which it is.
 Questions: (a) OK to use the 480p GPU transcode as the bottom rung (it costs server GPU per tile; proposal: yes, but only for the tile that needs it)? (b) Thresholds above (up 10 s held 20 s / down below 5 s held 10 s / 60 s lock-out) and short start cushion 2-3 s OK, or want them as settings? (c) Make Auto the new default for all tiles, or opt-in? (d) Allow the brief second connection for clean switches, or accept a short rebuffer instead?
 Decided 2026-11-12: defaults accepted. (a) 480p GPU transcode is the bottom rung, only for the tile that needs it; (b) fixed thresholds, not settings; (c) Auto is opt-in at first; (d) clean switch with a brief second connection, skipped if the provider is full. Built 2026-11-12 (James: build, push).
+
+### P-30 - Publish the Android TV app to the F-Droid repo (spec v1.11 section 15)
+Requested: 2026-11-13 (James: make the existing Android TV app work with my F-Droid repo; no phone TWA)
+Type: minor (release pipeline)   Status: Built in 0.15.0
+Notes: asset multiview-iptv-<version>.apk (+ old iptv-multiview.apk kept for the README); versionCode MAJOR*100000000+MINOR*10000+PATCH; release key only (four ANDROID_* secrets, B64 name), skip when missing; androguard check; android_only run gets tag and overwrite inputs with the overwrite guard; tests; spec and RELEASE.md updated. The Shield needs one uninstall and reinstall (old APK was debug-signed).
