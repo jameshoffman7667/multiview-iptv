@@ -20,7 +20,7 @@ Rules, please answer in your reply:
 1. `projectedColour` uses the **same rule** as the league `colour` you already send for my team (points vs projection or pace-adjusted projection, same thresholds and the same three colour names). For a player use the same rule applied to that player's points against his own projection (`paceProjected` = projection scaled by game progress; before kickoff and after final say what you return: empty string or a fixed colour).
 2. For the **opponent** team send the colour the same way (from the opponent's own points against his projection); Multiview shows it without any change of meaning.
 3. `projected` stays the full-game projection; `paceProjected` is the projection a player/team should have reached by now. Send numbers rounded to 1 decimal.
-4. Empty string means "no colour" (Multiview draws it white).
+4. Empty string means "no colour" (Multiview draws it grey, like the player stat lines).
 Versioned as an additive change (4.18.0 or whatever you use); old Multiview versions ignore unknown fields.
 
 ## Part 2 - a sync-only "ticker" user level
