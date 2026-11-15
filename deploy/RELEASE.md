@@ -10,7 +10,7 @@ Public hostname: unchanged by this release (see the homelab reference)        Ne
 New or changed env vars: none. Compose (only the image tag changes), .env.example and data format: unchanged. No manual step on the server. New API: POST /api/direct/report (admins) and extra fields in GET /api/state (direct, directStreams); both additive.
 Data: /data (accounts, providers, views, settings, downloads.json, fantasy.json and fantasy.key; small), /recordings (REC_DIR), /rewind (REWIND_DIR); the entrypoint chowns them to uid 1000 at start. Migration: none.
 Resources: unchanged.
-Healthcheck: unchanged. GET /healthz on $PORT -> 200 {"status":"ok","version":"0.19.1"} (JSON, no login, nothing private); compose test: wget -qO- http://127.0.0.1:$${PORT}/healthz | grep -q '\"status\":\"ok\"' || exit 1 (see deploy/compose.yaml for the exact YAML), interval 30s, timeout 5s, retries 3, start_period 30s. On vm101 use: wget -S -qO- http://127.0.0.1:1234/healthz (no curl there).
+Healthcheck: unchanged. GET /healthz on $PORT -> 200 {"status":"ok","version":"0.20.0"} (JSON, no login, nothing private); compose test: wget -qO- http://127.0.0.1:$${PORT}/healthz | grep -q '\"status\":\"ok\"' || exit 1 (see deploy/compose.yaml for the exact YAML), interval 30s, timeout 5s, retries 3, start_period 30s. On vm101 use: wget -S -qO- http://127.0.0.1:1234/healthz (no curl there).
 Verify after deploy:
   1. docker inspect shows "healthy" within about a minute and the logs are clean (no stack traces).
   2. wget -S -qO- http://127.0.0.1:1234/healthz returns {"status":"ok","version":"0.20.0"} with Content-Type application/json and the security headers.
