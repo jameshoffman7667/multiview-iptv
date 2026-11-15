@@ -217,10 +217,11 @@ Added 2026-11-14 (James: "Add a max concurrent downloads setting and default to 
 Extra questions: (e) Per device only, or also a server-wide cap so several users cannot take every provider connection? (f) Should downloads stop short of the last free connection (keep 1 free for watching), or may they take all of them?
 Decided 2026-11-14 (James): (1) everyone who can open a title may download by default; an admin can switch downloads off or on per user (Settings > Users, a new per-user toggle, stored with the user; admins always can). (2) the queue, no ZIP. (3) buttons hidden in the Android TV app; native TV downloads logged as P-32. (4) the concurrent-downloads limit is per device (default 3); an admin can also set a server-wide cap in Settings (default 0 = off, no cap) that counts running downloads of all users. (5) downloads always leave one provider connection free for watching: a download that would take the last free connection waits in the queue. Status stays Pending until James says build.
 
-### P-32 - Future: downloads in the Android TV app
+### P-32 - Downloads in the Android app (TV and phones)
 Requested: 2026-11-14 (James: hide the buttons in the TV app for now, "note as a future enhancement")
-Type: minor (native Android work)   Status: Pending (future)
-Notes: the TV app's web view cannot save files without native code (a DownloadListener and a storage location, or the Android DownloadManager). Decide where files go (Shield storage is small) and whether it is wanted at all. Not before P-31 is built and used.
+Type: minor (native Android work)   Status: Pending
+Notes: the TV app's web view cannot save files without native code (a DownloadListener and a storage location, or the Android DownloadManager). Decide where files go (Shield storage is small) and whether it is wanted at all. P-31 is built (0.16.0).
+Update 2026-11-15 (James: "The app works on Android phones as well so I would like it"): wanted, also for phones. The APK already installs on phones (touchscreen not required, leanback optional). Proposed: a DownloadListener that hands files to Android's DownloadManager (saves to the Downloads folder with a system notification and progress), plus a bridge flag so the page shows the buttons in the app; the P-31 queue, limits and keep-one-free rules stay. Questions: (a) on phones, do you use the APK or Chrome/the installed web app? (Chrome already has the buttons.) (b) save to the public Downloads folder, or app-private storage? (c) also on the Shield, where storage is small? (d) keep playing from the saved files inside the app, or only save them?
 
 ### P-33 - Attach only the versioned APK to releases (F-Droid duplicate)
 Requested: 2026-11-14 (James, from the server: fdroid update failed on v0.16.0 with "multiview-iptv-0.16.0.apk is a duplicate of iptv-multiview.apk", which blocks the index for all apps)
