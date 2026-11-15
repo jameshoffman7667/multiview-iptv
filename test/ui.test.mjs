@@ -694,6 +694,49 @@ describe('browser', () => {
     await ctx.close();
   });
 
+  test('Android app on a phone: download buttons hand files to the app, the Downloaded files list plays, opens and deletes', async () => {
+    const bridge = (phone) => `window.__calls = []; window.MVApp = { canPip: function () { return false; }, setAutoPip: function () {}, changeServer: function () {}, localPause: function (p) { window.__calls.push(['pause', p]); }, localStop: function () { window.__calls.push(['stop']); }, localSeek: function (s) { window.__calls.push(['seek', s]); },
+      downloadSupported: function () { return ${phone}; }, downloadStart: function (u, n) { window.__calls.push(['start', u, n]); },
+      downloadList: function () { return JSON.stringify([{ id: 7, name: 'Big Movie.mp4', size: 1048576, time: 5 }]); },
+      downloadPlay: function (id) { window.__calls.push(['play', id]); }, downloadOpen: function (id) { window.__calls.push(['open', id]); }, downloadDelete: function (id) { window.__calls.push(['delete', id]); } };`;
+    let r = await openPage({ init: bridge(false) });
+    await r.page.evaluate(() => window.__mv.setLayout('1'));
+    await tapPicker(r.page, 0);
+    await r.page.waitForSelector('.modal .tabs');
+    await r.page.click('.tab:has-text("Movies")');
+    await r.page.waitForFunction(() => document.querySelectorAll('.chlist .pick').length === 2);
+    assert.equal(await r.page.locator('.dlb').count(), 0, 'a TV box (the app says no) shows no download buttons');
+    await r.ctx.close();
+    r = await openPage({ init: bridge(true) });
+    const { page } = r;
+    await page.evaluate(() => window.__mv.setLayout('1'));
+    await tapPicker(page, 0);
+    await page.waitForSelector('.modal .tabs');
+    await page.click('.tab:has-text("Movies")');
+    await page.waitForFunction(() => document.querySelectorAll('.chlist .dlb').length === 2);
+    await page.click('.chlist .dlb >> nth=0');
+    await page.waitForFunction(() => window.__calls.some((c) => c[0] === 'start'));
+    const start = await page.evaluate(() => window.__calls.find((c) => c[0] === 'start'));
+    assert.match(start[1], /^http:\/\/127\.0\.0\.1:\d+\/vod\/p\d\/movie%3A\d+\.\w+\?dl=1&job=[0-9a-f]+&name=/);
+    assert.match(start[2], /\.mp4$/);
+    await page.keyboard.press('Escape');
+    await page.evaluate(() => document.getElementById('sm-settings').click());
+    await page.click('#open-downloaded');
+    await page.waitForSelector('.modal:has-text("Big Movie.mp4")');
+    await page.click('.modal button:has-text("Open with")');
+    await page.click('.modal button:has-text("Play")');
+    await page.waitForSelector('#dlplay');
+    assert.equal(await page.evaluate(() => document.documentElement.classList.contains('nativeplay')), true);
+    await page.click('#dlplay-pause');
+    await page.click('#dlplay .btn:has-text("+30 s")');
+    await page.click('#dlplay-close');
+    assert.equal(await page.locator('#dlplay').count(), 0);
+    const calls = await page.evaluate(() => window.__calls.map((c) => c.join(':')));
+    for (const want of ['open:7', 'play:7', 'pause:true', 'seek:30', 'stop']) assert.ok(calls.includes(want), want + ' in ' + calls.join(' | '));
+    assert.deepEqual(r.errors, []);
+    await r.ctx.close();
+  });
+
   test('long buffer: settings offer minutes, the stream asks for that much, a memory note appears', async () => {
     const { ctx, page, errors } = await openPage({ state: { layout: '1', tiles: [{ p: 'p1', sid: '1', name: 'ESPN' }], bufSec: 4 } });
     await page.keyboard.press('Escape');

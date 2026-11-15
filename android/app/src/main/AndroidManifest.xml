@@ -6,6 +6,8 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
+    <!-- Downloads (P-32) are saved to the public Movies folder by Android's download manager; only Android 9 and older ask for this. -->
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28" />
 
     <!-- Runs on Android TV / Nvidia Shield (no touch screen) and on ordinary phones and tablets. -->
     <uses-feature android:name="android.hardware.touchscreen" android:required="false" />

@@ -5,7 +5,7 @@ Requests logged here are not built yet. Say "build" to fold them into a new vers
 With every push, say whether the compose/stack file must change or whether pulling the new image is enough.
 Every build rewrites deploy/RELEASE.md using the FULL template of the app spec (section 8: Update, Image, Short, Long, Release commit, Type, Port, Public hostname, env vars, Data, Resources, Healthcheck, Verify, PWA, Docker build, Rollback naming the exact previous tag, Known issues, Backup tier). Server tests use `wget` (no curl on vm101). The server's real stack file is the homelab repo's stacks/multiview-iptv/compose.yaml (stack.yml here is only a reference); never tell anyone to update the Dockhand stack. Fixed `Update:` line: `Update: now` only when the user said "build, push and update" for that release, otherwise `Update: later`.
 
-Current released version: 0.17.0 (being pushed)
+Current released version: 0.18.0 (being pushed)
 
 ### P-1 - Rebuild the on-screen menu as a traditional video player overlay
 Requested: 2026-10-18. Tap any screen (single view or multiview) to show a full-screen overlay over everything:
@@ -219,7 +219,7 @@ Decided 2026-11-14 (James): (1) everyone who can open a title may download by de
 
 ### P-32 - Downloads in the Android app (TV and phones)
 Requested: 2026-11-14 (James: hide the buttons in the TV app for now, "note as a future enhancement")
-Type: minor (native Android work)   Status: Pending
+Type: minor (native Android work)   Status: Built in 0.18.0
 Notes: the TV app's web view cannot save files without native code (a DownloadListener and a storage location, or the Android DownloadManager). Decide where files go (Shield storage is small) and whether it is wanted at all. P-31 is built (0.16.0).
 Update 2026-11-15 (James: "The app works on Android phones as well so I would like it"): wanted, also for phones. The APK already installs on phones (touchscreen not required, leanback optional). Proposed: a DownloadListener that hands files to Android's DownloadManager (saves to the Downloads folder with a system notification and progress), plus a bridge flag so the page shows the buttons in the app; the P-31 queue, limits and keep-one-free rules stay. Questions: (a) on phones, do you use the APK or Chrome/the installed web app? (Chrome already has the buttons.) (b) save to the public Downloads folder, or app-private storage? (c) also on the Shield, where storage is small? (d) keep playing from the saved files inside the app, or only save them?
 
@@ -235,3 +235,4 @@ Notes: idea: the page gets the provider's own file URL instead of the /vod proxy
 Decided 2026-11-15 (James): (a) admins only (they can already see the provider login, so nothing new leaks; viewers never get direct links). (b) goal: a faster connection. (c) not sure whether the providers are http or https or lock to one IP, so the build detects it: direct is tried, and any failure (blocked as mixed content, refused, IP lock) falls back to the server for that title and says so. (d) yes, the TV app gets it too. Status stays Pending until James says build.
 Built 2026-11-15: two per-device settings for admins (no per-provider switch was needed): play movies and episodes directly, and download buttons copy the direct links. A browser cannot save a cross-origin file under a name and providers send no CORS headers, so a direct download is a copied link, not a file saved by the page. Live TV is unchanged (Local mode already exists for the TV app).
 Decided 2026-11-15 (James) for P-32: (a) used through the APK on the phone. (b) save to the public Movies folder (Movies/Multiview). (c) buttons only on phones and tablets; none on the Shield, if the app can tell them apart (plan: the app asks Android whether it is running in television mode and tells the page; if it cannot tell, the buttons stay hidden). (d) playback both in the app and outside it: a Downloads list in the app (Play in the app, Open with another player, Delete) and the system notification opens the file with the usual app chooser. Status stays Pending until James says build.
+Built 2026-11-15 in 0.18.0. Not tested on a real phone or on a Shield (the sandbox has no Android SDK; CI compiles the app). Android 7-9 ask for storage permission on the first download. A file with the same name already in Movies/Multiview makes that download fail (the page says the browser did not start it).

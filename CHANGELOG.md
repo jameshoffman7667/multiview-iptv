@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.18.0 - 2026-11-15
+Downloads in the Android app on phones and tablets (P-32).
+- **Buttons on phones only:** the app asks Android whether it runs on a TV box. On a phone or tablet the ⬇ buttons and the season button appear; on the Shield they stay hidden (and if the app cannot tell, they stay hidden).
+- **Saved as real files:** each download goes to Android's download manager and is saved in `Movies/Multiview` with the usual progress notification. The queue, the "Max concurrent downloads" setting, the server cap and the "keep one connection free" rule work as in the browser.
+- **Downloaded files list:** Settings > "Downloaded files..." shows what you saved, with Play (in the app, with Pause and -30/+30 s), "Open with..." (any other player) and Delete. Tapping the finished notification opens the file with the usual app chooser.
+- **Good to know:** Android 7 to 9 ask for storage permission on the first download. A file with the same name already in the folder makes that download fail. The new APK needs installing on the phone (same release key, so it updates over the old one).
+- Tests: a browser test with a pretend phone bridge, and a check of the native bridge and the TV guard. The Android code is compiled by CI, not run in the sandbox.
+
+**Upgrading from 0.17.0:** pulling the image is enough. No compose or `.env` change.
+
 ## 0.17.0 - 2026-11-15
 Play movies and episodes straight from the provider (admins, P-34).
 - **Settings (admins, per device):** "Play movies and episodes straight from the provider" and "Download buttons copy the provider's direct link". Both are off by default.

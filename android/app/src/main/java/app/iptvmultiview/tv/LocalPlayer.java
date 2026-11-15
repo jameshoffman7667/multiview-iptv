@@ -10,6 +10,7 @@ import androidx.media3.common.MediaItem;
 import androidx.media3.common.PlaybackException;
 import androidx.media3.common.Player;
 import androidx.media3.common.VideoSize;
+import androidx.media3.datasource.DefaultDataSource;
 import androidx.media3.datasource.DefaultHttpDataSource;
 import androidx.media3.exoplayer.ExoPlayer;
 import androidx.media3.exoplayer.source.ProgressiveMediaSource;
@@ -80,7 +81,7 @@ class LocalPlayer {
                 events.onEvent("error", error.getErrorCodeName());
             }
         });
-        player.setMediaSource(new ProgressiveMediaSource.Factory(http).createMediaSource(MediaItem.fromUri(url)));
+        player.setMediaSource(new ProgressiveMediaSource.Factory(new DefaultDataSource.Factory(activity, http)).createMediaSource(MediaItem.fromUri(url)));
         player.setPlayWhenReady(true);
         player.prepare();
     }
@@ -115,6 +116,15 @@ class LocalPlayer {
     void setPaused(boolean p) {
         paused = p;
         if (player != null) player.setPlayWhenReady(!p);
+    }
+
+    /** Jumps forward or back (a downloaded movie played in the app, P-32). */
+    void seekBy(long ms) {
+        if (player == null) return;
+        long to = Math.max(0, player.getCurrentPosition() + ms);
+        long dur = player.getDuration();
+        if (dur > 0) to = Math.min(to, Math.max(0, dur - 1000));
+        player.seekTo(to);
     }
 
     void setVolume(float v) {

@@ -293,6 +293,7 @@
     if (!any) localPlace();
   }
   window.__mvLocal = function (ev, msg) {
+    if ($('#dlplay')) { if (ev === 'error' || ev === 'ended') dlPlayClose(); return; }     // a downloaded file played in the app
     var t = localNative();
     if (!t) return;
     if (ev === 'playing') { t.setStatus(''); t.hasPlayed = true; return; }
@@ -1634,7 +1635,9 @@
   // download ends, so each one first gets a ticket from the server, which also counts running downloads, applies the server-wide
   // cap and keeps one provider connection free for watching, and reports which of this user's downloads are still running.
   var DL = { queue: [], run: {}, total: 0, done: 0, failed: [], waitMsg: '', pumping: false, timer: null, waitUntil: 0 };
-  function dlOk() { return !window.MVApp && !(ME && ME.download === false); }
+  // In the Android app only phones and tablets download (the app says so; on a TV box it says no and no buttons show).
+  function nativeDl() { var b = appBridge(); try { return !!(b && typeof b.downloadSupported === 'function' && b.downloadSupported()); } catch (e) { return false; } }
+  function dlOk() { return (!window.MVApp || nativeDl()) && !(ME && ME.download === false); }
   function dlItem(c) { return { p: c.p, sid: String(c.sid), ext: c.ext || 'mp4', name: c.name || String(c.sid) }; }
   // ---- direct from the provider (P-34, admins only): movies and episodes are played from the provider's own address, and the
   // download buttons copy those addresses instead (a browser cannot save a cross-origin file under a name, and the provider
@@ -1686,6 +1689,7 @@
       if (r.wait) { DL.queue.unshift(it); DL.waitUntil = Date.now() + 6000; DL.waitMsg = r.reason; return; }
       DL.waitMsg = '';
       DL.run[r.job] = it;
+      if (nativeDl()) { appBridge().downloadStart(location.origin + r.url, it.name + '.' + it.ext); return; }   // Android's download manager saves it to Movies/Multiview
       var a = h('a', { href: r.url, download: '' });
       document.body.appendChild(a);
       a.click();
@@ -1710,6 +1714,45 @@
       });
     }).catch(function () { /* try again at the next tick */ }) : Promise.resolve();
     next.then(function () { dlBar(); dlPump(); });
+  }
+  // Downloaded files on this phone (Android app): Play in the app, Open with another player, Delete.
+  function dlPlayClose() {
+    var o = $('#dlplay');
+    if (o) o.remove();
+    document.documentElement.classList.remove('nativeplay');
+    try { appBridge().localStop(); } catch (e) { /* ignore */ }
+  }
+  function dlPlay(id, name) {
+    dlPlayClose();
+    document.documentElement.classList.add('nativeplay');
+    var paused = false;
+    var pb = h('button', { class: 'btn', type: 'button', id: 'dlplay-pause', text: 'Pause', onclick: function () { paused = !paused; pb.textContent = paused ? 'Play' : 'Pause'; try { appBridge().localPause(paused); } catch (e) { /* old app */ } } });
+    function seek(sec) { return function () { try { appBridge().localSeek(sec); } catch (e) { /* old app */ } }; }
+    document.body.appendChild(h('div', { id: 'dlplay', class: 'dlplay' },
+      h('div', { class: 'dlplay-bar' },
+        h('b', { text: name }),
+        h('button', { class: 'btn', type: 'button', text: '-30 s', onclick: seek(-30) }), pb,
+        h('button', { class: 'btn', type: 'button', text: '+30 s', onclick: seek(30) }),
+        h('button', { class: 'btn', type: 'button', id: 'dlplay-close', text: 'Close', onclick: dlPlayClose }))));
+    appBridge().downloadPlay(id);
+  }
+  function openDownloaded() {
+    var list = h('div', { class: 'chlist' });
+    var m = openModal({ title: 'Downloaded on this phone (Movies/Multiview)', wide: true, body: [list], foot: h('button', { class: 'btn', type: 'button', text: 'Close', onclick: function () { m.close(); } }) });
+    function load() {
+      var files = [];
+      try { files = JSON.parse(appBridge().downloadList()) || []; } catch (e) { files = []; }
+      list.textContent = '';
+      if (!files.length) { list.appendChild(h('div', { class: 'note', text: 'Nothing downloaded yet. Use the ⬇ button on a movie or episode.' })); return; }
+      files.sort(function (x, y) { return y.time - x.time; }).forEach(function (f) {
+        list.appendChild(h('div', { class: 'ch' },
+          h('div', { class: 'nm' }, h('b', { text: f.name }), h('small', { text: fmtBytes(f.size) })),
+          h('button', { class: 'btn', type: 'button', text: 'Play', onclick: function () { m.close(); dlPlay(f.id, f.name); } }),
+          h('button', { class: 'btn', type: 'button', text: 'Open with...', onclick: function () { appBridge().downloadOpen(f.id); } }),
+          h('button', { class: 'btn', type: 'button', text: 'Delete', onclick: function () { confirmBox('Delete ' + f.name + ' from this phone?', 'Delete', function () { appBridge().downloadDelete(f.id); setTimeout(load, 300); }); } })));
+      });
+    }
+    load();
   }
   function dlReset() { DL.queue = []; DL.total = 0; DL.done = 0; DL.failed = []; DL.waitMsg = ''; dlBar(); }
   function dlBar() {
@@ -3520,6 +3563,7 @@
       ],
       foot: [
         !isAdmin() ? null : h('button', { class: 'btn', type: 'button', text: 'Clear all tiles', onclick: function () { m.close(); S.tiles = S.tiles.map(function () { return null; }); tiles.forEach(function (t) { t.setCfg(null); }); saveSoon(); updateHint(); } }),
+        nativeDl() ? h('button', { class: 'btn', type: 'button', id: 'open-downloaded', text: 'Downloaded files...', onclick: function () { m.close(); openDownloaded(); } }) : null,
         window.MVApp ? h('button', { class: 'btn', type: 'button', text: 'Server address (TV app)...', onclick: function () { m.close(); window.MVApp.changeServer(); } }) : null,
         h('button', { class: 'btn', type: 'button', text: 'Restart all streams', onclick: function () { m.close(); tiles.forEach(function (t) { t.reload(); }); } }),
         h('button', { class: 'btn', type: 'button', text: 'Close', onclick: function () { m.close(); } })

@@ -83,3 +83,17 @@ test('the APK is read back (package, signed, versionName, versionCode, minSdk) b
   assert.match(androidJob, /is_signed\(\)/);
   assert.match(androidJob, /node scripts\/android-version\.js/);
 });
+
+test('phone downloads (P-32): the app saves to Movies/Multiview, only on phones and tablets', () => {
+  const main = read('android/app/src/main/java/app/iptvmultiview/tv/MainActivity.java');
+  const manifest = read('android/app/src/main/AndroidManifest.xml');
+  assert.match(main, /public boolean downloadSupported\(\)/);
+  assert.match(main, /UI_MODE_TYPE_TELEVISION/, 'a TV box says no');
+  assert.match(main, /FEATURE_TOUCHSCREEN/);
+  assert.match(main, /if \(ui == null\) return false;/, 'when it cannot tell, no buttons');
+  assert.match(main, /setDestinationInExternalPublicDir\(Environment\.DIRECTORY_MOVIES, "Multiview\//);
+  assert.match(main, /addRequestHeader\("Cookie"/, 'the download carries the login');
+  for (const m of ['downloadStart', 'downloadList', 'downloadPlay', 'downloadOpen', 'downloadDelete', 'localSeek']) assert.match(main, new RegExp('public \\w+ ' + m + '\\('));
+  assert.match(manifest, /WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28"/, 'only Android 9 and older ask');
+  assert.match(read('android/app/src/main/java/app/iptvmultiview/tv/LocalPlayer.java'), /DefaultDataSource\.Factory/, 'content:// files play');
+});
