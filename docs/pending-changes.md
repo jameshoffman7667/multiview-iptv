@@ -314,3 +314,20 @@ Decisions 2026-11-15 (James), second round: Fantasy Manager sends the projection
 Decisions 2026-11-15 (James), third round: an empty projection colour is drawn grey (like the player stat lines), not white. P-43 starts with screenshots only (vision model still to be chosen: Gemini or Claude); Juice Reel is parked for later (it needs an approved OAuth application; registration is at its OAuth applications settings page, see the reply of 2026-11-15).
 
 Decisions 2026-11-15 (James), fourth round: P-43 vision model is Gemini (key GEMINI_API_KEY in the server .env; use a billing-enabled project so slips are not used to improve Google products). Email arrives through Cloudflare Email Routing on bets.hoffmanhouse.ca with an Email Worker posting to the app.
+
+### P-48 - Settings menu: group like settings under collapsible headers, collapsed by default
+Requested: 2026-11-15 (James: "Clean up the settings menu, group like settings with collapsible headers, default collapsed")
+Type: minor        Status: Pending
+Notes / questions: proposed groups: Playback and buffering, Downloads, Fantasy ticker (size, position, speed, switches), Pop-ups, Layout and display, Account and devices, Admin. Remember which headers were opened? (proposal: all collapsed on every open, no memory). No setting is removed or renamed.
+
+### P-49 - Fire TV (Fire Stick) support check
+Requested: 2026-11-15 (James: "Will the current app work on a firestick? What would it take to make it?")
+Type: patch or minor (depends on test results)        Status: Blocked
+Notes / questions: the APK already declares leanback and the TV launcher (minSdk 24 = Fire OS 6 and newer). Open points: the Google Cast library (guard so it is skipped without Google Play services), key/remote handling and WebView version on the stick, and the Fire TV model (Vega OS sticks cannot run Android APKs). Need: Fire TV model and Fire OS version.
+
+### P-50 - Share a bet slip image to a WhatsApp group (future)
+Requested: 2026-11-15 (James: "Can the app send the image as a message to a whatsapp group...")
+Type: minor        Status: Blocked (future, after P-43)
+Notes / questions: see the reply; official WhatsApp Business API cannot post into an ordinary group; the practical route is the Android share sheet (user picks the group).
+
+Decisions 2026-11-15 (James), fifth round, P-43: any email address may send a slip, with an allow-list the admin edits in Settings (empty list = anyone, with the secret-address protection); screenshots have the stakes cut off; the Gemini key and the Cloudflare setup are done with Claude Code at deploy time, and the exact Cloudflare steps are given when P-43 is built; the live-stats plan (ESPN feed first, SportsBlaze backup) is approved. Sample slips received: FanDuel Same Game Parlay screenshots (NFL alt receptions/receiving yards/rushing yards; NHL points and shots on goal) show the format: a combined price (e.g. +645), the game, start time, and one row per leg with player, line and market. NHL legs appear too, so the stats source must cover NHL as well as NFL (the P-43 scope of NFL only is widened to "NFL and NHL player props", to confirm).
