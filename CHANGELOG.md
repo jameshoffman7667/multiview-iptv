@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.19.1 - 2026-11-15
+Live screens say when you are not live after the app was away (P-36).
+- **The problem:** closing the app (or a sleeping phone) freezes the page, so the video carried on from the old spot while the page still said "live": the bar was full and the LIVE button was red and did nothing.
+- **Now:** when the page notices it was away for 5 seconds or more (also after the app was closed completely and opened again), each live screen resumes that far behind live, as far as the server's rewind buffer reaches. The bar shows the offset (for example -1:15), the LIVE button is grey, and a banner says how far behind it is. Tap LIVE to catch up. Away for longer than the buffer: it goes live and says so.
+- **LIVE when red:** tapping the red LIVE button now reconnects to the live edge instead of doing nothing.
+- Paused screens, movies and the shared screen are left alone.
+- Tests: a browser test that simulates being away (resume 75 s behind, too long goes live, red LIVE reconnects).
+
+**Upgrading from 0.19.0:** pulling the image is enough. No compose or `.env` change. The change is in the page, so the Android app picks it up from the server (no new APK needed, though the new APK is built too).
+
 ## 0.19.0 - 2026-11-15
 The Android app manages its own downloads (P-35).
 - **No more endless pauses:** Android's download manager paused whenever a connection dropped and could not get a fresh ticket from the server. The app now downloads the files itself in the background: a dropped connection, a network change or an app restart carries on from where it stopped, with retries that back off up to 30 seconds and a new ticket when the old one went stale.

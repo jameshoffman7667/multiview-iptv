@@ -1871,11 +1871,55 @@
   function isBehind(t) { return !!t && !!t.cfg && !t.cfg.vod && (!!t.userPaused || (t.back || 0) >= 3); }
   function goLive() {
     var t = curTile();
-    if (!t || !t.cfg || t.cfg.vod || sharedOn() || !isBehind(t)) return;
+    if (!t || !t.cfg || t.cfg.vod || sharedOn()) return;
+    if (!isBehind(t)) { t.start(); banner('Reconnecting to live', 2000); return; }   // the page thinks it is live; make sure it is
     t.back = 0;
     t.userPaused = false;
     t.start();
     ovlSync();
+  }
+  // ---- away from the screen (P-36): when the app is closed or the phone sleeps the page is frozen and the video carries on from
+  // where it stopped. A heartbeat notices the jump in time (also across a restart of the app, through localStorage) and counts the
+  // time away as time behind live, as far as the server's rewind buffer reaches: the bar and the grey LIVE button then say so.
+  var ALIVE_KEY = 'mv.alive.v1';
+  var alive = { last: 0, n: 0, timer: null };
+  function aliveStart() {
+    if (alive.timer) return;
+    var stored = 0;
+    try { stored = Number(localStorage.getItem(ALIVE_KEY)) || 0; } catch (e) { stored = 0; }
+    alive.last = stored > 0 && stored < Date.now() ? stored : Date.now();
+    alive.timer = setInterval(function () {
+      var now = Date.now();
+      var gap = (now - alive.last) / 1000;
+      alive.last = now;
+      if (gap >= 5 && ME) awayFor(gap);
+      if (++alive.n % 5 === 0) { try { localStorage.setItem(ALIVE_KEY, String(now)); } catch (e) { /* private mode */ } }
+    }, 1000);
+  }
+  function awayFor(gap) {
+    if (sharedOn()) return;
+    tiles.forEach(function (t) {
+      var c = t.cfg;
+      if (!c || c.vod || t.local || t.userPaused || !t.visible) return;
+      api('/api/rewind/' + enc(c.p) + '/' + enc(c.sid)).then(function (r) {
+        if (t.cfg !== c || t.userPaused) return;
+        var avail = r.seconds || 0;
+        t.avail = avail;
+        t.availMax = r.max || 0;
+        t.availAt = Date.now();
+        var back = (t.back || 0) + gap;
+        if (back < 3) return;
+        if (back > avail) {                                   // further back than the server recorded: the old spot is gone
+          if ((t.back || 0) > 0) { t.back = 0; t.start(); }
+          banner('Away too long for the rewind buffer - back to live', 4000);
+          return;
+        }
+        t.back = Math.round(back);
+        t.start();
+        banner('Back after ' + fmtDur(Math.round(gap)) + ': ' + (t.name || c.name || 'this screen') + ' is ' + fmtDur(t.back) + ' behind live - tap LIVE to catch up', 6000);
+        ovlSync();
+      }, noop);
+    });
   }
   function liveSeek(t, back) {
     var avail = t.avail || 0;
@@ -4556,6 +4600,7 @@
   function enter(me) {
     banner('');
     ME = { admin: !!me.admin, user: me.user, open: !!me.open, authRequired: !!me.authRequired };
+    aliveStart();
     if (nativeDl()) { nativeCfg(); nativePoll(); }                  // downloads that went on while the app was closed
     document.body.classList.toggle('viewer', !ME.admin);
     sideSync();
@@ -4594,5 +4639,5 @@
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init); else init();
 
   // test hook (harmless in production)
-  window.__mv = { fpReload: fpReload, updateReady: updateReady, ovlShow: ovlShow, ovlHide: ovlHide, get ovl() { return ovl; }, get side() { return side; }, castState: castState, openRecordings: openRecordings, get S() { return S; }, get ME() { return ME; }, applyView: applyView, tiles: tiles, LAYOUTS: LAYOUTS, setLayout: setLayout, select: select, assign: assign, toggleZoom: toggleZoom, sharedApply: sharedApply, get shared() { return shared; }, get zoom() { return zoom; }, get modals() { return modals.length; }, get FP() { return FP; }, fpIncoming: fpIncoming, fpTest: fpTest, get FT() { return FT; }, diagVerdict: diagVerdict, diagReport: diagReport, openDiag: openDiag, ftSet: ftSet, ftCheck: function () { ftMeasure(); ftCheck($('#ft-view')); } };
+  window.__mv = { away: awayFor, fpReload: fpReload, updateReady: updateReady, ovlShow: ovlShow, ovlHide: ovlHide, get ovl() { return ovl; }, get side() { return side; }, castState: castState, openRecordings: openRecordings, get S() { return S; }, get ME() { return ME; }, applyView: applyView, tiles: tiles, LAYOUTS: LAYOUTS, setLayout: setLayout, select: select, assign: assign, toggleZoom: toggleZoom, sharedApply: sharedApply, get shared() { return shared; }, get zoom() { return zoom; }, get modals() { return modals.length; }, get FP() { return FP; }, fpIncoming: fpIncoming, fpTest: fpTest, get FT() { return FT; }, diagVerdict: diagVerdict, diagReport: diagReport, openDiag: openDiag, ftSet: ftSet, ftCheck: function () { ftMeasure(); ftCheck($('#ft-view')); } };
 })();

@@ -1506,6 +1506,33 @@ describe('player overlay, pull-out menu, recordings, PWA', () => {
     await ctx.close();
   });
 
+  test('after being away (app closed, phone asleep) a live screen resumes behind live, as far as the rewind buffer reaches, and says so', async () => {
+    const { ctx, page, errors } = await open(one);
+    await page.waitForFunction(() => window.__players.length === 1);
+    await page.route('**/api/rewind/**', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ seconds: 300, max: 900 }) }));
+    const n0 = await page.evaluate(() => window.__players.length);
+    await page.evaluate(() => window.__mv.away(75));
+    await page.waitForFunction((k) => window.__players.length === k + 1, n0);
+    assert.match(await page.evaluate(() => window.__players[window.__players.length - 1].ds.url), /&back=75$/);
+    assert.match(await page.textContent('#banner'), /Back after 1:15.*1:15 behind live - tap LIVE/);
+    await tap(page, 0);
+    assert.equal(await page.evaluate(() => document.getElementById('ov-live').classList.contains('behind')), true, 'grey LIVE: it is obvious it is not live');
+    assert.match(await page.textContent('#ov-time'), /^-1:15$/);
+    // further back than the server recorded: live again
+    const n1 = await page.evaluate(() => window.__players.length);
+    await page.evaluate(() => window.__mv.away(400));
+    await page.waitForFunction((k) => window.__players.length === k + 1, n1);
+    assert.doesNotMatch(await page.evaluate(() => window.__players[window.__players.length - 1].ds.url), /back=/);
+    assert.match(await page.textContent('#banner'), /Away too long/);
+    // the red LIVE button reconnects instead of doing nothing
+    const n2 = await page.evaluate(() => window.__players.length);
+    await page.click('#ov-live');
+    await page.waitForFunction((k) => window.__players.length === k + 1, n2);
+    assert.match(await page.textContent('#banner'), /Reconnecting to live/);
+    assert.deepEqual(errors.filter((e) => !/ERR_|aborted/i.test(e)), []);
+    await ctx.close();
+  });
+
   test('play/pause, skip, progress bar and volume act on the selected tile; rewind restarts the stream behind live', async () => {
     const { ctx, page, errors } = await open(one);
     await page.waitForFunction(() => window.__players.length === 1);

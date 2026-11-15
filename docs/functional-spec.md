@@ -1,4 +1,4 @@
-# IPTV Multiview - functional spec (current state, v0.19.0)
+# IPTV Multiview - functional spec (current state, v0.19.1)
 
 Edited in place on every release; it describes what the app does now, not its history (see `CHANGELOG.md`).
 
@@ -13,6 +13,7 @@ A self-hosted relay and browser UI for Xtream Codes IPTV providers. One shared p
 - **Settings** (per device, in the browser): buffer, keep-behind, stream delivery (WebSocket or HTTP), fit/fill, shared screen quality, failover, small tiles prefer SD, Auto quality for all channels, web workers, stats, channel names, programme guide, **Theme (System / Light / Dark)**.
 - **Theme** - default System (follows the device); Light and Dark override it. Applies to menus, dialogs and lists; the video area is black in every theme.
 - **Channel picker** - search, categories, favourites, programme-guide grid with programme search, movies and series from the provider, capture cards as channels.
+- **Away from the screen (P-36)** - a one-second heartbeat in the page (saved to `localStorage` `mv.alive.v1` every 5 s) notices when the page was frozen or the app restarted (a gap of 5 s or more). Each live screen then restarts that many seconds behind live (on top of any rewind it already had), as far as the server's rewind buffer holds (`/api/rewind/<provider>/<id>`); further back than the buffer it goes live. A banner says "Back after 1:15: Channel is 1:15 behind live - tap LIVE to catch up", the bar shows the offset and the LIVE button is grey. Paused screens, VOD and shared screens are left alone. Tapping the red LIVE button while the page thinks it is live reconnects to the live edge instead of doing nothing.
 - **Mini player** - Picture-in-Picture: Android app PiP, Document PiP, or a single-video PiP.
 - **PWA** - installable; service worker caches only the app shell (page, scripts, styles, icons, offline page); never video, API answers, recordings, casts or login pages.
 

@@ -5,7 +5,7 @@ Requests logged here are not built yet. Say "build" to fold them into a new vers
 With every push, say whether the compose/stack file must change or whether pulling the new image is enough.
 Every build rewrites deploy/RELEASE.md using the FULL template of the app spec (section 8: Update, Image, Short, Long, Release commit, Type, Port, Public hostname, env vars, Data, Resources, Healthcheck, Verify, PWA, Docker build, Rollback naming the exact previous tag, Known issues, Backup tier). Server tests use `wget` (no curl on vm101). The server's real stack file is the homelab repo's stacks/multiview-iptv/compose.yaml (stack.yml here is only a reference); never tell anyone to update the Dockhand stack. Fixed `Update:` line: `Update: now` only when the user said "build, push and update" for that release, otherwise `Update: later`.
 
-Current released version: 0.19.0 (being pushed)
+Current released version: 0.19.1 (being pushed)
 
 ### P-1 - Rebuild the on-screen menu as a traditional video player overlay
 Requested: 2026-10-18. Tap any screen (single view or multiview) to show a full-screen overlay over everything:
@@ -245,6 +245,7 @@ Decided 2026-11-15 (James): "Build B" (the app's own downloader), push and updat
 
 ### P-36 - After the app was closed, live screens show "live" but play old video; LIVE button does nothing
 Requested: 2026-11-15 (James: closing the app while watching TV and coming back resumes from where it was closed, which is good, but the progress bar shows up to date, the LIVE button is red and does nothing when tapped)
-Type: patch (bug)   Status: Pending
+Type: patch (bug)   Status: Built in 0.19.1
 Notes: cause found in the code: the app freezes the page when it is closed or backgrounded, so the video carries on from the old spot, but the page still thinks it is live (rewind offset 0). The red LIVE button means "watching live" (it turns grey and tappable only when the page knows it is behind), and tapping it while "live" is ignored. Fix: when the app comes back after 5 s or more, count the time away as rewind (like pausing already does: the same gap rule), so the bar shows how far behind you are, the LIVE button turns grey and jumps to live; keep resuming from the spot. Also make the red LIVE button resync to the live edge when tapped, instead of doing nothing. The app also tells the page when it pauses and resumes (the page cannot always see it). Question: when you come back after a long time (hours), is resuming from the old spot still wanted, or should it go live after, say, 30 minutes away?
 Decided 2026-11-15 (James): resume from the old spot for as long as the server's rewind buffer still has it (no fixed time limit; past the buffer it goes live), and it must be obvious that the screen is not live when the page loads: LIVE button grey with a "behind" label and the bar showing the offset from the first frame. Status stays Pending until James says build.
+Built 2026-11-15 in 0.19.1. A one-second heartbeat in the page notices a jump in time (app closed, phone asleep, or a restart of the app through localStorage `mv.alive.v1`, which is saved every 5 s). Not tested on a real phone or Shield.
