@@ -269,3 +269,38 @@ Notes: the bar at the bottom (progress, Manage) is shown for 3 s when a download
 Requested: 2026-11-15 (James: "my first download went way past 100% and gives a playback error when trying to play")
 Type: patch (bug)   Status: Pending
 Notes: not reproduced (no device here). The percentage text is not capped, so it only shows what the app counted: more bytes written than the size the server announced, which also means the saved file is not the right file. Suspects in the downloader: the part file written by two connections at once after Pause then Resume, or after a drop, or a total that was wrong. Proposed: one writer per file (a generation check), a size check at the end (more or fewer bytes than announced: delete the part file and retry once, then fail with a clear message instead of "done"), cap the shown percentage at 100, show the last server answer and the number of reconnects per file with a Copy report button, and say why playback failed (and offer Open with). Questions: (a) the file type (mp4 or mkv)? (b) does the file play in another player (VLC) via Open with? (c) was the download paused, resumed or dropped along the way?
+
+### P-41 - Ticker size options (current size becomes "Large")
+Requested: 2026-11-15 (James: "Give size options for the ticker as well, current should be the large size")
+Type: minor (new setting)   Status: Pending
+Notes: Settings > ticker gets Small / Medium / Large (per device); Large is today's size (56 px bar, 48 px on phones) and the default, so nothing changes until chosen. Question: Small about 70% and Medium about 85% of Large?
+
+### P-42 - Ticker parts: fantasy and betting on/off, alternating when both are on
+Requested: 2026-11-15 (James: options to turn the fantasy or betting ticker components on or off; if both are on, go back and forth between them)
+Type: minor (new setting)   Status: Pending (the betting part waits for P-43)
+Notes: two switches in Settings (Fantasy scores, Bets). One on: the ticker shows only that part. Both on: it alternates, one full pass of the tape each (or every N seconds, your choice). Question: alternate after each full pass of the tape, or on a timer (for example 30 s)? The Bets switch appears once P-43 exists.
+
+### P-43 - Share a FanDuel bet by email; the app tracks it in the ticker
+Requested: 2026-11-15 (James: "Add an option to share a fan duel bet to an email address, and the app will track the bet in the ticker as well")
+Type: minor (large, new integration)   Status: Blocked (waiting on answers)
+Notes: needs three things the app does not have yet. (1) Receiving mail: the app only sends mail (SMTP2GO). Options: a dedicated mailbox the server checks (IMAP, for example a Gmail address with an app password, kept in the server .env), or Cloudflare Email Routing to a small webhook on the app. (2) Reading the bet from what FanDuel sends: the share email or link must carry the legs (player, stat line, over/under, odds, stake); FanDuel has no public API, so this is parsing a message and its format may change. (3) Live results: each leg needs live stats; Fantasy Manager's NFL feed may cover players and yards/receptions/touchdowns, but not every FanDuel market (alt lines, parlays with game totals, other sports). Safe handling: stored bets are text only (no FanDuel login ever), shown to admins only. Questions: (a) which mailbox can receive the share (a Gmail address you own, or an address on hoffmanhouse.ca)? (b) please forward one real shared-bet email (hide anything private) so I can see what it contains; (c) which bets matter most: NFL player props, parlays, anything else? (d) shown only to admins like the fantasy ticker?
+
+### P-44 - Shrink the ticker more in mini player mode
+Requested: 2026-11-15 (James)
+Type: patch (small)   Status: Pending
+Notes: when the app is in the floating mini player (picture-in-picture) the ticker gets about half its height, smaller text, and fewer details (scores and the pinned league name only).
+
+### P-45 - Pop-up size setting makes little difference
+Requested: 2026-11-15 (James: "The size setting for the pop ups doesn't seem to make much difference")
+Type: patch (bug)   Status: Pending
+Notes: cause found: the pop-up is capped to the screen width (about 1240 px wide at 100%), so on a phone every size hits the same cap. Fix: design the pop-up at a narrower base so Small / Medium / Large visibly differ on phones too (and Large may use the full width), and make the sample pop-up use the chosen size. Question: on your phone, roughly what widths do you want: Small about half the screen, Medium about three quarters, Large the full width?
+
+### P-46 - Ticker: total projection replaces the team names once they disappear
+Requested: 2026-11-15 (James: once the team names disappear under the scores, replace them with the total projection)
+Type: minor   Status: Pending
+Notes: the data already carries each team's projection (`projected`) but the ticker does not draw it yet. Under each pinned league's scores, the team names fade out as today, then the team's total projection fades in. Question: what colour rules for team projection (so P-47 can use the same)? Proposal: green when my projection is above the opponent's, red when below, white when equal; the opponent's shown the opposite way.
+
+### P-47 - Ticker: each player's projection under his current score
+Requested: 2026-11-15 (James: put the player's current projection below the current score, coloured with the same rules as the team projection)
+Type: minor   Status: Pending
+Notes: depends on P-46's colour rules. Player projection is in the data (`projected` per player). Proposal for players: green when the projection is at or above the points so far plus what the player is expected to still add... simplest rule: green when projection is above the points scored now (on pace), red when the points scored are already below the pace of the projection by a set margin; to confirm with the team rule.
