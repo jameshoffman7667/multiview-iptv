@@ -5,7 +5,7 @@ Requests logged here are not built yet. Say "build" to fold them into a new vers
 With every push, say whether the compose/stack file must change or whether pulling the new image is enough.
 Every build rewrites deploy/RELEASE.md using the FULL template of the app spec (section 8: Update, Image, Short, Long, Release commit, Type, Port, Public hostname, env vars, Data, Resources, Healthcheck, Verify, PWA, Docker build, Rollback naming the exact previous tag, Known issues, Backup tier). Server tests use `wget` (no curl on vm101). The server's real stack file is the homelab repo's stacks/multiview-iptv/compose.yaml (stack.yml here is only a reference); never tell anyone to update the Dockhand stack. Fixed `Update:` line: `Update: now` only when the user said "build, push and update" for that release, otherwise `Update: later`.
 
-Current released version: 0.16.0 (being pushed)
+Current released version: 0.16.1 (being pushed)
 
 ### P-1 - Rebuild the on-screen menu as a traditional video player overlay
 Requested: 2026-10-18. Tap any screen (single view or multiview) to show a full-screen overlay over everything:
@@ -221,3 +221,8 @@ Decided 2026-11-14 (James): (1) everyone who can open a title may download by de
 Requested: 2026-11-14 (James: hide the buttons in the TV app for now, "note as a future enhancement")
 Type: minor (native Android work)   Status: Pending (future)
 Notes: the TV app's web view cannot save files without native code (a DownloadListener and a storage location, or the Android DownloadManager). Decide where files go (Shield storage is small) and whether it is wanted at all. Not before P-31 is built and used.
+
+### P-33 - Attach only the versioned APK to releases (F-Droid duplicate)
+Requested: 2026-11-14 (James, from the server: fdroid update failed on v0.16.0 with "multiview-iptv-0.16.0.apk is a duplicate of iptv-multiview.apk", which blocks the index for all apps)
+Type: patch (release pipeline)   Status: Built in 0.16.1
+Notes: only multiview-iptv-<version>.apk is uploaded (release run and android_only run); README no longer links iptv-multiview.apk; old releases and tags untouched (James removes the old asset himself); applicationId, versionCode rule and signing unchanged.

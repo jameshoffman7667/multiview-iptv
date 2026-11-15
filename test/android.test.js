@@ -48,11 +48,13 @@ test('package id never changes and the gradle version code comes from the workfl
   assert.match(gradle, /minSdk 2[4-9]/);
 });
 
-test('release APK name: multiview-iptv-<version>.apk is uploaded, the old iptv-multiview.apk stays for the README link', () => {
+test('release APK name: only multiview-iptv-<version>.apk is uploaded (a second copy breaks fdroid update)', () => {
   assert.match(androidJob, /APP: multiview-iptv/);
   assert.match(androidJob, /"\$APP-\$VERSION\.apk"/);
-  assert.match(androidJob, /gh release upload "\$TAG" "\$APK" iptv-multiview\.apk --clobber/);
-  assert.match(read('README.md'), /iptv-multiview\.apk/);
+  assert.match(androidJob, /gh release upload "\$TAG" "\$APK" --clobber/);
+  assert.doesNotMatch(wf, /cp "\$APK" iptv-multiview\.apk/);
+  assert.doesNotMatch(androidJob, /gh release upload[^\n]*iptv-multiview\.apk/);
+  assert.doesNotMatch(read('README.md'), /iptv-multiview\.apk/, 'the README no longer points at the old file name');
   assert.match(read('README.md'), /multiview-iptv-<version>\.apk/);
 });
 

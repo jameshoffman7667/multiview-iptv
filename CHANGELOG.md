@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.16.1 - 2026-11-14
+Releases now carry only one APK, so the F-Droid index builds again.
+- **One file:** the release gets `multiview-iptv-<version>.apk` and nothing else. The extra copy `iptv-multiview.apk` made `fdroid update` stop with "is a duplicate", which blocked the index for every app. Both the normal release run and an `android_only` rebuild upload just the versioned file.
+- **README:** the Shield install steps point at the F-Droid repo (Droid-ify or Neo Store) or at the versioned file on the release page. The fixed `releases/latest/download/iptv-multiview.apk` link is gone, because a latest link needs a fixed name.
+- No change to the server, the web app, the compose file, `.env`, the applicationId, the versionCode rule or the signing key. Old releases and tags are untouched.
+
+**Upgrading from 0.16.0:** pulling the image is enough.
+
 ## 0.16.0 - 2026-11-14
 Download buttons for movies, episodes and whole seasons (P-31).
 - **Buttons:** in the Change channel popup every movie (Movies tab) and every episode has a download button; the episode list has "Download this season (N episodes)" for the season you are viewing. File names look like `Show - S01E03 - Title`. Live and Guide items have none. The Android TV app hides them (native TV downloads are logged as P-32).

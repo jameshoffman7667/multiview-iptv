@@ -1,4 +1,4 @@
-# IPTV Multiview - functional spec (current state, v0.16.0)
+# IPTV Multiview - functional spec (current state, v0.16.1)
 
 Edited in place on every release; it describes what the app does now, not its history (see `CHANGELOG.md`).
 
@@ -64,7 +64,7 @@ A self-hosted relay and browser UI for Xtream Codes IPTV providers. One shared p
 - **Package id:** `app.iptvmultiview.tv` (never changes). versionName = the release version.
 - **versionCode** = `MAJOR*100000000 + MINOR*10000 + PATCH` (`scripts/android-version.js`; the job fails above MINOR/PATCH 9999 or MAJOR 20). It replaced `MAJOR*10000 + MINOR*100 + PATCH` in 0.15.0 and is higher than the old code for every version (0.14.0 was 1400, 0.15.0 is 150000). 0.15.0 is 150000.
 - **Signing:** only the release key (alias `multiview`) from the repository secrets `ANDROID_KEYSTORE_B64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, `ANDROID_KEY_PASSWORD`. Never a debug key: without all four secrets the `android` job skips with a green notice listing the missing names, and `build.gradle` refuses to build a release APK without the key. Switching from the old debug-signed APK needs one uninstall and reinstall on the Shield.
-- **Release files:** `multiview-iptv-<version>.apk` (what the F-Droid updater downloads) and `iptv-multiview.apk` (same file, the README's Downloader link) on the `vX.Y.Z` release. The job runs after the image is published, so it never blocks the Docker release. It reads the APK back (package id, signed, versionName, versionCode, minSdk 24 or more) before it uploads.
+- **Release files:** only `multiview-iptv-<version>.apk` (what the F-Droid updater downloads) on the `vX.Y.Z` release. A second copy under another name (the old `iptv-multiview.apk`, dropped in 0.16.1) makes `fdroid update` fail with "is a duplicate", so none is attached; both the release run and an `android_only` run upload just this one file. The job runs after the image is published, so it never blocks the Docker release. It reads the APK back (package id, signed, versionName, versionCode, minSdk 24 or more) before it uploads.
 - **Rebuild an APK only** (a build that failed or an APK nobody has installed): Actions > Build and push image > Run workflow with *android_only* on, *tag* = the existing tag (e.g. `v0.15.0`, empty = the version in package.json) and *overwrite* off. It refuses to replace an APK already attached to the release unless *overwrite* is on (only if the F-Droid updater has not downloaded it). The versionCode does not change on a rebuild, so a crash already on the Shield needs a patch release.
 - **Known limits:** the first F-Droid APK is untested until James confirms it installs and opens on the Shield. If it breaks, get a logcat (`adb logcat -b crash`) before changing anything.
 

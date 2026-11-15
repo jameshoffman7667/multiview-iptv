@@ -21,16 +21,16 @@ Open `http://<server-ip>:1234` on the PC, and the same address in the Android TV
 
 First run opens the **Providers** window: enter the server URL, username and password from your provider and press **Test**. It reads how many connections your plan allows and fills that in. Add as many providers as you like. Then pick a tile, press Enter (or click it) and choose a channel.
 
-**Dockhand / prebuilt image:** create a stack from `stack.yml` (it uses `mybadreligon/multiview-iptv:0.16.0` from Docker Hub). Add `ADMIN_USER` / `ADMIN_PASSWORD` under environment if the port is reachable beyond your LAN.
+**Dockhand / prebuilt image:** create a stack from `stack.yml` (it uses `mybadreligon/multiview-iptv:0.16.1` from Docker Hub). Add `ADMIN_USER` / `ADMIN_PASSWORD` under environment if the port is reachable beyond your LAN.
 
 Without Docker: `node src/server.js` (Node 20+, no packages to install). Settings are stored in the `/data` volume (`providers.json`, channel list cache).
 
 ## Android TV / Nvidia Shield app
 
-Each release has an APK on the GitHub releases page, once under the name `multiview-iptv-<version>.apk` (the one the F-Droid repo downloads) and once as `iptv-multiview.apk` (the same file, for the Downloader link below): a full-screen web view around this same page, with a TV launcher icon. Install it on the Shield from your F-Droid repo with Droid-ify or Neo Store, or by sideloading:
+Each release has an APK on the GitHub releases page, named `multiview-iptv-<version>.apk` (the file your F-Droid repo downloads): a full-screen web view around this same page, with a TV launcher icon. Install it on the Shield from your F-Droid repo with Droid-ify or Neo Store. To sideload instead, download that file from the release page:
 
 1. On the Shield: Settings > Device Preferences > Security & restrictions > *Unknown sources* > allow **Downloader** (install the free *Downloader* app from the Play Store first).
-2. Open Downloader and enter `https://github.com/jameshoffman7667/multiview-iptv/releases/latest/download/iptv-multiview.apk`, then Install.
+2. Open Downloader and enter the address of `multiview-iptv-<version>.apk` on the release page (for example `https://github.com/jameshoffman7667/multiview-iptv/releases/download/v0.16.1/multiview-iptv-0.16.1.apk`), then Install.
 3. Start *IPTV Multiview*. The first time it asks for the address of your server (for example `192.168.1.20:1234`, the machine running the container). It is remembered. To change it later: Settings in the app > *Server address (TV app)*, or press Menu on a remote that has one.
 
 The remote works like a keyboard: arrows move between tiles, OK brings up the controls on the selected screen, Back closes windows (and exits at the top level). You log in on the TV once and it stays logged in.

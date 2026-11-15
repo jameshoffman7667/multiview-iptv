@@ -118,8 +118,8 @@ jobs:
   # Android TV / Nvidia Shield app (native, package app.iptvmultiview.tv). Built after the image is published so a problem here
   # never blocks the Docker release. Always signed with the release key from the repository secrets; it is skipped (green, with a
   # notice naming the missing secrets) when they are not all set, and never signed with a debug key.
-  # The APK is named multiview-iptv-<version>.apk (what the F-Droid updater downloads); iptv-multiview.apk is the same file
-  # under the old name for the README's Downloader link.
+  # The only APK attached to a release is multiview-iptv-<version>.apk (what the F-Droid updater downloads). A second copy under
+  # another name makes `fdroid update` fail with "is a duplicate", so none is uploaded.
   android:
     needs: [meta, image]
     if: ${{ always() && (needs.image.result == 'success' || (github.event_name == 'workflow_dispatch' && inputs.android_only)) }}
@@ -237,7 +237,7 @@ jobs:
           APK="$APP-$VERSION.apk"
           awk -v v="$VERSION" '$0 ~ "^## " v " " {f=1; next} /^## / {f=0} f' CHANGELOG.md > notes.md
           [ -s notes.md ] || echo "IPTV Multiview $VERSION" > notes.md
-          printf '\nAndroid TV / Nvidia Shield app: `%s` (F-Droid repo) or `iptv-multiview.apk` (same file, for sideloading, see the README).\n' "$APK" >> notes.md
+          printf '\nAndroid TV / Nvidia Shield app: `%s` (install it from the F-Droid repo, see the README).\n' "$APK" >> notes.md
           gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --target "$GITHUB_SHA" --title "$TAG" --notes-file notes.md
           # overwrite guard: the F-Droid updater may already have downloaded an APK with this name
           if gh release view "$TAG" --json assets --jq '.assets[].name' | grep -qx "$APK"; then
@@ -247,5 +247,4 @@ jobs:
             fi
             echo "::warning::Replacing $APK on $TAG (overwrite=true)"
           fi
-          cp "$APK" iptv-multiview.apk
-          gh release upload "$TAG" "$APK" iptv-multiview.apk --clobber
+          gh release upload "$TAG" "$APK" --clobber
