@@ -58,7 +58,9 @@ function cleanSummary(raw) {
   const str = (x, n) => String(x == null ? '' : x).slice(0, n);
   const colour = (c) => (c === 'green' || c === 'amber' || c === 'red' ? c : '');
   const status = (x) => (x === 'pre' || x === 'live' || x === 'final' ? x : 'pre');
-  const team = (t) => ({ name: str(t && t.name, 40), points: num(t && t.points), projected: num(t && t.projected) });
+  const opt = (x) => (x === null || x === undefined || x === '' || !Number.isFinite(Number(x)) ? null : Number(x));
+  // Fantasy Manager 4.20: `projected` is the expected final; `projection` is the pregame number; `projectedColour` comes with it
+  const team = (t) => ({ name: str(t && t.name, 40), points: num(t && t.points), projected: num(t && t.projected), projection: opt(t && t.projection), projectedColour: colour(t && t.projectedColour) });
   const statKeys = ['passCmp', 'passAtt', 'passYds', 'passTd', 'int', 'rushAtt', 'rushYds', 'rushTd', 'rec', 'recYds', 'recTd', 'fgm', 'xpm', 'sacks'];
   const leagues = raw.leagues.slice(0, 30).map((l) => ({
     leagueId: str(l.leagueId, 40),
@@ -77,6 +79,7 @@ function cleanSummary(raw) {
         slot: str(p.slot, 12), slotOrder: Number.isFinite(Number(p.slotOrder)) && p.slotOrder !== null ? Number(p.slotOrder) : 99,
         kickoffAt: p.kickoffAt ? str(p.kickoffAt, 30) : null,
         points: num(p.points), projected: num(p.projected),
+        projection: opt(p.projection), liveProjection: opt(p.liveProjection), projectedColour: colour(p.projectedColour),
         gameStatus: status(p.gameStatus), gameClock: p.gameClock ? str(p.gameClock, 20) : '',
         stats,
       };

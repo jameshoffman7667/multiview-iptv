@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.20.0 - 2026-11-15
+Phone downloads tidied and fixed, ticker sizes and projections, grouped Settings, and direct streams reported to the server (P-39, P-40, P-41, P-44, P-45, P-46, P-47, P-48, P-51, P-52).
+- **Downloads bar (P-39):** shows for 3 seconds when a download is added, finishes or fails, then hides so the bottom menu is free. Progress lives in a new "On this phone" section at the top of Recordings & Downloads (same Pause, Resume, Cancel, Retry, Play, Open with, Delete buttons).
+- **Downloads past 100% (P-40, Android app):** one writer per file, the size checked at the end (a wrong size is deleted and retried once, then fails with a clear message instead of "done"), no transparent gzip, Range answers verified, progress capped at 100%, the same movie cannot be queued twice. New "Copy report" button on each download with the server's answers (no credentials) so a repeat can be diagnosed.
+- **Ticker size (P-41):** Settings > Small, Medium or Large (default, today's size). **Mini player (P-44):** the ticker becomes a thin strip with league name and scores.
+- **Pop-up size (P-45):** on narrow screens Small, Medium and Large now really differ (about half, three quarters and the full width).
+- **Projections (P-46, P-47):** needs Fantasy Manager 4.20.0. Under each score, once the team names fade, the team's expected final; under each player's score his projection (pregame before kickoff, live while playing, pregame after the final), coloured as Fantasy Manager sends it, grey when it sends none.
+- **Settings (P-48):** grouped under collapsible headers, collapsed on open, remembered while the page stays open, with Collapse all and Expand all.
+- **Change channel menu (P-51):** resumes where it was left; on Live and Guide it opens at the channel on that screen when that changed since the menu was last used.
+- **Direct streams (P-52):** pages that play direct from the provider report them every 15 s; the server counts them (expire after 45 s) in the Providers window and in the rule that keeps a connection free for downloads. Advisory only.
+- Tests: new unit tests (direct reports, summary fields, downloader rules) and browser tests for each page change.
+
+**Upgrading from 0.19.1:** pulling the image is enough. No compose or `.env` change. The page changes reach the Android app from the server; the downloader fixes (P-40) need the new APK, which CI builds. The ticker colours need Fantasy Manager 4.20.0 (older versions show grey).
+
 ## 0.19.1 - 2026-11-15
 Live screens say when you are not live after the app was away (P-36).
 - **The problem:** closing the app (or a sleeping phone) freezes the page, so the video carried on from the old spot while the page still said "live": the bar was full and the LIVE button was red and did nothing.

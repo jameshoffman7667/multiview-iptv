@@ -51,7 +51,22 @@ class Downloader {
         boolean stop;                   // asked to pause or cancel: the worker leaves
         boolean cancel;
         int fails;                      // attempts in a row without progress
+        int gen;                        // which worker owns the part file (only the newest may write)
+        int reconnects, restarts, badSize;
+        String log = "";                // the last server answers, for the Copy report button
         Thread worker;
+    }
+
+    private static void note(Item it, String line) {
+        String l = it.log + line + "\n";
+        it.log = l.length() > 1800 ? l.substring(l.length() - 1800) : l;
+    }
+
+    private static String report(Item it) {
+        return "Multiview download report\nName: " + it.name + "\nId: " + it.sid + " (provider " + it.p + ")\nState: " + it.state
+                + (it.reason.isEmpty() ? "" : " - " + it.reason) + "\nBytes: " + it.done + " of " + it.total
+                + "\nReconnects: " + it.reconnects + ", restarts from zero: " + it.restarts + ", size mismatches: " + it.badSize
+                + "\nLast server answers:\n" + it.log;
     }
 
     private final Context ctx;
@@ -78,6 +93,7 @@ class Downloader {
     synchronized void add(String origin, JSONArray list) throws Exception {
         for (int i = 0; i < list.length(); i++) {
             JSONObject o = list.getJSONObject(i);
+            if (isBusy(o.getString("p"), o.getString("sid"))) continue;     // the same file twice would only compete with itself
             Item it = new Item();
             it.id = Long.toHexString(System.nanoTime()) + Integer.toHexString(i);
             it.origin = origin;
@@ -90,6 +106,13 @@ class Downloader {
         }
         save();
         pump();
+    }
+
+    private boolean isBusy(String p, String sid) {
+        for (Item x : items) {
+            if (x.p.equals(p) && x.sid.equals(sid) && !x.state.equals("done") && !x.state.equals("failed")) return true;
+        }
+        return false;
     }
 
     synchronized void pause(String id) {
@@ -135,8 +158,9 @@ class Downloader {
                 o.put("name", it.name);
                 o.put("state", it.state);
                 o.put("reason", it.reason);
-                o.put("done", it.done);
+                o.put("done", it.total > 0 ? Math.min(it.done, it.total) : it.done);
                 o.put("total", it.total);
+                o.put("report", report(it));
                 o.put("speed", it.speed);
                 out.put(o);
             }
@@ -161,9 +185,9 @@ class Downloader {
     synchronized int percent() {
         long d = 0, t = 0;
         for (Item it : items) {
-            if (it.state.equals("running") || it.state.equals("waiting") || it.state.equals("queued")) { d += it.done; t += it.total; }
+            if (it.state.equals("running") || it.state.equals("waiting") || it.state.equals("queued")) { d += it.total > 0 ? Math.min(it.done, it.total) : it.done; t += it.total; }
         }
-        return t > 0 ? (int) (100 * d / t) : 0;
+        return t > 0 ? (int) Math.min(100, 100 * d / t) : 0;
     }
 
     // ---- scheduling ----
@@ -198,11 +222,12 @@ class Downloader {
         it.stop = false;
         it.state = "running";
         it.reason = "";
+        final int g = ++it.gen;
         it.worker = new Thread() {
             @Override
             public void run() {
                 try {
-                    work(it);
+                    work(it, g);
                 } catch (Throwable t) {
                     finish(it, "failed", "Stopped: " + t.getClass().getSimpleName());
                 }
@@ -279,10 +304,14 @@ class Downloader {
         return !(it.stop || it.cancel);
     }
 
-    private void work(Item it) throws Exception {
+    private boolean stale(Item it, int g) {
+        return it.stop || it.cancel || it.gen != g;
+    }
+
+    private void work(Item it, int g) throws Exception {
         File part = part(it);
         synchronized (this) { it.done = part.exists() ? part.length() : 0; }
-        while (!it.stop && !it.cancel) {
+        while (!stale(it, g)) {
             if (!online()) { set(it, "waiting", "Waiting for a network connection"); if (!nap(it, 3000)) return; continue; }
             if (wifiOnly && !onWifiOrWired()) { set(it, "waiting", "Waiting for Wi-Fi (Wi-Fi only is on)"); if (!nap(it, 3000)) return; continue; }
             if (it.fails > 40) { finish(it, "failed", "Gave up after repeated errors - tap Retry"); return; }
@@ -307,15 +336,19 @@ class Downloader {
             }
             int code;
             HttpURLConnection c = null;
+            long onDisk = part.exists() ? part.length() : 0;
+            if (onDisk != it.done) { note(it, "count " + it.done + " did not match the file " + onDisk + ", using the file"); it.done = onDisk; }
             try {
                 c = (HttpURLConnection) new URL(it.origin + it.job).openConnection();
                 c.setConnectTimeout(15000);
                 c.setReadTimeout(30000);
                 c.setInstanceFollowRedirects(true);
+                c.setRequestProperty("Accept-Encoding", "identity");                          // no transparent gzip: byte counts must match the file
                 String cookie = CookieManager.getInstance().getCookie(it.origin);
                 if (cookie != null && !cookie.isEmpty()) c.setRequestProperty("Cookie", cookie);
                 if (it.done > 0) c.setRequestProperty("Range", "bytes=" + it.done + "-");
                 code = c.getResponseCode();
+                note(it, "HTTP " + code + (it.done > 0 ? " (asked from byte " + it.done + ")" : "") + ", length " + c.getContentLengthLong() + ", range " + c.getHeaderField("Content-Range"));
                 if (code == 410) { it.job = ""; c.disconnect(); continue; }                    // the ticket went stale: ask for a new one
                 if (code == 401 || code == 403) { finish(it, "failed", code == 401 ? "Signed out - sign in again, then tap Retry" : "Downloads are switched off for this login"); c.disconnect(); return; }
                 if (code == 404) { finish(it, "failed", "The provider no longer has this file"); c.disconnect(); return; }
@@ -329,6 +362,23 @@ class Downloader {
                 if (code != 200 && code != 206) throw new IOException("HTTP " + code);
                 boolean append = code == 206 && it.done > 0;
                 long len = c.getContentLengthLong();
+                if (code == 206 && it.done > 0) {
+                    String cr0 = c.getHeaderField("Content-Range");                           // bytes 100-999/1000: must start where we stopped
+                    long from = -1;
+                    try {
+                        String r0 = cr0 == null ? "" : cr0.trim();
+                        int sp = r0.indexOf(' '), dash = r0.indexOf('-');
+                        if (sp > 0 && dash > sp) from = Long.parseLong(r0.substring(sp + 1, dash).trim());
+                    } catch (RuntimeException ignored) { /* unknown */ }
+                    if (from != it.done) {
+                        note(it, "the server answered from byte " + from + " not " + it.done + ", restarting");
+                        part.delete();
+                        synchronized (this) { it.done = 0; it.restarts++; }
+                        it.job = "";
+                        continue;
+                    }
+                }
+                if (code == 200 && it.done > 0) { it.restarts++; note(it, "the server ignored Range and sent the whole file again"); }
                 synchronized (this) {
                     if (!append) it.done = 0;                                                 // the server sent the whole file again
                     if (code == 206) {
@@ -347,7 +397,7 @@ class Downloader {
                     long tick = System.currentTimeMillis(), tickBytes = it.done;
                     int n;
                     while ((n = in.read(buf)) > 0) {
-                        if (it.stop || it.cancel) return;
+                        if (stale(it, g)) return;
                         out.write(buf, 0, n);
                         it.done += n;
                         it.fails = 0;
@@ -358,12 +408,28 @@ class Downloader {
                     out.close();
                     in.close();
                 }
-                if (it.total > 0 && it.done < it.total) throw new IOException("connection ended early");
+                long actual = part.length();
+                synchronized (this) { it.done = actual; }
+                note(it, "transfer ended: " + actual + " bytes on disk, server total " + it.total);
+                if (it.total > 0 && actual < it.total) throw new IOException("connection ended early");
+                if (it.total > 0 && actual != it.total) {
+                    part.delete();
+                    synchronized (this) { it.done = 0; it.badSize++; }
+                    it.job = "";
+                    if (it.badSize >= 2) {
+                        finish(it, "failed", "The file is " + actual + " bytes but the server said " + it.total + " - tap Copy report");
+                        return;
+                    }
+                    set(it, "waiting", "The file size did not match, starting this one again");
+                    continue;
+                }
                 complete(it, part);
                 return;
             } catch (IOException e) {
-                if (it.stop || it.cancel) return;
+                if (stale(it, g)) return;
                 it.fails++;
+                it.reconnects++;
+                note(it, "error: " + e.getMessage());
                 set(it, "waiting", "Connection lost, retrying (" + (e.getMessage() == null ? "error" : e.getMessage()) + ")");
                 if (!nap(it, backoff(it.fails))) return;
             } finally {

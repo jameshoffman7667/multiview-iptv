@@ -443,17 +443,20 @@ describe('browser', () => {
     const { ctx, page, errors } = await openPage({ state: { layout: '1', tiles: [{ p: 'p1', sid: '1', name: 'ESPN' }] } });
     const url0 = page.url();
     await menu(page, 'settings');
+    await page.click('#set-expand');
     await page.waitForSelector('.modal h2');
     await page.selectOption('.modal select >> nth=0', '8');
     assert.equal(await page.evaluate(() => window.__mv.S.bufSec), 8);
     await page.keyboard.press('Escape');
     await page.waitForFunction(() => window.__mv.modals === 0);
     await menu(page, 'settings');
+    await page.click('#set-expand');
     await page.waitForSelector('.modal h2');
     await page.goBack();
     await page.waitForFunction(() => window.__mv.modals === 0);
     assert.equal(page.url(), url0, 'Back stayed in the app');
     await menu(page, 'settings');
+    await page.click('#set-expand');
     await page.uncheck('.modal .check input >> nth=0');
     await page.click('.modal .btn:has-text("Restart all streams")');
     await page.waitForFunction(() => window.__players.length >= 2);
@@ -643,6 +646,7 @@ describe('browser', () => {
     let r = await openPage();
     await r.page.keyboard.press('Escape');
     await r.page.evaluate(() => document.getElementById('sm-settings').click());
+    await r.page.click('#set-expand');
     await r.page.waitForSelector('#set-dlmax');
     assert.equal(await r.page.inputValue('#set-dlmax'), '3');
     await r.page.selectOption('#set-dlmax', '5');
@@ -695,10 +699,10 @@ describe('browser', () => {
   });
 
   test('Android app on a phone: buttons hand files to the app, Downloads lists them with pause/resume/cancel and plays saved ones', async () => {
-    const bridge = (phone) => `window.__calls = []; window.__status = [{ id: 'a1', name: 'Big Movie', state: 'running', reason: '', done: 5242880, total: 10485760, speed: 1048576 },
+    const bridge = (phone) => `window.__calls = []; window.__status = [{ id: 'a1', name: 'Big Movie', state: 'running', reason: '', report: 'Multiview download report', done: 5242880, total: 10485760, speed: 1048576 },
         { id: 'b2', name: 'Other', state: 'paused', reason: '', done: 100, total: 1000, speed: 0 }, { id: 'c3', name: 'Old.mp4', state: 'done', reason: '', done: 1048576, total: 1048576, speed: 0 }];
       window.MVApp = { canPip: function () { return false; }, setAutoPip: function () {}, changeServer: function () {}, localPause: function (p) { window.__calls.push(['pause', p]); }, localStop: function () { window.__calls.push(['stop']); }, localSeek: function (s) { window.__calls.push(['seek', s]); },
-      downloadSupported: function () { return ${phone}; }, downloadConfig: function (m, w) { window.__calls.push(['config', m, w]); }, downloadAdd: function (o, j) { window.__calls.push(['add', o, j]); },
+      downloadSupported: function () { return ${phone}; }, downloadConfig: function (m, w) { window.__calls.push(['config', m, w]); }, downloadAdd: function (o, j) { window.__calls.push(['add', o, j]); window.__status.push({ id: 'n' + window.__status.length, name: 'New movie', state: 'queued', done: 0, total: 0, speed: 0, reason: '' }); },
       downloadStatus: function () { return JSON.stringify(window.__status); }, downloadForgetMissing: function () {},
       downloadPause: function (id) { window.__calls.push(['dpause', id]); }, downloadResume: function (id) { window.__calls.push(['dresume', id]); }, downloadRemove: function (id) { window.__calls.push(['dremove', id]); },
       downloadPlay: function (id) { window.__calls.push(['play', id]); }, downloadOpen: function (id) { window.__calls.push(['open', id]); } };`;
@@ -713,8 +717,8 @@ describe('browser', () => {
     await r.ctx.close();
     r = await openPage({ init: bridge(true) });
     const { page } = r;
-    await page.waitForSelector('#ndlbar');                       // a download that went on while the app was closed shows at once
-    assert.match(await page.textContent('#ndlbar'), /Downloading 1 - 50%/);
+    await page.waitForTimeout(300);
+    assert.equal(await page.locator('#ndlbar').count(), 0, 'a download that was already running does not pop up when the app opens (P-39)');
     await page.evaluate(() => window.__mv.setLayout('1'));
     await tapPicker(page, 0);
     await page.waitForSelector('.modal .tabs');
@@ -729,9 +733,13 @@ describe('browser', () => {
     assert.match(items[0].sid, /^movie:\d+$/);
     assert.equal(await page.evaluate(() => window.__calls.some((c) => c[0] === 'config' && c[1] === 3 && c[2] === false)), true, 'the limit and Wi-Fi choice reach the app');
     await page.keyboard.press('Escape');
-    await page.click('#ndlbar button');
+    await page.waitForSelector('#ndlbar');                                  // adding a download shows the bar for 3 seconds
+    assert.match(await page.textContent('#ndlbar'), /Downloading/);
+    await page.waitForSelector('#ndlbar', { state: 'detached', timeout: 6000 });
+    await menu(page, 'recs');
     await page.waitForSelector('#dl-manage .dl-row');
-    assert.equal(await page.locator('#dl-manage .dl-row').count(), 3);
+    assert.equal(await page.locator('#dl-manage .dl-row').count(), 4, 'the three on the phone plus the one just added');
+    assert.equal(await page.locator('#dl-manage .dl-row button:has-text("Copy report")').count() > 0, true, 'a report can be copied');
     assert.match(await page.textContent('#dl-manage'), /Paused/);
     assert.match(await page.textContent('#dl-manage'), /1\.0 MB\/s|1 MB\/s|MB\/s/);
     await page.click('#dl-manage .dl-row[data-id="a1"] button:has-text("Pause")');
@@ -754,6 +762,7 @@ describe('browser', () => {
     const { ctx, page, errors } = await openPage({ state: { layout: '1', tiles: [{ p: 'p1', sid: '1', name: 'ESPN' }], bufSec: 4 } });
     await page.keyboard.press('Escape');
     await page.evaluate(() => document.getElementById('sm-settings').click());
+    await page.click('#set-expand');
     await page.waitForSelector('.modal h2');
     const opts = await page.$$eval('.modal select:nth-of-type(1) option', (o) => o.map((x) => x.value));
     assert.ok(opts.includes('300') && opts.includes('120') && opts.includes('60'), opts.join(','));
@@ -1073,6 +1082,7 @@ describe('logins and shared multiviews (browser)', () => {
     });
     // turn on logins
     await menu(page, 'settings');
+    await page.click('#set-expand');
     await page.click('#set-users');
     await page.fill('.modal input[type=text]', 'boss');
     await page.fill('.modal input[type=password]', 'hunter22');
@@ -1081,6 +1091,7 @@ describe('logins and shared multiviews (browser)', () => {
     assert.equal(await page.evaluate(() => window.__mv.ME.user.username), 'boss');
     // add a viewer
     await menu(page, 'settings');
+    await page.click('#set-expand');
     await page.click('#set-users');
     await page.click('text=Add user');
     await page.fill('.modal input[type=text]', 'alice');
@@ -1285,6 +1296,34 @@ describe('browser: picker remembers its place', () => {
     await page.waitForFunction(() => window.__mv && window.__mv.ME);
     return { ctx, page };
   }
+
+  test('P-51: the menu resumes where it was left; on Live it opens at the channel now on the screen when that changed', async () => {
+    const { ctx, page } = await page1();
+    await tapPicker(page, 0);
+    await page.waitForSelector('.chlist .ch');
+    await page.selectOption('select[aria-label="Category"]', 'UK');
+    await page.fill('input.search', 'Chan 5');
+    await page.waitForTimeout(300);
+    const t1 = page.locator('.chlist .pick', { hasText: 'Chan 520' });
+    await t1.scrollIntoViewIfNeeded();
+    await t1.click();
+    await page.waitForFunction(() => window.__mv.S.tiles[0] && window.__mv.S.tiles[0].name === 'Chan 520');
+    // unchanged channel: the menu comes back exactly as it was left (filters and spot)
+    await page.evaluate(() => window.__mv.select(0));
+    await page.keyboard.press('c');
+    await page.waitForSelector('.chlist .ch .pick');
+    assert.equal(await page.inputValue('input.search'), 'Chan 5', 'search kept');
+    await page.waitForFunction(() => document.activeElement && document.activeElement.getAttribute('data-key') === 'big:1520');
+    await page.keyboard.press('Escape');
+    // the channel is changed some other way (remote or guide): the next time the menu opens at that channel, even through hidden filters
+    await page.evaluate(() => window.__mv.assign(0, { p: 'big', sid: '1050', name: 'Chan 050', icon: '' }));
+    await page.evaluate(() => window.__mv.select(0));
+    await page.keyboard.press('c');
+    await page.waitForSelector('.chlist .ch .pick');
+    await page.waitForFunction(() => document.activeElement && document.activeElement.getAttribute('data-key') === 'big:1050', null, { timeout: 8000 });
+    assert.equal(await page.inputValue('input.search'), '', 'the filters that hid the channel were cleared');
+    await ctx.close();
+  });
 
   test('category, search, rows expanded and the chosen channel are restored (also after a reload)', async () => {
     const { ctx, page } = await page1();
@@ -1697,6 +1736,7 @@ describe('player overlay, pull-out menu, recordings, PWA', () => {
       await tap(page, 0);
       await page.click('#ov-pull');
       await page.click('#sm-settings');
+      await page.click('#set-expand');
       await page.waitForSelector('.modal h2');
     };
     for (const [scheme, expectLight] of [['light', true], ['dark', false]]) {
@@ -1737,6 +1777,7 @@ describe('player overlay, pull-out menu, recordings, PWA', () => {
     await tap(page, 0);
     await page.click('#ov-pull');
     await page.click('#sm-settings');
+    await page.click('#set-expand');
     await page.waitForSelector('.modal h2');
     assert.equal(await page.textContent('.modal h2'), 'Settings');
     assert.equal(await page.evaluate(() => window.__mv.side.open), false);
@@ -2048,6 +2089,7 @@ describe('player overlay, pull-out menu, recordings, PWA', () => {
     await page.waitForFunction(() => window.__players.length === 2);
     await page.evaluate(() => { window.__mv.FP.avail = true; });
     await page.evaluate(() => document.getElementById('sm-settings').click());
+    await page.click('#set-expand');
     await page.waitForSelector('#fp-on');
     assert.equal(await page.evaluate(() => document.getElementById('fp-min').value), '3', 'default smallest score is 3 points');
     assert.equal(await page.evaluate(() => document.getElementById('fp-delay').value), '0');
@@ -2141,6 +2183,7 @@ describe('player overlay, pull-out menu, recordings, PWA', () => {
     await tkSet(page, tkSum());
     await page.waitForSelector('#ftick:not([hidden])');
     await page.evaluate(() => document.getElementById('sm-settings').click());
+    await page.click('#set-expand');
     await page.waitForSelector('#ft-pos');
     assert.equal(await page.evaluate(() => document.getElementById('ft-pos').value), 'below', 'default is below the video');
     await page.selectOption('#ft-pos', 'overlap');
@@ -2156,6 +2199,115 @@ describe('player overlay, pull-out menu, recordings, PWA', () => {
     assert.equal(await page.evaluate(() => Math.abs(document.getElementById('grid').getBoundingClientRect().bottom - innerHeight) <= 1), true);
     assert.deepEqual(errors, []);
     await ctx.close();
+  });
+
+  test('P-48: Settings groups start collapsed, open and close one by one or all at once, and stay as left until the app is fully closed', async () => {
+    const { ctx, page, errors } = await open(one);
+    await page.evaluate(() => document.getElementById('sm-settings').click());
+    await page.waitForSelector('#set-all');
+    const state = () => page.evaluate(() => [...document.querySelectorAll('.setgrp')].map((g) => [g.querySelector('.setgrp-h').dataset.grp, !g.querySelector('.setgrp-body').hidden]));
+    let st = await state();
+    assert.ok(st.length >= 4, 'several groups');
+    assert.deepEqual(st.filter((x) => x[1]), [], 'all collapsed by default');
+    assert.equal(await page.locator('#set-actions').isVisible(), true, 'the fullscreen / password buttons stay on top');
+    assert.equal(await page.locator('.setgrp-body:not([hidden]) .field').count(), 0);
+    await page.click('.setgrp-h[data-grp="play"]');
+    st = await state();
+    assert.deepEqual(st.filter((x) => x[1]).map((x) => x[0]), ['play']);
+    assert.equal(await page.locator('.setgrp-h[data-grp="play"]').getAttribute('aria-expanded'), 'true');
+    await page.click('#set-expand');
+    assert.equal((await state()).filter((x) => !x[1]).length, 0, 'Expand all');
+    await page.click('#set-collapse');
+    assert.equal((await state()).filter((x) => x[1]).length, 0, 'Collapse all');
+    await page.click('.setgrp-h[data-grp="disp"]');
+    await page.keyboard.press('Escape');
+    await page.evaluate(() => document.getElementById('sm-settings').click());
+    await page.waitForSelector('#set-all');
+    assert.deepEqual((await state()).filter((x) => x[1]).map((x) => x[0]), ['disp'], 'remembered while the app stays open');
+    await page.reload();
+    await page.waitForFunction(() => window.__mv && window.__mv.ME);
+    await page.evaluate(() => document.getElementById('sm-settings').click());
+    await page.waitForSelector('#set-all');
+    assert.equal((await state()).filter((x) => x[1]).length, 0, 'a fully closed app starts collapsed again');
+    assert.deepEqual(errors, []);
+    await ctx.close();
+  });
+
+  test('P-41 and P-44: ticker size Small / Medium / Large (Large is the default), and a thin scores-only strip in the mini player', async () => {
+    const { ctx, page, errors } = await tkOpen();
+    await tkSet(page, tkSum());
+    await page.waitForSelector('#ftick:not([hidden])');
+    const h = () => page.evaluate(() => Math.round(document.getElementById('ftick').getBoundingClientRect().height));
+    assert.equal(await h(), 56, 'Large is today\'s size and the default');
+    await page.evaluate(() => document.getElementById('sm-settings').click());
+    await page.click('#set-expand');
+    await page.selectOption('#ft-size', 'small');
+    await page.waitForTimeout(100);
+    assert.equal(await h(), 39);
+    assert.equal(await page.evaluate(() => window.__mv.S.ftsize), 'small');
+    await page.selectOption('#ft-size', 'medium');
+    await page.waitForTimeout(100);
+    assert.equal(await h(), 48);
+    await page.selectOption('#ft-size', 'large');
+    await page.waitForTimeout(100);
+    assert.equal(await h(), 56);
+    await page.keyboard.press('Escape');
+    await page.evaluate(() => window.__mvPip(true));
+    await page.waitForTimeout(250);
+    const pip = await page.evaluate(() => ({ h: Math.round(document.getElementById('ftick').getBoundingClientRect().height), items: getComputedStyle(document.querySelector('.ft-items')).display, tn: getComputedStyle(document.querySelector('.ft-tn')).display, tot: getComputedStyle(document.querySelector('.ft-tot')).fontSize }));
+    assert.equal(pip.h, 26, 'the strip is about half as high in the mini player');
+    assert.equal(pip.items, 'none'); assert.equal(pip.tn, 'none');
+    assert.equal(pip.tot, '13px');
+    await page.evaluate(() => window.__mvPip(false));
+    await page.waitForTimeout(100);
+    assert.equal(await h(), 56);
+    assert.deepEqual(errors, []);
+    await ctx.close();
+  });
+
+  test('P-46 and P-47: team projection under the score once the names drop away, player projection under his score, colours as Fantasy Manager sends them (grey when empty)', async () => {
+    const { ctx, page, errors } = await tkOpen();
+    await tkSet(page, tkSum((s) => {
+      const a = s.leagues[0];
+      a.mine.projected = 134.6; a.mine.projectedColour = 'green';
+      a.opp.projected = 120.1; a.opp.projectedColour = 'red';
+      const p = (id) => a.players.find((x) => x.playerId === id);
+      Object.assign(p('2'), { projection: 16.1, liveProjection: 22.4, projected: 22.4, projectedColour: 'green' });   // live
+      Object.assign(p('1'), { projection: 20, projected: 18.4, projectedColour: 'red' });                          // final
+      Object.assign(p('5'), { projection: 9.5, projected: 9.5, projectedColour: '' });                           // pregame
+    }));
+    await page.waitForSelector('#ftick:not([hidden])');
+    const d = await page.evaluate(() => {
+      const seg = document.querySelector('.ft-seg');
+      const pj = [...seg.querySelectorAll('.ft-pj')].map((e) => [e.textContent, getComputedStyle(e).color]);
+      const its = {};
+      seg.querySelectorAll('.ft-it').forEach((e) => { its[e.querySelector('.ft-nm').textContent] = [e.querySelector('.ft-l3').textContent, getComputedStyle(e.querySelector('.ft-l3')).color]; });
+      return { pj, its };
+    });
+    assert.deepEqual(d.pj[0], ['Proj 134.6', 'rgb(63, 174, 88)']);
+    assert.deepEqual(d.pj[1], ['Proj 120.1', 'rgb(214, 83, 59)']);
+    const names = Object.keys(d.its);
+    assert.ok(names.length >= 3);
+    const byName = (n) => d.its[n];
+    assert.ok(d.its['Quarterback Mine'][0] === 'Proj 20.0' && d.its['Quarterback Mine'][1] === 'rgb(214, 83, 59)', 'after the final: the pregame number in the colour sent');
+    assert.ok(d.its['Later Guy'][0] === 'Proj 9.5' && d.its['Later Guy'][1] === 'rgb(139, 147, 167)', 'before kickoff: pregame number in grey');
+    assert.ok(byName('Runner Mine')[0] === 'Proj 22.4' && byName('Runner Mine')[1] === 'rgb(63, 174, 88)', 'while live: the live number in the colour sent');
+    assert.deepEqual(errors, []);
+    await ctx.close();
+  });
+
+  test('P-45: the pop-up sizes differ on a phone-width screen (small about half, medium three quarters, large the full width)', async () => {
+    const { ctx, page } = await open(one, { viewport: { width: 390, height: 780 } });
+    const sc = async (size) => page.evaluate((z) => { window.__mv.S.fsize = z; return window.__mv.fpScale(); }, size);
+    const small = await sc('small'); const medium = await sc('medium'); const large = await sc('large');
+    assert.ok(small < medium && medium < large, `${small} < ${medium} < ${large}`);
+    assert.ok(near(large * 1240, 374, 4), 'large fills the width');
+    assert.ok(near(small / large, 0.5, 0.02) && near(medium / large, 0.75, 0.02));
+    await ctx.close();
+    const wide = await open(one, { viewport: { width: 1600, height: 800 } });
+    const w = await wide.page.evaluate(() => { window.__mv.S.fsize = 'medium'; return window.__mv.fpScale(); });
+    assert.equal(w, 1, 'on a big screen the sizes are unchanged');
+    await wide.ctx.close();
   });
 
   test('ticker: league name and score stall at the left, team names drop away, the next league pushes them off', async () => {
@@ -2254,6 +2406,7 @@ describe('player overlay, pull-out menu, recordings, PWA', () => {
     await page.route('**/api/fantasy/stream*', (route) => route.abort());
     await page.route('**/api/fantasy/summary', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ leagues: [] }) }));
     await page.evaluate(() => document.getElementById('sm-settings').click());
+    await page.click('#set-expand');
     await page.waitForSelector('#fm-url');
     assert.equal(await vis(page, '#fm-remove'), false, 'nothing to remove yet');
     assert.equal(await page.evaluate(() => !!document.getElementById('fp-on')), false, 'pop-up options appear once a connection exists');
@@ -2335,6 +2488,7 @@ describe('player overlay, pull-out menu, recordings, PWA', () => {
     await page.route('**/api/diag', (route) => { n++; return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ at: Date.now(), server: dgServer(), streams: [dgStream(n > 1 ? { maxGapMs: 7000, reconnects: n } : {})] }) }); });
     await page.route('**/api/diag/speed*', (route) => route.fulfill({ status: 200, contentType: 'application/octet-stream', body: Buffer.alloc(1024 * 1024) }));
     await page.evaluate(() => document.getElementById('sm-settings').click());
+    await page.click('#set-expand');
     await page.waitForSelector('#set-diag');
     await page.click('#set-diag');
     await page.waitForSelector('#dg-table table');
@@ -2439,6 +2593,7 @@ describe('player overlay, pull-out menu, recordings, PWA', () => {
     assert.equal(after.includes('/api/me'), false);
     // Settings explains how to install
     await page.evaluate(() => document.getElementById('sm-settings').click());
+    await page.click('#set-expand');
     await page.waitForSelector('#set-install-box');
     assert.match(await page.textContent('#set-install-box'), /Install as an app/);
     await page.keyboard.press('Escape');

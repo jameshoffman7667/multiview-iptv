@@ -105,3 +105,16 @@ test('phone downloads (P-32, P-35): the app has its own download manager, only o
   assert.match(manifest, /FOREGROUND_SERVICE_DATA_SYNC/);
   assert.match(read(dir + 'LocalPlayer.java'), /DefaultDataSource\.Factory/, 'content:// files play');
 });
+
+test('P-40: the downloader keeps one writer per file, checks the size, never shows more than 100% and keeps a copyable report', () => {
+  const dl = read('android/app/src/main/java/app/iptvmultiview/tv/Downloader.java');
+  assert.match(dl, /int gen;/, 'a generation number so only the newest worker writes');
+  assert.match(dl, /it\.gen != g/);
+  assert.match(dl, /Accept-Encoding", "identity"/, 'no transparent gzip: counted bytes must equal file bytes');
+  assert.match(dl, /actual != it\.total/, 'size check at the end');
+  assert.match(dl, /badSize >= 2/, 'a second wrong size fails clearly instead of saving a bad file');
+  assert.match(dl, /Math\.min\(it\.done, it\.total\)/, 'progress is capped at the total');
+  assert.match(dl, /o\.put\("report", report\(it\)\)/);
+  assert.match(dl, /isBusy\(/, 'the same file is not queued twice');
+  assert.ok(!/password|secret|token/i.test(dl.slice(dl.indexOf('private static String report'), dl.indexOf('private final Context'))), 'the report never carries credentials');
+});

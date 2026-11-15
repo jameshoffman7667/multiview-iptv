@@ -395,7 +395,9 @@ html.nativeplay, html.nativeplay body, html.nativeplay .grid { background: trans
 .fpset { margin: 6px 0 10px; }
 
 /* ---------- fantasy ticker (P-25) ---------- */
-:root { --tk-h: 56px; }
+:root { --tk-s: 1; --tk-h: calc(56px * var(--tk-s)); }
+:root.tks-medium { --tk-s: .85; }
+:root.tks-small { --tk-s: .7; }
 .ftick { position: fixed; left: 0; right: 0; bottom: 0; height: var(--tk-h); z-index: 60; background: #0b0e14; border-top: 1px solid #262c3a; color: #fff; overflow: hidden; }
 .ftick[hidden] { display: none; }
 body.ftick-below .grid { bottom: var(--tk-h); }
@@ -405,28 +407,51 @@ body.ftick-below #shared { bottom: var(--tk-h); height: auto; }
 .ft-copy { display: flex; height: 100%; flex: none; }
 .ft-seg { display: flex; height: 100%; flex: none; position: relative; align-items: stretch; }
 .ft-name, .ft-score { position: sticky; z-index: 3; background: #0b0e14; display: flex; align-items: center; flex: none; height: 100%; }
-.ft-name { left: 0; padding: 0 16px 0 14px; font-size: 18px; font-weight: 800; letter-spacing: .02em; white-space: nowrap; color: #fff; z-index: 4; }
+.ft-name { left: 0; padding: 0 16px 0 14px; font-size: calc(18px * var(--tk-s)); font-weight: 800; letter-spacing: .02em; white-space: nowrap; color: #fff; z-index: 4; }
 .ft-score { padding: 0 22px 0 4px; gap: 12px; font-variant-numeric: tabular-nums; box-shadow: 8px 0 8px -4px #0b0e14; }
-.ft-side { position: relative; min-width: 96px; text-align: center; height: 100%; display: flex; justify-content: center; }
-.ft-tot { font-size: 24px; font-weight: 800; line-height: 34px; }
+.ft-side { position: relative; min-width: calc(96px * var(--tk-s)); text-align: center; height: 100%; display: flex; justify-content: center; }
+.ft-tot { font-size: calc(24px * var(--tk-s)); font-weight: 800; line-height: calc(34px * var(--tk-s)); }
 .ft-op { color: #fff; }
-.ft-tn { position: absolute; left: 50%; bottom: 4px; transform: translateX(-50%); font-size: 12px; max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; opacity: .9; transition: opacity .25s; }
+.ft-pj { position: absolute; left: 50%; bottom: calc(4px * var(--tk-s)); transform: translateX(-50%); font-size: calc(12px * var(--tk-s)); font-weight: 700; white-space: nowrap; opacity: 0; transition: opacity .25s; font-variant-numeric: tabular-nums; }
+.ft-seg.pinned .ft-pj { opacity: .95; }
+.ft-tn { position: absolute; left: 50%; bottom: 4px; transform: translateX(-50%); font-size: calc(12px * var(--tk-s)); max-width: calc(150px * var(--tk-s)); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; opacity: .9; transition: opacity .25s; }
 .ft-seg.pinned .ft-tn { opacity: 0; }
-.ft-dash { font-size: 22px; color: #8b93a7; align-self: flex-start; line-height: 34px; }
+.ft-dash { font-size: calc(22px * var(--tk-s)); color: #8b93a7; align-self: flex-start; line-height: calc(34px * var(--tk-s)); }
 .ft-items { display: flex; align-items: stretch; height: 100%; }
-.ft-div { align-self: center; margin: 0 14px 0 8px; padding: 2px 10px; border: 1px solid #2c3446; border-radius: 12px; font-size: 12px; font-weight: 700; white-space: nowrap; color: #c3c9d8; }
+.ft-div { align-self: center; margin: 0 14px 0 8px; padding: 2px 10px; border: 1px solid #2c3446; border-radius: 12px; font-size: calc(12px * var(--tk-s)); font-weight: 700; white-space: nowrap; color: #c3c9d8; }
 .ft-it { display: flex; flex-direction: column; justify-content: center; padding: 0 18px; border-left: 1px solid #1d2332; white-space: nowrap; }
-.ft-l1 { display: flex; align-items: baseline; gap: 8px; font-size: 17px; font-weight: 700; }
-.ft-pos { font-size: 11px; color: #8b93a7; font-weight: 600; }
+.ft-l1 { display: flex; align-items: baseline; gap: 8px; font-size: calc(17px * var(--tk-s)); font-weight: 700; }
+.ft-pos { font-size: calc(11px * var(--tk-s)); color: #8b93a7; font-weight: 600; }
 .ft-pts { font-variant-numeric: tabular-nums; min-width: 2.6em; text-align: right; transition: color .2s, text-shadow .3s; }
-.ft-l2 { font-size: 12px; color: #aab2c5; font-variant-numeric: tabular-nums; }
+.ft-l3 { font-size: calc(11px * var(--tk-s)); color: #8b93a7; font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; min-height: 1.1em; }
+.ft-it.pre .ft-l3 { color: #8b93a7; }
+.ft-l2 { font-size: calc(12px * var(--tk-s)); color: #aab2c5; font-variant-numeric: tabular-nums; }
 .ft-it.final .ft-nm, .ft-it.final .ft-pts { color: #aeb4c2; font-weight: 600; }
 .ft-it.final .ft-l2 { color: #8a90a0; }
 .ft-it.pre .ft-l2 { color: #9fb4d8; }
 .ft-pts.up-mine { color: #3FAE58 !important; text-shadow: 0 0 10px #3FAE58, 0 0 18px rgba(63,174,88,.7); }
 .ft-pts.up-opp { color: #D6533B !important; text-shadow: 0 0 10px #D6533B, 0 0 18px rgba(214,83,59,.7); }
-@media (max-width: 700px) { :root { --tk-h: 48px; } .ft-name { display: block; max-width: 34vw; overflow: hidden; text-overflow: ellipsis; padding: 0 8px; font-size: 13px; line-height: var(--tk-h); }
-  .ft-score { gap: 4px; padding: 0 8px 0 2px; } .ft-side { min-width: 56px; } .ft-tot { font-size: 18px; } .ft-tn { font-size: 10px; max-width: 80px; } .ft-dash { font-size: 16px; } .ft-l1 { font-size: 14px; } .ft-l2 { font-size: 11px; } .ft-it { padding: 0 12px; } }
+@media (max-width: calc(700px * var(--tk-s))) { :root { --tk-h: calc(48px * var(--tk-s)); } .ft-name { display: block; max-width: 34vw; overflow: hidden; text-overflow: ellipsis; padding: 0 8px; font-size: calc(13px * var(--tk-s)); line-height: var(--tk-h); }
+  .ft-score { gap: 4px; padding: 0 8px 0 2px; } .ft-side { min-width: calc(56px * var(--tk-s)); } .ft-tot { font-size: calc(18px * var(--tk-s)); } .ft-tn { font-size: calc(10px * var(--tk-s)); max-width: calc(80px * var(--tk-s)); } .ft-dash { font-size: calc(16px * var(--tk-s)); } .ft-l1 { font-size: calc(14px * var(--tk-s)); } .ft-l3 { font-size: calc(11px * var(--tk-s)); color: #8b93a7; font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; min-height: 1.1em; }
+.ft-it.pre .ft-l3 { color: #8b93a7; }
+.ft-l2 { font-size: calc(11px * var(--tk-s)); } .ft-it { padding: 0 12px; } }
+
+/* mini player (P-44): the ticker shrinks to a thin strip with scores only */
+body.pip .ftick { height: 26px; }
+body.pip.ftick-below .grid, body.pip.ftick-below #shared { bottom: 26px; }
+body.pip .ft-name { font-size: 11px; line-height: 26px; padding: 0 6px; max-width: 34vw; overflow: hidden; text-overflow: ellipsis; }
+body.pip .ft-score { gap: 3px; padding: 0 6px 0 2px; }
+body.pip .ft-side { min-width: 34px; }
+body.pip .ft-tot { font-size: 13px; line-height: 26px; }
+body.pip .ft-dash { font-size: 12px; line-height: 26px; }
+body.pip .ft-tn, body.pip .ft-pj, body.pip .ft-items { display: none; }
+
+/* settings groups (P-48) */
+.setgrp { margin: 6px 0; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.setgrp-h { width: 100%; display: flex; justify-content: space-between; align-items: center; text-align: left; border: 0; border-radius: 0; font-weight: 700; }
+.setgrp-body { padding: 8px 12px 10px; }
+.setgrp-body[hidden] { display: none; }
+#set-all { margin: 6px 0; }
 
 /* ---------- diagnostics (P-28) ---------- */
 .dg h3 { margin: 14px 0 6px; font-size: 14px; }

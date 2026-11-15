@@ -5,7 +5,7 @@ Requests logged here are not built yet. Say "build" to fold them into a new vers
 With every push, say whether the compose/stack file must change or whether pulling the new image is enough.
 Every build rewrites deploy/RELEASE.md using the FULL template of the app spec (section 8: Update, Image, Short, Long, Release commit, Type, Port, Public hostname, env vars, Data, Resources, Healthcheck, Verify, PWA, Docker build, Rollback naming the exact previous tag, Known issues, Backup tier). Server tests use `wget` (no curl on vm101). The server's real stack file is the homelab repo's stacks/multiview-iptv/compose.yaml (stack.yml here is only a reference); never tell anyone to update the Dockhand stack. Fixed `Update:` line: `Update: now` only when the user said "build, push and update" for that release, otherwise `Update: later`.
 
-Current released version: 0.19.1 (being pushed)
+Current released version: 0.20.0 (being pushed)
 
 ### P-1 - Rebuild the on-screen menu as a traditional video player overlay
 Requested: 2026-10-18. Tap any screen (single view or multiview) to show a full-screen overlay over everything:
@@ -262,18 +262,21 @@ Notes: in the code the episode list (opened by tapping a series) has a button pe
 
 ### P-39 - Downloads bar: disappear after 3 s; status in the Recordings and downloads page
 Requested: 2026-11-15 (James: the pop-up bar blocks the bottom menu; make it disappear after 3 seconds and show the local download status on the recordings and download page)
-Type: minor (small)   Status: Pending
+Type: minor (small)   Status: Built in 0.20.0
 Notes: the bar at the bottom (progress, Manage) is shown for 3 s when a download is added, finishes or fails, then hides itself; progress lives in a "On this phone" section of the Recordings and downloads page (the page that lists server recordings and downloads), with the same Pause/Resume/Cancel/Retry/Play/Open with/Delete buttons as Settings > Downloads..., live while it is open. The Android notification keeps showing progress.
+Built 2026-11-15 in 0.20.0. The bar shows for 3 s when a download is added, finishes or fails (not when the app opens); Manage opens Recordings & Downloads, whose new first section "On this phone" has the same buttons and live progress; Settings > Downloads... opens the same page.
 
 ### P-40 - Download went past 100% and will not play (Android app downloader)
 Requested: 2026-11-15 (James: "my first download went way past 100% and gives a playback error when trying to play")
-Type: patch (bug)   Status: Pending
+Type: patch (bug)   Status: Built in 0.20.0
 Notes: not reproduced (no device here). The percentage text is not capped, so it only shows what the app counted: more bytes written than the size the server announced, which also means the saved file is not the right file. Suspects in the downloader: the part file written by two connections at once after Pause then Resume, or after a drop, or a total that was wrong. Proposed: one writer per file (a generation check), a size check at the end (more or fewer bytes than announced: delete the part file and retry once, then fail with a clear message instead of "done"), cap the shown percentage at 100, show the last server answer and the number of reconnects per file with a Copy report button, and say why playback failed (and offer Open with). Questions: (a) the file type (mp4 or mkv)? (b) does the file play in another player (VLC) via Open with? (c) was the download paused, resumed or dropped along the way?
+Built 2026-11-15 in 0.20.0. Not reproduced and not tested on a phone. Defences: only the newest worker may write a file (generation check), the byte count is re-checked against the file before every request, Range answers must start where we stopped, no transparent gzip, the finished size must equal the announced size (wrong size: delete and retry once, then a clear failure), progress never shows above 100%, the same movie cannot be queued twice, and each download has a Copy report button (HTTP answers, restarts, reconnects, sizes; no credentials). If it happens again, send that report.
 
 ### P-41 - Ticker size options (current size becomes "Large")
 Requested: 2026-11-15 (James: "Give size options for the ticker as well, current should be the large size")
-Type: minor (new setting)   Status: Pending
+Type: minor (new setting)   Status: Built in 0.20.0
 Notes: Settings > ticker gets Small / Medium / Large (per device); Large is today's size (56 px bar, 48 px on phones) and the default, so nothing changes until chosen. Question: Small about 70% and Medium about 85% of Large?
+Built 2026-11-15 in 0.20.0. Settings > Fantasy ticker: Small (70%), Medium (85%), Large (default, today's size).
 
 ### P-42 - Ticker parts: fantasy and betting on/off, alternating when both are on
 Requested: 2026-11-15 (James: options to turn the fantasy or betting ticker components on or off; if both are on, go back and forth between them)
@@ -287,22 +290,25 @@ Notes: needs three things the app does not have yet. (1) Receiving mail: the app
 
 ### P-44 - Shrink the ticker more in mini player mode
 Requested: 2026-11-15 (James)
-Type: patch (small)   Status: Pending
+Type: patch (small)   Status: Built in 0.20.0
 Notes: when the app is in the floating mini player (picture-in-picture) the ticker gets about half its height, smaller text, and fewer details (scores and the pinned league name only).
+Built 2026-11-15 in 0.20.0. In the mini player the ticker is a 26 px strip with league name and scores only.
 
 ### P-45 - Pop-up size setting makes little difference
 Requested: 2026-11-15 (James: "The size setting for the pop ups doesn't seem to make much difference")
-Type: patch (bug)   Status: Pending
+Type: patch (bug)   Status: Built in 0.20.0
 Notes: cause found: the pop-up is capped to the screen width (about 1240 px wide at 100%), so on a phone every size hits the same cap. Fix: design the pop-up at a narrower base so Small / Medium / Large visibly differ on phones too (and Large may use the full width), and make the sample pop-up use the chosen size. Question: on your phone, roughly what widths do you want: Small about half the screen, Medium about three quarters, Large the full width?
+Built 2026-11-15 in 0.20.0. On narrow screens Small is about half the width, Medium three quarters and Large the full width; wide screens (1250 px and up) are unchanged, between that and a phone Small and Medium are a little smaller than before.
 
 ### P-46 - Ticker: total projection replaces the team names once they disappear
 Requested: 2026-11-15 (James: once the team names disappear under the scores, replace them with the total projection)
-Type: minor   Status: Pending
+Type: minor   Status: Built in 0.20.0
 Notes: the data already carries each team's projection (`projected`) but the ticker does not draw it yet. Under each pinned league's scores, the team names fade out as today, then the team's total projection fades in. Question: what colour rules for team projection (so P-47 can use the same)? Proposal: green when my projection is above the opponent's, red when below, white when equal; the opponent's shown the opposite way.
+Built 2026-11-15 in 0.20.0 against Fantasy Manager 4.20.0 (not yet deployed or run against live data). Once the team names fade, 'Proj <expected final>' shows under each score in the colour Fantasy Manager sends (grey when none).
 
 ### P-47 - Ticker: each player's projection under his current score
 Requested: 2026-11-15 (James: put the player's current projection below the current score, coloured with the same rules as the team projection)
-Type: minor   Status: Pending
+Type: minor   Status: Built in 0.20.0
 Notes: depends on P-46's colour rules. Player projection is in the data (`projected` per player). Proposal for players: green when the projection is at or above the points so far plus what the player is expected to still add... simplest rule: green when projection is above the points scored now (on pace), red when the points scored are already below the pace of the projection by a set margin; to confirm with the team rule.
 
 Decisions 2026-11-15 (James), on P-42 to P-47:
@@ -314,11 +320,13 @@ Decisions 2026-11-15 (James), second round: Fantasy Manager sends the projection
 Decisions 2026-11-15 (James), third round: an empty projection colour is drawn grey (like the player stat lines), not white. P-43 starts with screenshots only (vision model still to be chosen: Gemini or Claude); Juice Reel is parked for later (it needs an approved OAuth application; registration is at its OAuth applications settings page, see the reply of 2026-11-15).
 
 Decisions 2026-11-15 (James), fourth round: P-43 vision model is Gemini (key GEMINI_API_KEY in the server .env; use a billing-enabled project so slips are not used to improve Google products). Email arrives through Cloudflare Email Routing on bets.hoffmanhouse.ca with an Email Worker posting to the app.
+Built 2026-11-15 in 0.20.0. Under each player's score: pregame projection in grey before kickoff, live projection in the colour sent while playing, pregame projection in the colour sent after the final.
 
 ### P-48 - Settings menu: group like settings under collapsible headers, collapsed by default
 Requested: 2026-11-15 (James: "Clean up the settings menu, group like settings with collapsible headers, default collapsed")
-Type: minor        Status: Pending
+Type: minor        Status: Built in 0.20.0
 Notes / questions: proposed groups: Playback and buffering, Downloads, Fantasy ticker (size, position, speed, switches), Pop-ups, Layout and display, Account and devices, Admin. Remember which headers were opened? (proposal: all collapsed on every open, no memory). No setting is removed or renamed.
+Built 2026-11-15 in 0.20.0. Groups: Playback and buffering, Shared screen, Downloads and direct play, Display, Fantasy ticker and pop-ups, Admin tools, Install and device, Keyboard shortcuts. Collapsed on first open, remembered while the page lives, Collapse all / Expand all on top.
 
 ### P-49 - Fire TV (Fire Stick) support check
 Requested: 2026-11-15 (James: "Will the current app work on a firestick? What would it take to make it?")
@@ -334,16 +342,17 @@ Decisions 2026-11-15 (James), fifth round, P-43: any email address may send a sl
 
 ### P-51 - Change channel menu resumes where it was left
 Requested: 2026-11-15 (James: "When opening the change channel menu it should resume where it was left, except for live tv if the user has changed the channel then return to that channel.")
-Type: patch        Status: Pending
+Type: patch        Status: Built in 0.20.0
 Notes / questions: the picker already remembers tab, provider, category, search and scroll (`pkState`, `openPicker`). Plan: keep that, but on the Live tab, if the channel in that slot changed since the menu was last closed, open at that channel (scroll to it and highlight it, keeping provider and category filters when it is in them, otherwise showing it from its own category). Movies, Series and Guide keep exact resume. To confirm: does "the user has changed the channel" also cover a channel change made with the remote, and not only from the menu? (plan: yes, any change).
 
 Decisions 2026-11-15 (James), sixth round, P-43: scope is NFL only for now (the earlier NFL and NHL widening is withdrawn; slips with NHL legs are kept as samples). Settled FanDuel slip received: shows a green check per leg, the final score by period with "Finished", boosted and original prices (+544 struck through, +816), total wager, "WON" amount, bet ID and placed time; it also contains a game-prop leg (Hurricanes -1.5 puck line), so game props (spread, total, moneyline) appear inside parlays. The reader must take: price, game, start time, each leg (player or team, line, market) and, on settled slips, the result of each leg and the payout.
 
 Decisions 2026-11-15 (James), seventh round: P-48 settings headers: the app remembers which headers are open (per device), still collapsed on first use; James also wrote "collapse them at the same time" (meaning unclear; proposals: a "Collapse all" button, or only one header open at a time). To confirm.
+Built 2026-11-15 in 0.20.0. On Live and Guide the menu opens at the channel on that screen when it changed since the menu was last used (it clears search, category and favourites if they hide it once); otherwise exact resume.
 
 ### P-52 - Direct (bypass) streams report their count to the server
 Requested: 2026-11-15 (James: "For the active connections, even in bypass mode can't the app report back the number of streams in use to the server?")
-Type: minor (new endpoint)        Status: Pending
+Type: minor (new endpoint)        Status: Built in 0.20.0
 Notes / questions: with direct play the provider connection never passes through the server, so the server's count of provider connections (used by the keep-one-free rule for downloads and by the tile limits) misses it. Plan: each page and the phone app send a small heartbeat every 15 s listing the direct streams it has open (provider, channel or title id, kind); the server keeps them for 45 s without a new heartbeat (so a closed or crashed app drops off by itself), adds them to the per-provider connection count shown in the admin view and to the download wait rule, and never blocks a direct stream (advisory only). Limit: it only knows about Multiview's own devices, not other apps on the same provider account. Related: the server's relay releases a provider connection 8 s after its last viewer leaves (idleMs 8000), movies linger 15 s for range requests, and a composed mosaic closes 8 s after its last viewer.
 
 Decision 2026-11-15 (James), eighth round, P-48 (Ready to build): the app remembers which headers are open only while it stays open (session memory: survives closing and reopening Settings, resets to all collapsed when the app or page is fully closed). Settings gets "Collapse all" and "Expand all" buttons at the top. Nothing else about the settings changes.
@@ -353,3 +362,4 @@ Fantasy Manager reply to handoff 2 received 2026-11-15 (Fantasy Manager 4.20.0, 
 - Part 2: role `ticker`, token scope `ticker:read`, page "Ticker sync"; tokens shown once, hashed, up to 10 per user, a token named "multiview" replaces the old one; 120 requests/min per token; owner sets the allowed number of ticker users in Account > Admin (default 0, max 20); the login name is the user's Sleeper username; no compose or env change.
 - Part 3: Fantasy Manager has no league-wide NFL box scores (only James's roster players), so P-43 uses a public feed (ESPN's unofficial endpoints first, SportsBlaze backup).
 Effect on Multiview: the summary cleaner must accept the new fields (`projection`, `liveProjection`, `projectedColour`; team `projection`, `projected`, `projectedColour`); `projected` already passes through but its meaning changed, and nothing draws it yet, so nothing existing breaks. P-46 and P-47 are unblocked (they now only need Fantasy Manager 4.20.0 deployed to show colours; before that they show grey or nothing). Proposed drawing: P-46 team line shows `projected` (expected final) in `projectedColour`; for the opponent use his own `projectedColour` as sent. P-47 player line: before kickoff the pregame `projection` in grey, while live `liveProjection` in `projectedColour`, after the final the pregame `projection` in `projectedColour` (so the score can be compared to what was expected). Empty colour = grey.
+Built 2026-11-15 in 0.20.0. POST /api/direct/report (admins) every 15 s from each page with direct streams; the server forgets a report after 45 s; /api/state shows `direct` per provider and `directStreams`; the Providers window counts them in the bar and lists them; the download wait rule counts them. Advisory only.

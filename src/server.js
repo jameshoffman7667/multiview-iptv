@@ -15,6 +15,7 @@ const { emptyDir } = require('./rewind');
 const { Compose, cleanSpec } = require('./compose');
 const { Recordings } = require('./recordings');
 const { Downloads } = require('./downloads');
+const { DirectReports } = require('./direct-report');
 const { Cast } = require('./cast');
 const { FantasyHub } = require('./fantasy-hub');
 const { Health } = require('./health');
@@ -78,6 +79,7 @@ function createApp(options = {}) {
   // Recordings and downloads live in REC_DIR (keep it on a large, slow disk). Kept until deleted.
   const recDir = options.recDir || env('REC_DIR', path.join(dataDir, 'recordings'));
   const downloads = new Downloads(dataDir);
+  const directReports = new DirectReports();
   // downloads to a device: on for everyone unless an admin switched it off for that user (admins always can)
   const canDownload = (me) => !!me && (me.open || me.role === 'admin' || me.download !== false);
   const recordings = new Recordings({ dir: recDir, dataDir, relay, config, lists, epg, tickMs: options.recTickMs || 10000 });
@@ -417,7 +419,7 @@ function createApp(options = {}) {
       const prov = config.get(pid);
       if (!prov || !prov.enabled || prov.type === 'local') throw httpError(404, 'Unknown or disabled provider');
       if (me.role !== 'admin' && !views.allows(me, pid, String(body.sid))) throw httpError(403, 'That title is not in a multiview shared with you', 'not_allowed');
-      const why = downloads.mustWait(prov, relay.activeCount(prov.id));
+      const why = downloads.mustWait(prov, relay.activeCount(prov.id) + directReports.count(prov.id));
       if (why) return sendJson(req, res, 200, { wait: true, reason: why });
       const name = String(body.name || body.sid).slice(0, 120);
       const job = downloads.ticket(me.username || '', prov.id, name);
@@ -769,7 +771,16 @@ function createApp(options = {}) {
       return pump();
     }
     if (req.method === 'GET' && p === '/api/state') {
-      return sendJson(req, res, 200, relay.state());
+      const st = relay.state();
+      for (const x of st.providers) x.direct = directReports.count(x.id);   // advisory: streams that bypass the server
+      st.directStreams = directReports.list();
+      return sendJson(req, res, 200, st);
+    }
+    if (req.method === 'POST' && p === '/api/direct/report') {
+      needAdmin(me);
+      const body = await readJson(req);
+      directReports.report(body.device, me && me.username, body.streams);
+      return sendJson(req, res, 200, { ok: true });
     }
     if (req.method === 'GET' && p === '/api/providers') {
       return sendJson(req, res, 200, { providers: config.providers.map((x) => config.view(x)) });

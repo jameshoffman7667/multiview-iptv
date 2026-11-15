@@ -119,6 +119,19 @@ describe('event parsing', () => {
 describe('summary cleaning', () => {
   test('bad answers give null, odd values are tamed, unknown keys dropped', () => {
     assert.equal(cleanSummary(null), null);
+    // Fantasy Manager 4.20: projections and their colours pass through; missing or bad ones become null / empty
+    const pj = cleanSummary({ leagues: [{ leagueId: 'L1', name: 'A', mine: { name: 'M', points: 10, projected: 120.4, projection: 118, projectedColour: 'amber' }, opp: { name: 'O', points: 8, projected: 99, projectedColour: 'blue' },
+      players: [{ playerId: '1', name: 'P', side: 'mine', slot: 'WR', points: 5, projected: 15.5, projection: 14, liveProjection: 15.5, projectedColour: 'green', gameStatus: 'live' },
+                { playerId: '2', name: 'Q', side: 'opp', slot: 'RB', points: 0, projected: 0, gameStatus: 'pre' }] }] });
+    assert.equal(pj.leagues[0].mine.projected, 120.4);
+    assert.equal(pj.leagues[0].mine.projection, 118);
+    assert.equal(pj.leagues[0].mine.projectedColour, 'amber');
+    assert.equal(pj.leagues[0].opp.projection, null);
+    assert.equal(pj.leagues[0].opp.projectedColour, '', 'an unknown colour name is dropped');
+    assert.equal(pj.leagues[0].players[0].liveProjection, 15.5);
+    assert.equal(pj.leagues[0].players[0].projectedColour, 'green');
+    assert.equal(pj.leagues[0].players[1].projection, null);
+    assert.equal(pj.leagues[0].players[1].liveProjection, null);
     assert.equal(cleanSummary({ leagues: 'x' }), null);
     const c = cleanSummary({ leagues: [{ leagueId: 'L1', name: 'A', status: 'weird', colour: 'purple', mine: {}, opp: { name: 'B', points: 'x' },
       players: [{ playerId: 'a b!', name: 'P', side: 'opp', starter: true, slot: 'QB', slotOrder: null, points: '4.5', stats: { passYds: 10, secret: 1 } }, { playerId: '' }] }, { name: 'no id' }] });

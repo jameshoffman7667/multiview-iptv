@@ -63,7 +63,7 @@
   applyTheme();
   var ME = null; // set after /api/me: { admin, user, open, authRequired }
   function loadState() {
-    var d = { layout: '3x3', tiles: [], sel: 0, muted: false, bufSec: 4, keepSec: 0, transport: 'auto', fit: 'contain', failover: true, smallSd: true, autoQ: false, directPlay: false, directDl: false, dlWifi: false, dlMax: 3, vol: 1, shared: '', theme: 'system', local: false, fpop: true, fmin: 3, fdelay: 0, fopp: true, fsize: 'auto', fage: 60, ftick: true, fpos: 'below', fspeed: 'normal', workers: true, stats: false, labels: false, epgOn: true, favs: {}, pk: {} };
+    var d = { layout: '3x3', tiles: [], sel: 0, muted: false, bufSec: 4, keepSec: 0, transport: 'auto', fit: 'contain', failover: true, smallSd: true, autoQ: false, directPlay: false, directDl: false, ftsize: 'large', dlWifi: false, dlMax: 3, vol: 1, shared: '', theme: 'system', local: false, fpop: true, fmin: 3, fdelay: 0, fopp: true, fsize: 'auto', fage: 60, ftick: true, fpos: 'below', fspeed: 'normal', workers: true, stats: false, labels: false, epgOn: true, favs: {}, pk: {} };
     var j = {};
     try { j = JSON.parse(localStorage.getItem(LS_KEY)) || {}; } catch (e) { j = {}; }
     Object.keys(d).forEach(function (k) { if (j[k] !== undefined && typeof j[k] === typeof d[k]) d[k] = j[k]; });
@@ -75,6 +75,7 @@
     d.fage = clamp(Number(d.fage) || 60, 5, 600);
     if (d.fpos !== 'overlap') d.fpos = 'below';
     if (d.fspeed !== 'slow' && d.fspeed !== 'fast') d.fspeed = 'normal';
+    if (d.ftsize !== 'small' && d.ftsize !== 'medium') d.ftsize = 'large';
     var tiles = Array.isArray(j.tiles) ? j.tiles : [];
     d.tiles = [];
     for (var i = 0; i < SLOTS; i++) {
@@ -1643,6 +1644,30 @@
   // download buttons copy those addresses instead (a browser cannot save a cross-origin file under a name, and the provider
   // sends no CORS headers). Anything that goes wrong falls back to the server and is remembered for the rest of the session.
   var DIRECT_FAIL = {};
+  // P-52: streams that bypass the server tell it how many provider connections they use (admins only; the server forgets a report after 45 s)
+  var DREP = { sent: false, dev: '' };
+  function directDevice() {
+    if (DREP.dev) return DREP.dev;
+    try { DREP.dev = localStorage.getItem('mv_dev') || ''; if (!DREP.dev) { DREP.dev = Math.random().toString(36).slice(2, 10); localStorage.setItem('mv_dev', DREP.dev); } } catch (e) { DREP.dev = DREP.dev || Math.random().toString(36).slice(2, 10); }
+    return DREP.dev;
+  }
+  function directList() {
+    var list = [];
+    tiles.forEach(function (t) {
+      if (!t.cfg || t.idx >= visibleCount()) return;
+      if (t.local) list.push({ p: t.cfg.p, kind: 'live', id: String(t.cfg.sid), name: t.cfg.name || '' });
+      else if (t.directNow && t.phase === 'vod') list.push({ p: t.cfg.p, kind: t.cfg.vod === 'series' ? 'series' : 'movie', id: String(t.cfg.sid), name: t.cfg.name || '' });
+    });
+    return list;
+  }
+  function directReport() {
+    if (!isAdmin()) return;
+    var list = directList();
+    if (!list.length && !DREP.sent) return;            // nothing to say and nothing to take back
+    DREP.sent = list.length > 0;
+    api('/api/direct/report', { method: 'POST', body: { device: directDevice(), streams: list } }).catch(noop);
+  }
+  window.__mvDirectReport = directReport;
   function directWanted(key, p) { return !!(S[key] && isAdmin() && !DIRECT_FAIL[p]); }
   function directUrl(p, sid, ext) {
     return api('/api/direct?p=' + enc(p) + '&sid=' + enc(sid) + '&ext=' + enc(ext || 'mp4')).then(function (r) {
@@ -1737,12 +1762,13 @@
     appBridge().downloadPlay(id);
   }
   // ---- the Android app's own download manager (P-35): the app keeps the queue, retries and resumes; the page only shows it.
-  var NDL = { list: [], timer: null, rows: null, onChange: null };
+  var NDL = { list: [], timer: null, onChange: null, seen: null, hide: null };
   function nativeCfg() { try { appBridge().downloadConfig(clamp(Math.floor(Number(S.dlMax)) || 3, 1, 6), !!S.dlWifi); } catch (e) { /* old app */ } }
   function nativeAdd(items) {
     nativeCfg();
+    nativePoll(false);                                  // note what is there now, so the new ones count as news
     appBridge().downloadAdd(location.origin, JSON.stringify(items.map(dlItem)));
-    banner('Added ' + items.length + ' to the downloads (Settings > Downloads shows progress)', 4000);
+    banner('Added ' + items.length + ' to the downloads (Recordings & Downloads shows progress)', 4000);
     nativePoll(true);
   }
   function nativeActive() { return NDL.list.some(function (d) { return d.state === 'queued' || d.state === 'running' || d.state === 'waiting'; }); }
@@ -1751,24 +1777,33 @@
     NDL.timer = null;
     if (!nativeDl()) return;
     try { NDL.list = JSON.parse(appBridge().downloadStatus()) || []; } catch (e) { NDL.list = []; }
-    nativeBar();
+    var news = false;                                   // something was added, finished or failed since the last look
+    if (NDL.seen) NDL.list.forEach(function (d) { var was = NDL.seen[d.id]; if (was === undefined || (was !== d.state && (d.state === 'done' || d.state === 'failed'))) news = true; });
+    NDL.seen = {};
+    NDL.list.forEach(function (d) { NDL.seen[d.id] = d.state; });
+    nativeBar(news);
     if (NDL.onChange) NDL.onChange();
     if (again !== false && (nativeActive() || NDL.onChange)) NDL.timer = setTimeout(nativePoll, 1500);
   }
-  function nativeBar() {
+  // The bar shows for 3 seconds when a download is added, finishes or fails, then hides so it never covers the bottom menu (P-39).
+  function nativeBar(show) {
     var box = $('#ndlbar');
+    if (!show && !box) return;
     var act = NDL.list.filter(function (d) { return d.state === 'queued' || d.state === 'running' || d.state === 'waiting'; });
     var bad = NDL.list.filter(function (d) { return d.state === 'failed'; });
-    if (!act.length && !bad.length) { if (box) box.remove(); return; }
     if (!box) { box = h('div', { id: 'ndlbar', class: 'dlbar', role: 'status' }); document.body.appendChild(box); }
     var done = 0; var total = 0;
     act.forEach(function (d) { done += d.done; total += d.total; });
     box.textContent = '';
-    box.appendChild(h('span', { text: act.length ? 'Downloading ' + act.length + (total ? ' - ' + Math.round(100 * done / total) + '%' : '') : bad.length + ' download' + (bad.length === 1 ? '' : 's') + ' failed' }));
-    box.appendChild(h('button', { class: 'btn', type: 'button', text: 'Manage', onclick: openDownloaded }));
+    box.appendChild(h('span', { text: act.length ? 'Downloading ' + act.length + (total ? ' - ' + Math.min(100, Math.round(100 * done / total)) + '%' : '') : bad.length ? bad.length + ' download' + (bad.length === 1 ? '' : 's') + ' failed' : 'Download finished' }));
+    box.appendChild(h('button', { class: 'btn', type: 'button', text: 'Manage', onclick: function () { box.remove(); openRecordings(); } }));
+    if (show) {
+      clearTimeout(NDL.hide);
+      NDL.hide = setTimeout(function () { var b = $('#ndlbar'); if (b) b.remove(); NDL.hide = null; }, 3000);
+    }
   }
   function nativeText(d) {
-    var pct = d.total ? Math.round(100 * d.done / d.total) : 0;
+    var pct = d.total ? Math.min(100, Math.round(100 * d.done / d.total)) : 0;
     var size = d.total ? fmtBytes(d.done) + ' of ' + fmtBytes(d.total) : (d.done ? fmtBytes(d.done) : '');
     if (d.state === 'done') return 'Saved in Movies/Multiview' + (d.total ? ' - ' + fmtBytes(d.total) : '');
     if (d.state === 'queued') return 'Waiting for a free download slot' + (size ? ' - ' + size : '');
@@ -1777,23 +1812,24 @@
     if (d.state === 'waiting') return (d.reason || 'Waiting') + (size ? ' - ' + size + ' (' + pct + '%)' : '');
     return (d.reason || 'Downloading') + (size ? ' - ' + size + ' (' + pct + '%)' : '') + (d.speed > 0 ? ' - ' + fmtBytes(d.speed) + '/s' : '');
   }
-  function openDownloaded() {
-    var existing = $('#dl-manage');
-    if (existing) return;
-    try { appBridge().downloadForgetMissing(); } catch (e) { /* old app */ }
+  // The phone's own downloads, drawn as a section of the Recordings & Downloads page (P-39).
+  function nativeSection(closeFn) {
     var list = h('div', { class: 'chlist', id: 'dl-manage' });
-    var m = openModal({ title: 'Downloads on this phone (saved in Movies/Multiview)', wide: true, body: [list], foot: h('button', { class: 'btn', type: 'button', text: 'Close', onclick: function () { m.close(); } }) });
+    var el = h('div', { class: 'rec-phone' }, h('div', { class: 'note', text: 'On this phone (saved in Movies/Multiview)' }), list);
     var rows = {};
     function act(fn, id) { return function () { try { appBridge()[fn](id); } catch (e) { /* old app */ } nativePoll(); }; }
     function btn(text, fn) { return h('button', { class: 'btn', type: 'button', text: text, onclick: fn }); }
     function buttons(d) {
-      if (d.state === 'done') return [btn('Play', function () { m.close(); dlPlay(d.id, d.name); }), btn('Open with...', act('downloadOpen', d.id)), btn('Delete', function () { confirmBox('Delete ' + d.name + ' from this phone?', 'Delete', act('downloadRemove', d.id)); })];
-      if (d.state === 'paused') return [btn('Resume', act('downloadResume', d.id)), btn('Cancel', act('downloadRemove', d.id))];
-      if (d.state === 'failed') return [btn('Retry', act('downloadResume', d.id)), btn('Remove', act('downloadRemove', d.id))];
-      return [btn('Pause', act('downloadPause', d.id)), btn('Cancel', act('downloadRemove', d.id))];
+      var b;
+      if (d.state === 'done') b = [btn('Play', function () { closeFn(); dlPlay(d.id, d.name); }), btn('Open with...', act('downloadOpen', d.id)), btn('Delete', function () { confirmBox('Delete ' + d.name + ' from this phone?', 'Delete', act('downloadRemove', d.id)); })];
+      else if (d.state === 'paused') b = [btn('Resume', act('downloadResume', d.id)), btn('Cancel', act('downloadRemove', d.id))];
+      else if (d.state === 'failed') b = [btn('Retry', act('downloadResume', d.id)), btn('Remove', act('downloadRemove', d.id))];
+      else b = [btn('Pause', act('downloadPause', d.id)), btn('Cancel', act('downloadRemove', d.id))];
+      if (d.report && d.state !== 'done') b.push(btn('Copy report', function () { copyText(d.report).then(function () { banner('Report copied', 2500); }, function () { banner('Could not copy the report', 3000); }); }));
+      return b;
     }
     function render() {
-      if (!$('#dl-manage')) { NDL.onChange = null; return; }
+      if (!list.isConnected) { if (NDL.onChange === render) NDL.onChange = null; return; }
       var ids = {};
       NDL.list.forEach(function (d) {
         ids[d.id] = true;
@@ -1803,11 +1839,11 @@
           if (r) r.el.remove();
           var status = h('small', { class: 'dl-status' });
           var fill = h('i', { style: 'width:0%' });
-          var el = h('div', { class: 'ch dl-row', 'data-id': d.id },
+          var row = h('div', { class: 'ch dl-row', 'data-id': d.id },
             h('div', { class: 'nm' }, h('b', { text: d.name }), status, d.state === 'done' ? null : h('div', { class: 'bar' }, fill)),
             h('div', { class: 'dl-btns' }, buttons(d)));
-          list.appendChild(el);
-          r = rows[d.id] = { el: el, status: status, fill: fill, state: d.state };
+          list.appendChild(row);
+          r = rows[d.id] = { el: row, status: status, fill: fill, state: d.state };
         }
         r.status.textContent = nativeText(d);
         r.fill.style.width = pct + '%';
@@ -1817,9 +1853,9 @@
       if (!NDL.list.length && !none) list.appendChild(h('div', { class: 'note', id: 'dl-none', text: 'Nothing downloaded yet. Use the ⬇ button on a movie or episode.' }));
       if (NDL.list.length && none) none.remove();
     }
-    NDL.onChange = render;
-    nativePoll();
+    return { el: el, render: render };
   }
+  function openDownloaded() { openRecordings(); }
   function dlReset() { DL.queue = []; DL.total = 0; DL.done = 0; DL.failed = []; DL.waitMsg = ''; dlBar(); }
   function dlBar() {
     var box = $('#dlbar');
@@ -2106,6 +2142,7 @@
   window.__mvPip = function (on) {
     document.body.classList.toggle('pip', !!on);
     if (on) { ovlHide(); sideClose(); }
+    setTimeout(function () { try { ftMeasure(); } catch (e) { /* ticker not built yet */ } }, 150);
   };
   // browsers that allow it start the mini player by themselves when the viewer leaves the tab
   try {
@@ -2241,6 +2278,7 @@
   }
   function ftClear() { FT.model = null; FT.sig = ''; ftShow(false); }
   function ftShow(on) {
+    ftSizeApply();
     var bar = $('#ftick');
     var want = !!(on && S.ftick && FP.avail && FT.model && isAdmin());
     document.body.classList.toggle('ftick-on', want);
@@ -2255,8 +2293,9 @@
   function ftPlayerEl(rec, it, l) {
     var pts = h('span', { class: 'ft-pts', text: '' });
     var l2 = h('div', { class: 'ft-l2' });
-    var el = h('div', { class: 'ft-it' }, h('div', { class: 'ft-l1' }, h('span', { class: 'ft-pos', text: it.pos }), h('span', { class: 'ft-nm', text: it.name }), pts), l2);
-    rec.els.push({ el: el, pts: pts, l2: l2 });
+    var l3 = h('div', { class: 'ft-l3' });
+    var el = h('div', { class: 'ft-it' }, h('div', { class: 'ft-l1' }, h('span', { class: 'ft-pos', text: it.pos }), h('span', { class: 'ft-nm', text: it.name }), pts), l2, l3);
+    rec.els.push({ el: el, pts: pts, l2: l2, l3: l3 });
     return el;
   }
   function ftPaint(rec) {
@@ -2265,6 +2304,10 @@
       e.el.className = 'ft-it ' + p.gameStatus;
       e.pts.style.display = p.gameStatus === 'pre' ? 'none' : '';
       e.l2.textContent = p.gameStatus === 'pre' ? ftKick(p.kickoffAt) : p.gameStatus === 'live' ? ftStats(p) : ftStats(p) || 'Final';
+      // projection under the score (P-47): pregame number before kickoff, live number while playing, pregame number after the final
+      var pj = p.gameStatus === 'live' ? (p.liveProjection != null ? p.liveProjection : p.projected) : (p.projection != null ? p.projection : p.projected);
+      e.l3.textContent = pj > 0 ? 'Proj ' + ftNum(pj) : '';
+      e.l3.style.color = (p.gameStatus !== 'pre' && FCOL[p.projectedColour]) || '';
       if (p.gameStatus === 'pre') e.pts.textContent = '';
       else if (!rec.anim) e.pts.textContent = ftNum(rec.shown);
     });
@@ -2301,12 +2344,13 @@
     var col = FCOL[l.colour] || '#fff';
     var seg = h('div', { class: 'ft-seg' });
     var name = h('div', { class: 'ft-name', text: l.name });
-    var me = h('div', { class: 'ft-side' }, h('span', { class: 'ft-tot ft-me', style: 'color:' + col, text: '' }), h('span', { class: 'ft-tn', style: 'color:' + col, text: l.mine.name }));
-    var op = h('div', { class: 'ft-side' }, h('span', { class: 'ft-tot ft-op', text: '' }), h('span', { class: 'ft-tn', text: l.opp.name }));
+    var me = h('div', { class: 'ft-side' }, h('span', { class: 'ft-tot ft-me', style: 'color:' + col, text: '' }), h('span', { class: 'ft-pj', text: '' }), h('span', { class: 'ft-tn', style: 'color:' + col, text: l.mine.name }));
+    var op = h('div', { class: 'ft-side' }, h('span', { class: 'ft-tot ft-op', text: '' }), h('span', { class: 'ft-pj', text: '' }), h('span', { class: 'ft-tn', text: l.opp.name }));
     var score = h('div', { class: 'ft-score' }, me, h('span', { class: 'ft-dash', text: '-' }), op);
     seg.appendChild(name); seg.appendChild(score);
-    var s = { seg: seg, name: name, score: score, me: me.firstChild, op: op.firstChild, tn: [me.lastChild, op.lastChild], copy: copy, x: 0, pinW: 0, nw: 0 };
+    var s = { seg: seg, name: name, score: score, me: me.firstChild, op: op.firstChild, tn: [me.lastChild, op.lastChild], pj: [me.children[1], op.children[1]], copy: copy, x: 0, pinW: 0, nw: 0 };
     lg.segs.push(s);
+    ftPaintProj(s, l);
     var items = h('div', { class: 'ft-items' });
     seg.appendChild(items);
     ['mine', 'opp'].forEach(function (side) {
@@ -2316,6 +2360,14 @@
       recs.forEach(function (r) { items.appendChild(ftPlayerEl(r, r.p, l)); });
     });
     return seg;
+  }
+  // Team projection (P-46): Fantasy Manager sends the expected final and its colour; no colour = grey.
+  function ftPaintProj(s, l) {
+    [['mine', 0], ['opp', 1]].forEach(function (x) {
+      var t = l[x[0]], el = s.pj[x[1]];
+      el.textContent = t && t.projected > 0 ? 'Proj ' + ftNum(t.projected) : '';
+      el.style.color = (t && FCOL[t.projectedColour]) || '#8b93a7';
+    });
   }
   function ftRefreshHead(lg) {
     lg.segs.forEach(function (s) {
@@ -2327,7 +2379,7 @@
     sum.leagues.forEach(function (l, i) {
       var lg = FT.model.leagues[i];
       lg.l = l;
-      lg.segs.forEach(function (s) { var col = FCOL[l.colour] || '#fff'; s.me.style.color = col; s.tn[0].style.color = col; });
+      lg.segs.forEach(function (s) { var col = FCOL[l.colour] || '#fff'; s.me.style.color = col; s.tn[0].style.color = col; ftPaintProj(s, l); });
       ftSide(l, 'mine').concat(ftSide(l, 'opp')).forEach(function (p) {
         var rec = lg.recs.filter(function (r) { return r.key === p.side + '|' + p.playerId; })[0];
         if (rec) { rec.p = p; ftPaint(rec); }
@@ -2464,7 +2516,13 @@
     requestAnimationFrame(step);
   }
   function ftInit() { ftEnsure(); ftPoll(); }
-  function ftApply() { if (S.ftick) ftPoll(); else { clearTimeout(FT.timer); ftShow(false); } if (FT.model) ftShow(true); }
+  function ftSizeApply() {
+    var c = document.documentElement.classList;
+    c.toggle('tks-small', S.ftsize === 'small');
+    c.toggle('tks-medium', S.ftsize === 'medium');
+  }
+  function ftApply() {
+    ftSizeApply(); if (S.ftick) ftPoll(); else { clearTimeout(FT.timer); ftShow(false); } if (FT.model) ftShow(true); }
 
   // ---------------------------------------------------------------- fantasy score pop-ups (P-26, admins only)
   // Fantasy Manager's score events come through this server. One pop-up at a time, queued, each shown for about 5 s:
@@ -2548,7 +2606,11 @@
   function fpShort(n) { var p = String(n || '').trim().split(/\s+/); return p.length > 1 ? p[0].charAt(0) + '. ' + p.slice(1).join(' ') : p[0] || ''; }
   function fpScale() {
     var base = S.fsize === 'small' ? 0.7 : S.fsize === 'large' ? 1.25 : S.fsize === 'medium' ? 1 : (visibleCount() <= 1 ? 1 : visibleCount() <= 4 ? 0.85 : 0.7);
-    return Math.max(0.2, Math.min(base, (window.innerWidth - 16) / 1240));
+    var fit = (window.innerWidth - 16) / 1240;           // the pop-up is drawn 1240 px wide at 100%
+    if (fit >= 1.25) return base;
+    // on a narrow screen each size takes its own share of the width (small about half, medium three quarters, large all of it)
+    var frac = S.fsize === 'small' ? 0.5 : S.fsize === 'medium' ? 0.75 : S.fsize === 'large' ? 1 : Math.min(1, base / 1.25);
+    return Math.max(0.15, Math.min(base, fit * frac));
   }
   function fpFmt(v, plus) { return (plus ? '+' : '') + (Math.round(v * 10) / 10).toFixed(1); }
   function fpShow(e) {
@@ -2775,7 +2837,7 @@
   // ---------------------------------------------------------------- channel picker
   // Everything the picker shows (provider, tab, category, search, favorites, rows expanded, scroll position and the
   // channel chosen last) lives in S.pk, so it opens again exactly where it was left.
-  var PK_DEFAULT = { prov: '', tab: 'live', cat: '', q: '', favs: false, limit: 100, scroll: 0, last: '' };
+  var PK_DEFAULT = { prov: '', tab: 'live', cat: '', q: '', favs: false, limit: 100, scroll: 0, last: '', seen: '' };
   function pkState() {
     var p = S.pk && typeof S.pk === 'object' ? S.pk : {};
     Object.keys(PK_DEFAULT).forEach(function (k) { if (typeof p[k] !== typeof PK_DEFAULT[k]) p[k] = PK_DEFAULT[k]; });
@@ -2832,7 +2894,15 @@
     var loading = 0;
     var errors = {};
     var m;
+    // P-51: the menu resumes where it was left; on Live and Guide, if the channel on this screen changed since the menu was last used, it opens at that channel
+    if (pk.tab === 'live' || pk.tab === 'guide') {
+      var curCfg = tiles[slot] && tiles[slot].cfg;
+      var cur = curCfg && !curCfg.vod ? curCfg.p + ':' + curCfg.sid : '';
+      if (cur && cur !== pk.seen) { pk.last = cur; pk.jump = true; }
+      if (cur) pk.seen = cur;
+    }
     var restore = pk.scroll > 0 || !!pk.last;   // scroll back to the remembered spot once the list is on screen
+    var jumpTries = 0;
     var gstart = 0;                              // guide window start (unix seconds)
     var gtoken = 0;
     var gcache = {};                             // provider:sid:gstart -> programmes
@@ -2964,6 +3034,14 @@
           }
         }
       }
+      if (!done && pk.jump && jumpTries++ === 0 && (pk.q || pk.favs || pk.cat)) {
+        // the channel is hidden by the remembered filters: show everything once and look again
+        pk.q = ''; pk.favs = false; pk.cat = ''; pk.limit = 5000; search.value = ''; catSel.value = ''; favBtn.classList.remove('on');
+        restore = true;
+        render();
+        return;
+      }
+      pk.jump = false;
       if (!done && pk.scroll) m.body.scrollTop = pk.scroll;
     }
 
@@ -3178,6 +3256,8 @@
 
     function choose(r) {
       pk.last = r.p + ':' + r.sid;
+      if (!r.vod) pk.seen = pk.last;
+      pk.jump = false;
       remember();
       if (r.vod === 'series') { openEpisodes(r, slot, function () { m.close(); }); return; }
       m.close();
@@ -3403,6 +3483,9 @@
     var tkPos = h('select', { id: 'ft-pos' }, h('option', { value: 'below', text: 'Below the video (keeps the score bug clear)' }), h('option', { value: 'overlap', text: 'Overlap the video (for streams with their own ticker)' }));
     tkPos.value = S.fpos;
     tkPos.addEventListener('change', function () { S.fpos = tkPos.value; saveSoon(); ftApply(); });
+    var tkSize = h('select', { id: 'ft-size' }, h('option', { value: 'small', text: 'Small' }), h('option', { value: 'medium', text: 'Medium' }), h('option', { value: 'large', text: 'Large (default)' }));
+    tkSize.value = S.ftsize;
+    tkSize.addEventListener('change', function () { S.ftsize = tkSize.value; saveSoon(); ftSizeApply(); ftMeasure(); });
     var tkSpeed = h('select', { id: 'ft-speed' }, h('option', { value: 'slow', text: 'Slow' }), h('option', { value: 'normal', text: 'Normal' }), h('option', { value: 'fast', text: 'Fast' }));
     tkSpeed.value = S.fspeed;
     tkSpeed.addEventListener('change', function () { S.fspeed = tkSpeed.value; saveSoon(); });
@@ -3418,6 +3501,7 @@
         h('div', { class: 'field' }, h('label', { text: 'Drop a pop-up that is this late' }), age),
         h('label', { class: 'check' }, tkOn, h('span', { text: 'Show the score ticker along the bottom' })),
         h('div', { class: 'field' }, h('label', { text: 'Ticker position' }), tkPos),
+        h('div', { class: 'field' }, h('label', { text: 'Ticker size' }), tkSize),
         h('div', { class: 'field' }, h('label', { text: 'Ticker speed' }), tkSpeed),
         h('div', { class: 'viewbtns' }, test)) : null);
   }
@@ -3564,6 +3648,7 @@
     return m;
   }
 
+  var SET_OPEN = {};   // which Settings headers are open: kept while the page lives, so a fully closed app starts collapsed again (P-48)
   function openSettings() {
     function field(label, control) { return h('div', { class: 'field' }, h('label', { text: label }), control); }
     function check(label, key, after) {
@@ -3636,6 +3721,25 @@
       h('b', { text: 'S  Z  C  R' }), h('span', { text: 'make main, zoom, change channel, reload' }),
       h('b', { text: 'I' }), h('span', { text: 'show/hide stats (resolution, buffer, dropped frames)' }),
       h('b', { text: 'Tap twice' }), h('span', { text: 'tap the same tile twice to expand it (again to go back)' }));
+    var setGroups = [];
+    function setGroup(id, title, nodes) {
+      nodes = nodes.filter(function (n) { return n; });
+      if (!nodes.length) return null;
+      var open = !!SET_OPEN[id];
+      var body = h('div', { class: 'setgrp-body' }, nodes);
+      body.hidden = !open;
+      var head = h('button', { class: 'btn setgrp-h', type: 'button', 'data-grp': id, 'aria-expanded': open ? 'true' : 'false' }, h('span', { text: title }), h('span', { class: 'setgrp-a', text: open ? '\u25BE' : '\u25B8' }));
+      var g = { id: id, body: body, head: head };
+      g.set = function (on) { SET_OPEN[id] = on; body.hidden = !on; head.setAttribute('aria-expanded', on ? 'true' : 'false'); head.lastChild.textContent = on ? '\u25BE' : '\u25B8'; };
+      head.addEventListener('click', function () { g.set(body.hidden); });
+      setGroups.push(g);
+      return h('div', { class: 'setgrp' }, head, body);
+    }
+    function setAllRow() {
+      return h('div', { class: 'viewbtns', id: 'set-all' },
+        h('button', { class: 'btn', type: 'button', id: 'set-collapse', text: 'Collapse all', onclick: function () { setGroups.forEach(function (g) { g.set(false); }); } }),
+        h('button', { class: 'btn', type: 'button', id: 'set-expand', text: 'Expand all', onclick: function () { setGroups.forEach(function (g) { g.set(true); }); } }));
+    }
     var m = openModal({
       title: 'Settings',
       body: [
@@ -3643,34 +3747,51 @@
           h('button', { class: 'btn', type: 'button', id: 'set-full', text: fsElement() ? 'Exit fullscreen' : 'Fullscreen', onclick: toggleFullscreen }),
           ME && ME.user ? h('button', { class: 'btn', type: 'button', id: 'set-pw', text: 'Change my password...', onclick: function () { m.close(); changeOwnPassword(); } }) : null,
           isAdmin() ? h('button', { class: 'btn', type: 'button', id: 'set-users', text: 'Users and logins...', onclick: function () { m.close(); openUsers(); } }) : null),
-        installRow(),
-        field('Start playing after (video collected before a tile starts; smoother, adds delay)', bufSel),
-        field('Keep up to (largest cushion kept while playing)', keepSel),
-        memNote,
-        field('Video', fitSel),
-        field('Theme (menus and dialogs; the video area stays black)', themeSel),
-        isAdmin() ? h('div', { class: 'field' }, h('label', { text: 'Buffering and stalls' }), h('button', { class: 'btn', type: 'button', id: 'set-diag', text: 'Diagnostics...', onclick: function () { m.close(); openDiag(); } })) : null,
-        isAdmin() ? fantasyBlock() : null,
-        field('Shared screen (for weak devices)', shSel),
-        shNote, shInfo, shBtns,
-        field('Stream delivery (applies when a stream reconnects)', trSel),
-        check('Use another provider when the chosen one is full', 'failover', function () { tiles.forEach(function (t) { if (t.cfg && t.retry) t.start(); }); }),
-        check('Small tiles prefer the SD version of a channel (less to download and decode)', 'smallSd', function () { tiles.forEach(function (t) { t.applyQuality(); }); }),
-        check('Auto quality for every channel that has no quality chosen (starts low, steps up as the buffer grows, steps down when it drains)', 'autoQ', function () { tiles.forEach(function (t) { if (t.cfg && !t.cfg.vod && !t.cfg.q) t.start(); }); }),
-        dlOk() ? field('Max concurrent downloads (this device; the rest wait in the queue)', dlSel) : null,
-        nativeDl() ? check('Download over Wi-Fi only (downloads wait on mobile data)', 'dlWifi', nativeCfg) : null,
-        isAdmin() ? dlCapBlock() : null,
-        isAdmin() ? check('Play movies and episodes straight from the provider (not through the server; falls back to the server if it fails)', 'directPlay', function () { tiles.forEach(function (t) { if (t.cfg && t.cfg.vod) t.start(); }); }) : null,
-        isAdmin() && dlOk() ? check('Download buttons copy the provider\'s direct link instead of downloading through the server', 'directDl') : null,
-        isAdmin() ? h('div', { class: 'note', text: 'Direct links carry the provider login and are not counted by the server (no connection limit, no "keep one free"). A browser cannot save a direct file by itself, so direct downloads are links to paste into a download manager. On an https page, an http provider is blocked by the browser.' }) : null,
-        check('Use web workers (lighter on the page; turn off if video will not start)', 'workers'),
-        localSupported() && isAdmin() ? check('Local mode: play the selected screen directly from the provider (not through the server)', 'local', function () { tiles.forEach(function (t) { t.localFailed = false; }); localRefresh(); }) : null,
-        localSupported() && isAdmin() ? h('div', { class: 'note', text: 'Local mode skips the server for the selected screen only: no rewind, recording or cast for it, and it uses its own provider connection. It falls back to the server by itself if the direct stream fails.' }) : null,
-        check('Show stats on tiles', 'stats', function () { document.body.classList.toggle('stats', S.stats); }),
-        check('Always show channel names', 'labels', function () { document.body.classList.toggle('showlabels', S.labels); }),
-        check("Show what's on now under channel names (programme guide)", 'epgOn', function () { tiles.forEach(function (t) { t.render(); }); pollEpg(); }),
-        h('div', { class: 'note', text: 'Buffer and failover apply the next time a stream (re)connects.' }),
-        keys
+        setAllRow(),
+        setGroup('play', 'Playback and buffering', [
+          field('Start playing after (video collected before a tile starts; smoother, adds delay)', bufSel),
+          field('Keep up to (largest cushion kept while playing)', keepSel),
+          memNote,
+          field('Video', fitSel),
+          field('Stream delivery (applies when a stream reconnects)', trSel),
+          check('Use another provider when the chosen one is full', 'failover', function () { tiles.forEach(function (t) { if (t.cfg && t.retry) t.start(); }); }),
+          check('Small tiles prefer the SD version of a channel (less to download and decode)', 'smallSd', function () { tiles.forEach(function (t) { t.applyQuality(); }); }),
+          check('Auto quality for every channel that has no quality chosen (starts low, steps up as the buffer grows, steps down when it drains)', 'autoQ', function () { tiles.forEach(function (t) { if (t.cfg && !t.cfg.vod && !t.cfg.q) t.start(); }); }),
+          check('Use web workers (lighter on the page; turn off if video will not start)', 'workers'),
+          h('div', { class: 'note', text: 'Buffer and failover apply the next time a stream (re)connects.' })
+        ]),
+        setGroup('shared', 'Shared screen (for weak devices)', [
+          field('Shared screen (for weak devices)', shSel),
+          shNote, shInfo, shBtns
+        ]),
+        setGroup('dl', 'Downloads and direct play', [
+          dlOk() ? field('Max concurrent downloads (this device; the rest wait in the queue)', dlSel) : null,
+          nativeDl() ? check('Download over Wi-Fi only (downloads wait on mobile data)', 'dlWifi', nativeCfg) : null,
+          isAdmin() ? dlCapBlock() : null,
+          isAdmin() ? check('Play movies and episodes straight from the provider (not through the server; falls back to the server if it fails)', 'directPlay', function () { tiles.forEach(function (t) { if (t.cfg && t.cfg.vod) t.start(); }); }) : null,
+          isAdmin() && dlOk() ? check('Download buttons copy the provider\'s direct link instead of downloading through the server', 'directDl') : null,
+          isAdmin() ? h('div', { class: 'note', text: 'Direct links carry the provider login and are not counted by the server (no connection limit, no "keep one free"). A browser cannot save a direct file by itself, so direct downloads are links to paste into a download manager. On an https page, an http provider is blocked by the browser.' }) : null,
+          localSupported() && isAdmin() ? check('Local mode: play the selected screen directly from the provider (not through the server)', 'local', function () { tiles.forEach(function (t) { t.localFailed = false; }); localRefresh(); }) : null,
+          localSupported() && isAdmin() ? h('div', { class: 'note', text: 'Local mode skips the server for the selected screen only: no rewind, recording or cast for it, and it uses its own provider connection. It falls back to the server by itself if the direct stream fails.' }) : null
+        ]),
+        setGroup('disp', 'Display', [
+          field('Theme (menus and dialogs; the video area stays black)', themeSel),
+          check('Show stats on tiles', 'stats', function () { document.body.classList.toggle('stats', S.stats); }),
+          check('Always show channel names', 'labels', function () { document.body.classList.toggle('showlabels', S.labels); }),
+          check("Show what's on now under channel names (programme guide)", 'epgOn', function () { tiles.forEach(function (t) { t.render(); }); pollEpg(); })
+        ]),
+        setGroup('fant', 'Fantasy ticker and pop-ups', [
+          isAdmin() ? fantasyBlock() : null
+        ]),
+        setGroup('admin', 'Admin tools', [
+          isAdmin() ? h('div', { class: 'field' }, h('label', { text: 'Buffering and stalls' }), h('button', { class: 'btn', type: 'button', id: 'set-diag', text: 'Diagnostics...', onclick: function () { m.close(); openDiag(); } })) : null
+        ]),
+        setGroup('app', 'Install and device', [
+          installRow()
+        ]),
+        setGroup('keys', 'Keyboard shortcuts', [
+          keys
+        ])
       ],
       foot: [
         !isAdmin() ? null : h('button', { class: 'btn', type: 'button', text: 'Clear all tiles', onclick: function () { m.close(); S.tiles = S.tiles.map(function () { return null; }); tiles.forEach(function (t) { t.setCfg(null); }); saveSoon(); updateHint(); } }),
@@ -3698,11 +3819,14 @@
         provs.forEach(function (p) {
           var st = null;
           r[1].providers.forEach(function (s) { if (s.id === p.id) st = s; });
-          var active = st ? st.active : 0;
+          var active = st ? st.active + (st.direct || 0) : 0;
           body.push(h('div', { class: 'prov' },
             h('div', { class: 'name' }, h('b', { text: p.name + (p.enabled ? '' : '  (off)') }), h('small', { text: (p.type === 'local' ? 'Capture card · ' + p.sources.length + ' source' + (p.sources.length === 1 ? '' : 's') : host(p.url)) + '  ·  ' + active + ' of ' + p.maxConnections + ' connection' + (p.maxConnections === 1 ? '' : 's') + ' in use' }),
               h('div', { class: 'bar' }, h('i', { class: active >= p.maxConnections ? 'full' : '', style: 'width:' + Math.min(100, Math.round(100 * active / Math.max(1, p.maxConnections))) + '%' }))),
             h('button', { class: 'btn', type: 'button', text: 'Edit', onclick: function () { if (p.type === 'local') formLocal(p, provs); else form(p, provs); } })));
+        });
+        (r[1].directStreams || []).forEach(function (d) {
+          body.push(h('div', { class: 'note', text: 'Direct (not through the server) · ' + (d.name || d.id) + ' · ' + d.kind + (d.user ? ' · ' + d.user : '') }));
         });
         var streams = r[1].streams;
         if (streams.length) {
@@ -3882,14 +4006,23 @@
   }
   function openRecordings() {
     var timer = null;
-    var m = openModal({ title: 'Recordings & Downloads', wide: true, body: h('div', { class: 'note', text: 'Loading...' }), foot: null, onClose: function () { clearInterval(timer); } });
+    var phone = null;
+    var m = openModal({ title: 'Recordings & Downloads', wide: true, body: h('div', { class: 'note', text: 'Loading...' }), foot: null, onClose: function () { clearInterval(timer); if (phone && NDL.onChange === phone.render) NDL.onChange = null; } });
     var rev = '';
+    if (nativeDl()) {
+      phone = nativeSection(function () { m.close(); });
+      try { appBridge().downloadForgetMissing(); } catch (e) { /* old app */ }
+      NDL.onChange = phone.render;
+      m.setBody([phone.el, h('div', { class: 'note', text: 'Loading...' })], null);
+      nativePoll();
+    }
     function render(r) {
       var sig = JSON.stringify(r.items.map(function (i) { return [i.id, i.status, i.size, i.error, i.end]; }));
       if (sig === rev && m.box.contains(document.activeElement)) return;
       rev = sig;
       var keep = document.activeElement && document.activeElement.getAttribute ? document.activeElement.getAttribute('data-act') : '';
       var body = [];
+      if (phone) body.push(phone.el);
       body.push(h('div', { class: 'note', id: 'rec-usage', text: fmtBytes(r.usage.bytes) + ' used here' + (r.usage.free ? ', ' + fmtBytes(r.usage.free) + ' free on the disk' : '') + '. Recordings and downloads are kept until you delete them.' + (r.usage.dir ? ' Folder: ' + r.usage.dir : '') }));
       if (!r.items.length) body.push(h('div', { class: 'note', text: 'Nothing here yet. Record a live channel with the red REC button, or download a movie or episode with the download button, while watching.' }));
       r.items.forEach(function (it) {
@@ -3925,7 +4058,7 @@
       if (f && !m.box.contains(document.activeElement)) f.focus();
     }
     function poll() {
-      return api('/api/recordings').then(function (r) { r.users = isAdmin() && r.items.some(function (i) { return i.owner; }); render(r); }, function (e) { if (!rev) m.setBody(h('div', { class: 'msg bad', text: e.message }), closeBtn(m)); });
+      return api('/api/recordings').then(function (r) { r.users = isAdmin() && r.items.some(function (i) { return i.owner; }); render(r); }, function (e) { if (!rev) m.setBody(phone ? [phone.el, h('div', { class: 'msg bad', text: e.message })] : h('div', { class: 'msg bad', text: e.message }), closeBtn(m)); });
     }
     poll();
     timer = setInterval(poll, 5000);
@@ -4602,6 +4735,7 @@
     ME = { admin: !!me.admin, user: me.user, open: !!me.open, authRequired: !!me.authRequired };
     aliveStart();
     if (nativeDl()) { nativeCfg(); nativePoll(); }                  // downloads that went on while the app was closed
+    setInterval(directReport, 15000);
     document.body.classList.toggle('viewer', !ME.admin);
     sideSync();
     ovlSync();
@@ -4639,5 +4773,5 @@
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init); else init();
 
   // test hook (harmless in production)
-  window.__mv = { away: awayFor, fpReload: fpReload, updateReady: updateReady, ovlShow: ovlShow, ovlHide: ovlHide, get ovl() { return ovl; }, get side() { return side; }, castState: castState, openRecordings: openRecordings, get S() { return S; }, get ME() { return ME; }, applyView: applyView, tiles: tiles, LAYOUTS: LAYOUTS, setLayout: setLayout, select: select, assign: assign, toggleZoom: toggleZoom, sharedApply: sharedApply, get shared() { return shared; }, get zoom() { return zoom; }, get modals() { return modals.length; }, get FP() { return FP; }, fpIncoming: fpIncoming, fpTest: fpTest, get FT() { return FT; }, diagVerdict: diagVerdict, diagReport: diagReport, openDiag: openDiag, ftSet: ftSet, ftCheck: function () { ftMeasure(); ftCheck($('#ft-view')); } };
+  window.__mv = { away: awayFor, fpReload: fpReload, updateReady: updateReady, ovlShow: ovlShow, ovlHide: ovlHide, get ovl() { return ovl; }, get side() { return side; }, castState: castState, openRecordings: openRecordings, get S() { return S; }, get ME() { return ME; }, applyView: applyView, tiles: tiles, LAYOUTS: LAYOUTS, setLayout: setLayout, select: select, assign: assign, toggleZoom: toggleZoom, sharedApply: sharedApply, get shared() { return shared; }, get zoom() { return zoom; }, get modals() { return modals.length; }, get FP() { return FP; }, fpIncoming: fpIncoming, fpTest: fpTest, get FT() { return FT; }, diagVerdict: diagVerdict, diagReport: diagReport, openDiag: openDiag, ftSet: ftSet, ftCheck: function () { ftMeasure(); ftCheck($('#ft-view')); }, fpScale: fpScale };
 })();
