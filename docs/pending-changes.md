@@ -5,7 +5,7 @@ Requests logged here are not built yet. Say "build" to fold them into a new vers
 With every push, say whether the compose/stack file must change or whether pulling the new image is enough.
 Every build rewrites deploy/RELEASE.md using the FULL template of the app spec (section 8: Update, Image, Short, Long, Release commit, Type, Port, Public hostname, env vars, Data, Resources, Healthcheck, Verify, PWA, Docker build, Rollback naming the exact previous tag, Known issues, Backup tier). Server tests use `wget` (no curl on vm101). The server's real stack file is the homelab repo's stacks/multiview-iptv/compose.yaml (stack.yml here is only a reference); never tell anyone to update the Dockhand stack. Fixed `Update:` line: `Update: now` only when the user said "build, push and update" for that release, otherwise `Update: later`.
 
-Current released version: 0.16.1 (being pushed)
+Current released version: 0.17.0 (being pushed)
 
 ### P-1 - Rebuild the on-screen menu as a traditional video player overlay
 Requested: 2026-10-18. Tap any screen (single view or multiview) to show a full-screen overlay over everything:
@@ -229,6 +229,7 @@ Notes: only multiview-iptv-<version>.apk is uploaded (release run and android_on
 
 ### P-34 - Option to stream or download directly from the provider (bypass the server)
 Requested: 2026-11-15 (James: "How can we give users the option to perform downloads or stream directly from the provider?")
-Type: minor (new setting, new behaviour)   Status: Pending
+Type: minor (new setting, new behaviour)   Status: Built in 0.17.0
 Notes: idea: the page gets the provider's own file URL instead of the /vod proxy URL, so the bytes skip the home server (saves its upload bandwidth). Costs: the URL carries the provider username and password, so every user who gets it can see them; the server can no longer see or count that connection (keep-one-free becomes best effort); the provider sees the viewer's IP; browsers block http provider files on an https page (mixed content) and most providers send no CORS headers, so live TV stays via the server. Proposed shape: per provider "Allow direct" (admin, default off) plus a per-user switch, a per-device choice "Via server / Direct" with automatic fallback to the server, first for movie/episode downloads and movie playback only. Questions: (a) admins only or viewers too, given the credentials leak? (b) is the goal to save home upload bandwidth, or something else? (c) are your providers http or https, and do they lock logins to one IP? (d) is a "Direct" link in the TV app wanted too?
 Decided 2026-11-15 (James): (a) admins only (they can already see the provider login, so nothing new leaks; viewers never get direct links). (b) goal: a faster connection. (c) not sure whether the providers are http or https or lock to one IP, so the build detects it: direct is tried, and any failure (blocked as mixed content, refused, IP lock) falls back to the server for that title and says so. (d) yes, the TV app gets it too. Status stays Pending until James says build.
+Built 2026-11-15: two per-device settings for admins (no per-provider switch was needed): play movies and episodes directly, and download buttons copy the direct links. A browser cannot save a cross-origin file under a name and providers send no CORS headers, so a direct download is a copied link, not a file saved by the page. Live TV is unchanged (Local mode already exists for the TV app).

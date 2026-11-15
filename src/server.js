@@ -641,6 +641,12 @@ function createApp(options = {}) {
       const prov = config.get(pid);
       if (!prov || !/^[A-Za-z0-9_:-]{1,40}$/.test(sid)) throw httpError(400, 'Bad channel', 'bad_request');
       if (prov.type === 'local' || !prov.url) throw httpError(400, 'This channel cannot play directly (it is a local capture card)', 'no_direct');
+      // a movie or an episode (P-34): the provider's file address, for direct playback or a direct link to copy
+      const vm = /^(movie|series):([A-Za-z0-9_-]{1,40})$/.exec(sid);
+      if (vm) {
+        const ext = String(url.searchParams.get('ext') || 'mp4').replace(/[^a-z0-9]/gi, '').slice(0, 5) || 'mp4';
+        return sendJson(req, res, 200, { url: xtream.vodUrl(prov, vm[1], vm[2], ext), title: sid, userAgent: xtream.ua(prov) });
+      }
       return sendJson(req, res, 200, { url: xtream.streamUrl(prov, sid), title: lists.nameOf(pid, sid) || sid, userAgent: xtream.ua(prov) });
     }
     // Fantasy Manager connection of the signed-in admin (P-27). Only admins may set, test, remove or use it; the token is never sent back.

@@ -186,4 +186,14 @@ describe('download API', () => {
     assert.match(r.reason, /free connection/);
     hold.forEach((f) => f());
   });
+
+  test('/api/direct hands admins the provider file address of a movie or episode, nobody else', async () => {
+    const m = json(await request(ctx.base, '/api/direct?p=a&sid=movie:501&ext=mkv', { headers: { Cookie: admin } }));
+    assert.equal(m.url, `${prov.url}/movie/u/p/501.mkv`);
+    const e = json(await request(ctx.base, '/api/direct?p=a&sid=series:9001', { headers: { Cookie: admin } }));
+    assert.equal(e.url, `${prov.url}/series/u/p/9001.mp4`);
+    assert.equal((await request(ctx.base, '/api/direct?p=a&sid=movie:501', { headers: { Cookie: guest } })).status, 403);
+    assert.equal((await request(ctx.base, '/api/direct?p=a&sid=movie:501')).status, 401);
+    assert.equal((await request(ctx.base, '/api/direct?p=a&sid=movie:..%2Fx', { headers: { Cookie: admin } })).status, 400);
+  });
 });

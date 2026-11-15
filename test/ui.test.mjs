@@ -659,6 +659,41 @@ describe('browser', () => {
     await r.ctx.close();
   });
 
+  test('direct from the provider: a movie plays from the provider address, falls back to the server on failure; Download copies the link', async () => {
+    const movie = { p: 'p1', sid: 'movie:501', name: 'Big Movie', vod: 'movie', ext: 'mp4' };
+    const { ctx, page, errors } = await openPage({ state: { layout: '1', sel: 0, tiles: [movie], directPlay: true } });
+    await page.waitForFunction(() => /^http:\/\/127\.0\.0\.1:\d+\/movie\/.*\/501\.mp4$/.test(document.querySelector('.tile[data-idx="0"] video').getAttribute('src') || ''));
+    assert.notEqual(await page.evaluate(() => new URL(document.querySelector('.tile[data-idx="0"] video').src).origin === location.origin), true, 'not through this server');
+    await page.evaluate(() => document.querySelector('.tile[data-idx="0"] video').dispatchEvent(new Event('error')));
+    await page.waitForFunction(() => /\/vod\/p1\/movie%3A501\.mp4$/.test(document.querySelector('.tile[data-idx="0"] video').getAttribute('src') || ''));
+    await page.waitForFunction(() => /Direct connection failed/.test(document.getElementById('banner').textContent));
+    assert.deepEqual(errors.filter((e) => !/ERR_|aborted/i.test(e)), []);
+    await ctx.close();
+  });
+
+  test('direct downloads: the download buttons copy the provider links (episode lists too), admins only setting', async () => {
+    const { ctx, page, errors } = await openPage({ state: { layout: '1', sel: 0, tiles: [], directDl: true } });
+    await page.evaluate(() => { window.__copied = ''; navigator.clipboard.writeText = (t) => { window.__copied = t; return Promise.resolve(); }; });
+    await tapPicker(page, 0);
+    await page.waitForSelector('.modal .tabs');
+    await page.click('.tab:has-text("Movies")');
+    await page.waitForFunction(() => document.querySelectorAll('.chlist .dlb').length === 2);
+    await page.click('.chlist .dlb >> nth=0');
+    await page.waitForFunction(() => /\/movie\/.*\/501\.mp4$/.test(window.__copied));
+    assert.equal(await page.locator('#dlbar').count(), 0, 'nothing was queued through the server');
+    await page.keyboard.press('Escape');
+    await page.keyboard.press('c');
+    await page.waitForSelector('.modal .tabs');
+    await page.click('.tab:has-text("Series")');
+    await page.waitForFunction(() => document.querySelectorAll('.chlist .pick').length === 1);
+    await page.click('.chlist .pick');
+    await page.waitForFunction(() => document.querySelectorAll('.modal-back:last-of-type .dlb').length === 2);
+    await page.click('#dl-season');
+    await page.waitForFunction(() => window.__copied.split('\n').length === 2 && /\/series\//.test(window.__copied));
+    assert.deepEqual(errors.filter((e) => !/ERR_|aborted|clipboard/i.test(e)), []);
+    await ctx.close();
+  });
+
   test('long buffer: settings offer minutes, the stream asks for that much, a memory note appears', async () => {
     const { ctx, page, errors } = await openPage({ state: { layout: '1', tiles: [{ p: 'p1', sid: '1', name: 'ESPN' }], bufSec: 4 } });
     await page.keyboard.press('Escape');

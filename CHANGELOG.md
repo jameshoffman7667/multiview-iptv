@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.17.0 - 2026-11-15
+Play movies and episodes straight from the provider (admins, P-34).
+- **Settings (admins, per device):** "Play movies and episodes straight from the provider" and "Download buttons copy the provider's direct link". Both are off by default.
+- **Playback:** the tile plays the provider's own file address, so the bytes skip the server (useful away from home, where the server's upload link is the bottleneck). If the provider or browser refuses it, the tile switches to the server by itself and says so. An http provider on an https page is detected first and skipped.
+- **Downloads:** a browser cannot save a file from another site under a name, and providers send no CORS headers, so with the second setting the download buttons copy the direct links (one per line for a season) for a download manager. The usual queue through the server is unchanged when the setting is off.
+- **Know before you use it:** direct links contain the provider login (only admins get them) and are not counted by the server, so there is no connection limit or "keep one free" for them. Viewers never get direct links. Live TV is unchanged.
+- Tests: `/api/direct` for movies and episodes, and two browser tests (direct playback with fallback, copied links).
+
+**Upgrading from 0.16.1:** pulling the image is enough. No compose or `.env` change.
+
 ## 0.16.1 - 2026-11-14
 Releases now carry only one APK, so the F-Droid index builds again.
 - **One file:** the release gets `multiview-iptv-<version>.apk` and nothing else. The extra copy `iptv-multiview.apk` made `fdroid update` stop with "is a duplicate", which blocked the index for every app. Both the normal release run and an `android_only` rebuild upload just the versioned file.

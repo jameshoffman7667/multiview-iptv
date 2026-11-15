@@ -63,7 +63,7 @@
   applyTheme();
   var ME = null; // set after /api/me: { admin, user, open, authRequired }
   function loadState() {
-    var d = { layout: '3x3', tiles: [], sel: 0, muted: false, bufSec: 4, keepSec: 0, transport: 'auto', fit: 'contain', failover: true, smallSd: true, autoQ: false, dlMax: 3, vol: 1, shared: '', theme: 'system', local: false, fpop: true, fmin: 3, fdelay: 0, fopp: true, fsize: 'auto', fage: 60, ftick: true, fpos: 'below', fspeed: 'normal', workers: true, stats: false, labels: false, epgOn: true, favs: {}, pk: {} };
+    var d = { layout: '3x3', tiles: [], sel: 0, muted: false, bufSec: 4, keepSec: 0, transport: 'auto', fit: 'contain', failover: true, smallSd: true, autoQ: false, directPlay: false, directDl: false, dlMax: 3, vol: 1, shared: '', theme: 'system', local: false, fpop: true, fmin: 3, fdelay: 0, fopp: true, fsize: 'auto', fage: 60, ftick: true, fpos: 'below', fspeed: 'normal', workers: true, stats: false, labels: false, epgOn: true, favs: {}, pk: {} };
     var j = {};
     try { j = JSON.parse(localStorage.getItem(LS_KEY)) || {}; } catch (e) { j = {}; }
     Object.keys(d).forEach(function (k) { if (j[k] !== undefined && typeof j[k] === typeof d[k]) d[k] = j[k]; });
@@ -723,6 +723,14 @@
     v.oncanplay = function () { if (gen === self.gen && !self.hasPlayed) self.setStatus(''); };
     v.onerror = function () {
       if (gen !== self.gen) return;
+      if (self.directNow) { // the provider refused or the network blocked it: use the server from now on
+        self.directNow = false;
+        DIRECT_FAIL[c.p] = true;
+        banner('Direct connection failed - using the server', 5000);
+        self.retry = 0;
+        self.start();
+        return;
+      }
       var code = v.error ? v.error.code : 0;
       // ask the server what happened (a full provider, a login problem...) - the video element only reports "network error"
       fetch(url, { headers: { Range: 'bytes=0-0' }, credentials: 'same-origin' }).then(function (r) {
@@ -740,11 +748,17 @@
         });
       }).catch(function () { self.retryVod(gen, 'Connection problem'); });
     };
-    v.src = url;
-    var pr;
-    try { pr = v.play(); } catch (e) { pr = null; }
-    if (pr && pr.catch) pr.catch(noop);
-    applyAudio();
+    function go(src, direct) {
+      self.directNow = direct;
+      v.src = src;
+      var pr;
+      try { pr = v.play(); } catch (e) { pr = null; }
+      if (pr && pr.catch) pr.catch(noop);
+      applyAudio();
+    }
+    if (directWanted('directPlay', c.p)) {
+      directUrl(c.p, c.sid, c.ext).then(function (d) { if (gen === self.gen) go(d || url, !!d); });
+    } else go(url, false);
   };
 
   Tile.prototype.retryVod = function (gen, msg, delay) {
@@ -1622,8 +1636,43 @@
   var DL = { queue: [], run: {}, total: 0, done: 0, failed: [], waitMsg: '', pumping: false, timer: null, waitUntil: 0 };
   function dlOk() { return !window.MVApp && !(ME && ME.download === false); }
   function dlItem(c) { return { p: c.p, sid: String(c.sid), ext: c.ext || 'mp4', name: c.name || String(c.sid) }; }
+  // ---- direct from the provider (P-34, admins only): movies and episodes are played from the provider's own address, and the
+  // download buttons copy those addresses instead (a browser cannot save a cross-origin file under a name, and the provider
+  // sends no CORS headers). Anything that goes wrong falls back to the server and is remembered for the rest of the session.
+  var DIRECT_FAIL = {};
+  function directWanted(key, p) { return !!(S[key] && isAdmin() && !DIRECT_FAIL[p]); }
+  function directUrl(p, sid, ext) {
+    return api('/api/direct?p=' + enc(p) + '&sid=' + enc(sid) + '&ext=' + enc(ext || 'mp4')).then(function (r) {
+      if (!window.MVApp && location.protocol === 'https:' && /^http:/i.test(r.url)) {
+        DIRECT_FAIL[p] = true;
+        banner('This provider uses http and the page uses https, so the browser blocks direct playback - using the server', 6000);
+        return null;
+      }
+      return r.url;
+    }).catch(function () { DIRECT_FAIL[p] = true; return null; });
+  }
+  function copyText(text) {
+    return new Promise(function (ok, bad) {
+      function legacy() {
+        var ta = h('textarea', { style: 'position:fixed;left:-999px;top:0' });
+        ta.value = text; document.body.appendChild(ta); ta.select();
+        try { document.execCommand('copy') ? ok() : bad(); } catch (e) { bad(e); }
+        ta.remove();
+      }
+      if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(ok, legacy); else legacy();
+    });
+  }
+  function dlCopyLinks(items) {
+    Promise.all(items.map(function (it) { return directUrl(it.p, it.sid, it.ext); })).then(function (urls) {
+      if (urls.some(function (u) { return !u; })) { DIRECT_FAIL[items[0].p] = true; items.forEach(function (it) { DL.queue.push(it); DL.total++; }); dlBar(); dlPump(); return; }
+      copyText(urls.join('\n')).then(function () {
+        banner('Direct link' + (urls.length === 1 ? '' : 's (' + urls.length + ')') + ' copied - paste into a download manager (they carry the provider login)', 6000);
+      }, function () { banner('Could not copy; the browser refused clipboard access', 5000); });
+    });
+  }
   function dlEnqueue(items) {
     if (!dlOk() || !items.length) return;
+    if (directWanted('directDl', items[0].p)) { dlCopyLinks(items); return; }
     items.forEach(function (it) { DL.queue.push(it); DL.total++; });
     dlBar();
     dlPump();
@@ -3457,6 +3506,9 @@
         check('Auto quality for every channel that has no quality chosen (starts low, steps up as the buffer grows, steps down when it drains)', 'autoQ', function () { tiles.forEach(function (t) { if (t.cfg && !t.cfg.vod && !t.cfg.q) t.start(); }); }),
         dlOk() ? field('Max concurrent downloads (this device; the rest wait in the queue)', dlSel) : null,
         isAdmin() ? dlCapBlock() : null,
+        isAdmin() ? check('Play movies and episodes straight from the provider (not through the server; falls back to the server if it fails)', 'directPlay', function () { tiles.forEach(function (t) { if (t.cfg && t.cfg.vod) t.start(); }); }) : null,
+        isAdmin() && dlOk() ? check('Download buttons copy the provider\'s direct link instead of downloading through the server', 'directDl') : null,
+        isAdmin() ? h('div', { class: 'note', text: 'Direct links carry the provider login and are not counted by the server (no connection limit, no "keep one free"). A browser cannot save a direct file by itself, so direct downloads are links to paste into a download manager. On an https page, an http provider is blocked by the browser.' }) : null,
         check('Use web workers (lighter on the page; turn off if video will not start)', 'workers'),
         localSupported() && isAdmin() ? check('Local mode: play the selected screen directly from the provider (not through the server)', 'local', function () { tiles.forEach(function (t) { t.localFailed = false; }); localRefresh(); }) : null,
         localSupported() && isAdmin() ? h('div', { class: 'note', text: 'Local mode skips the server for the selected screen only: no rewind, recording or cast for it, and it uses its own provider connection. It falls back to the server by itself if the direct stream fails.' }) : null,
