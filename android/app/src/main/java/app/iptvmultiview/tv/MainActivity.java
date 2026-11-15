@@ -3,7 +3,6 @@ package app.iptvmultiview.tv;
 import android.app.Activity;
 import android.Manifest;
 import android.app.AlertDialog;
-import android.app.DownloadManager;
 import android.app.UiModeManager;
 import android.app.PictureInPictureParams;
 import android.content.DialogInterface;
@@ -15,7 +14,6 @@ import android.graphics.Color;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
-import android.os.Environment;
 import android.text.InputType;
 import android.util.Rational;
 import android.view.KeyEvent;
@@ -37,7 +35,6 @@ import android.widget.FrameLayout;
 import android.widget.Toast;
 
 import org.json.JSONArray;
-import org.json.JSONObject;
 
 import java.util.ArrayList;
 
@@ -366,10 +363,8 @@ public class MainActivity extends Activity {
         super.onDestroy();
     }
 
-    // ---- downloads to this phone (P-32): Android's download manager saves into Movies/Multiview and shows its own notification.
-    // The page keeps the queue and the limits (the server tracks each file through its ticket), this only hands one file over.
-    private final ArrayList<String[]> pendingDownloads = new ArrayList<String[]>();
-    private static final int REQ_STORAGE = 71;
+    // ---- downloads to this phone (P-32, P-35): the app's own Downloader keeps the queue, retries and resumes; the page shows it.
+    private static final int REQ_PERMS = 71;
 
     private boolean phoneLike() {
         UiModeManager ui = (UiModeManager) getSystemService(UI_MODE_SERVICE);
@@ -378,77 +373,18 @@ public class MainActivity extends Activity {
                 && getPackageManager().hasSystemFeature(PackageManager.FEATURE_TOUCHSCREEN);
     }
 
-    private static String safeName(String s) {
-        String n = s == null ? "" : s.replaceAll("[\\\\/:*?\"<>|\\p{Cntrl}]", "_").trim();
-        if (n.length() > 150) n = n.substring(n.length() - 150);
-        return n.isEmpty() ? "download" : n;
-    }
-
-    private void startDownload(String url, String name) {
+    /** Asks (once per start) for what saving and the progress notification need on this Android version. */
+    private void askDownloadPermissions() {
+        ArrayList<String> need = new ArrayList<String>();
         if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.P
                 && checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
-            pendingDownloads.add(new String[]{url, name});
-            requestPermissions(new String[]{Manifest.permission.WRITE_EXTERNAL_STORAGE}, REQ_STORAGE);
-            return;
+            need.add(Manifest.permission.WRITE_EXTERNAL_STORAGE);
         }
-        try {
-            DownloadManager dm = (DownloadManager) getSystemService(DOWNLOAD_SERVICE);
-            String file = safeName(name);
-            DownloadManager.Request r = new DownloadManager.Request(Uri.parse(url));
-            String cookie = CookieManager.getInstance().getCookie(url);
-            if (cookie != null && !cookie.isEmpty()) r.addRequestHeader("Cookie", cookie);
-            r.addRequestHeader("User-Agent", web.getSettings().getUserAgentString());
-            r.setTitle(file);
-            r.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
-            r.setDestinationInExternalPublicDir(Environment.DIRECTORY_MOVIES, "Multiview/" + file);
-            dm.enqueue(r);
-        } catch (RuntimeException e) {
-            Toast.makeText(this, "Download could not start: " + e.getMessage(), Toast.LENGTH_LONG).show();
+        if (Build.VERSION.SDK_INT >= 33
+                && checkSelfPermission("android.permission.POST_NOTIFICATIONS") != PackageManager.PERMISSION_GRANTED) {
+            need.add("android.permission.POST_NOTIFICATIONS");
         }
-    }
-
-    @Override
-    public void onRequestPermissionsResult(int code, String[] perms, int[] results) {
-        super.onRequestPermissionsResult(code, perms, results);
-        if (code != REQ_STORAGE) return;
-        boolean ok = results.length > 0 && results[0] == PackageManager.PERMISSION_GRANTED;
-        ArrayList<String[]> todo = new ArrayList<String[]>(pendingDownloads);
-        pendingDownloads.clear();
-        if (!ok) {
-            if (!todo.isEmpty()) Toast.makeText(this, "Downloads need permission to save files", Toast.LENGTH_LONG).show();
-            return;
-        }
-        for (String[] d : todo) startDownload(d[0], d[1]);
-    }
-
-    private String downloadsJson() {
-        JSONArray out = new JSONArray();
-        DownloadManager dm = (DownloadManager) getSystemService(DOWNLOAD_SERVICE);
-        android.database.Cursor c = null;
-        try {
-            c = dm.query(new DownloadManager.Query().setFilterByStatus(DownloadManager.STATUS_SUCCESSFUL));
-            while (c != null && c.moveToNext()) {
-                long id = c.getLong(c.getColumnIndexOrThrow(DownloadManager.COLUMN_ID));
-                Uri u = dm.getUriForDownloadedFile(id);
-                if (u == null) continue;
-                try {
-                    getContentResolver().openFileDescriptor(u, "r").close();     // the file may have been deleted since
-                } catch (Exception gone) {
-                    continue;
-                }
-                JSONObject o = new JSONObject();
-                o.put("id", id);
-                o.put("name", c.getString(c.getColumnIndexOrThrow(DownloadManager.COLUMN_TITLE)));
-                o.put("size", c.getLong(c.getColumnIndexOrThrow(DownloadManager.COLUMN_TOTAL_SIZE_BYTES)));
-                o.put("time", c.getLong(c.getColumnIndexOrThrow(DownloadManager.COLUMN_LAST_MODIFIED_TIMESTAMP)));
-                out.put(o);
-            }
-        } catch (Exception e) {
-            return "[]";
-        } finally {
-            if (c != null) c.close();
-        }
-        return out.toString();
+        if (!need.isEmpty()) requestPermissions(need.toArray(new String[0]), REQ_PERMS);
     }
 
     /** Called from the page (Settings > Change server address). */
@@ -460,27 +396,56 @@ public class MainActivity extends Activity {
         }
 
         @JavascriptInterface
-        public void downloadStart(final String url, final String name) {
+        public void downloadConfig(final int max, final boolean wifiOnly) {
+            Downloader.get(MainActivity.this).config(max, wifiOnly);
+        }
+
+        @JavascriptInterface
+        public void downloadAdd(final String origin, final String itemsJson) {
             runOnUiThread(new Runnable() {
                 @Override
                 public void run() {
-                    startDownload(url, name);
+                    try {
+                        askDownloadPermissions();
+                        Downloader.get(MainActivity.this).add(origin, new JSONArray(itemsJson));
+                    } catch (Exception e) {
+                        Toast.makeText(MainActivity.this, "Download could not start: " + e.getMessage(), Toast.LENGTH_LONG).show();
+                    }
                 }
             });
         }
 
         @JavascriptInterface
-        public String downloadList() {
-            return downloadsJson();
+        public String downloadStatus() {
+            return Downloader.get(MainActivity.this).statusJson();
         }
 
         @JavascriptInterface
-        public void downloadPlay(final long id) {
+        public void downloadPause(String id) {
+            Downloader.get(MainActivity.this).pause(id);
+        }
+
+        @JavascriptInterface
+        public void downloadResume(String id) {
+            Downloader.get(MainActivity.this).resume(id);
+        }
+
+        @JavascriptInterface
+        public void downloadRemove(final String id) {
+            Downloader.get(MainActivity.this).remove(id);
+        }
+
+        @JavascriptInterface
+        public void downloadForgetMissing() {
+            Downloader.get(MainActivity.this).forgetMissing();
+        }
+
+        @JavascriptInterface
+        public void downloadPlay(final String id) {
             runOnUiThread(new Runnable() {
                 @Override
                 public void run() {
-                    DownloadManager dm = (DownloadManager) getSystemService(DOWNLOAD_SERVICE);
-                    Uri u = dm.getUriForDownloadedFile(id);
+                    Uri u = Downloader.get(MainActivity.this).savedUri(id);
                     if (u == null) return;
                     float d = getResources().getDisplayMetrics().density;
                     local.play(u.toString(), "", 0, 0, root.getWidth() / d, root.getHeight() / d);
@@ -489,32 +454,20 @@ public class MainActivity extends Activity {
         }
 
         @JavascriptInterface
-        public void downloadOpen(final long id) {
+        public void downloadOpen(final String id) {
             runOnUiThread(new Runnable() {
                 @Override
                 public void run() {
-                    DownloadManager dm = (DownloadManager) getSystemService(DOWNLOAD_SERVICE);
-                    Uri u = dm.getUriForDownloadedFile(id);
+                    Uri u = Downloader.get(MainActivity.this).savedUri(id);
                     if (u == null) return;
-                    String mime = dm.getMimeTypeForDownloadedFile(id);
                     Intent view = new Intent(Intent.ACTION_VIEW);
-                    view.setDataAndType(u, mime == null || mime.isEmpty() ? "video/*" : mime);
+                    view.setDataAndType(u, "video/*");
                     view.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
                     try {
                         startActivity(Intent.createChooser(view, "Open with"));
                     } catch (RuntimeException e) {
                         Toast.makeText(MainActivity.this, "No app can open this file", Toast.LENGTH_LONG).show();
                     }
-                }
-            });
-        }
-
-        @JavascriptInterface
-        public void downloadDelete(final long id) {
-            runOnUiThread(new Runnable() {
-                @Override
-                public void run() {
-                    ((DownloadManager) getSystemService(DOWNLOAD_SERVICE)).remove(id);
                 }
             });
         }

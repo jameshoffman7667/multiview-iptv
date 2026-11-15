@@ -694,11 +694,14 @@ describe('browser', () => {
     await ctx.close();
   });
 
-  test('Android app on a phone: download buttons hand files to the app, the Downloaded files list plays, opens and deletes', async () => {
-    const bridge = (phone) => `window.__calls = []; window.MVApp = { canPip: function () { return false; }, setAutoPip: function () {}, changeServer: function () {}, localPause: function (p) { window.__calls.push(['pause', p]); }, localStop: function () { window.__calls.push(['stop']); }, localSeek: function (s) { window.__calls.push(['seek', s]); },
-      downloadSupported: function () { return ${phone}; }, downloadStart: function (u, n) { window.__calls.push(['start', u, n]); },
-      downloadList: function () { return JSON.stringify([{ id: 7, name: 'Big Movie.mp4', size: 1048576, time: 5 }]); },
-      downloadPlay: function (id) { window.__calls.push(['play', id]); }, downloadOpen: function (id) { window.__calls.push(['open', id]); }, downloadDelete: function (id) { window.__calls.push(['delete', id]); } };`;
+  test('Android app on a phone: buttons hand files to the app, Downloads lists them with pause/resume/cancel and plays saved ones', async () => {
+    const bridge = (phone) => `window.__calls = []; window.__status = [{ id: 'a1', name: 'Big Movie', state: 'running', reason: '', done: 5242880, total: 10485760, speed: 1048576 },
+        { id: 'b2', name: 'Other', state: 'paused', reason: '', done: 100, total: 1000, speed: 0 }, { id: 'c3', name: 'Old.mp4', state: 'done', reason: '', done: 1048576, total: 1048576, speed: 0 }];
+      window.MVApp = { canPip: function () { return false; }, setAutoPip: function () {}, changeServer: function () {}, localPause: function (p) { window.__calls.push(['pause', p]); }, localStop: function () { window.__calls.push(['stop']); }, localSeek: function (s) { window.__calls.push(['seek', s]); },
+      downloadSupported: function () { return ${phone}; }, downloadConfig: function (m, w) { window.__calls.push(['config', m, w]); }, downloadAdd: function (o, j) { window.__calls.push(['add', o, j]); },
+      downloadStatus: function () { return JSON.stringify(window.__status); }, downloadForgetMissing: function () {},
+      downloadPause: function (id) { window.__calls.push(['dpause', id]); }, downloadResume: function (id) { window.__calls.push(['dresume', id]); }, downloadRemove: function (id) { window.__calls.push(['dremove', id]); },
+      downloadPlay: function (id) { window.__calls.push(['play', id]); }, downloadOpen: function (id) { window.__calls.push(['open', id]); } };`;
     let r = await openPage({ init: bridge(false) });
     await r.page.evaluate(() => window.__mv.setLayout('1'));
     await tapPicker(r.page, 0);
@@ -706,25 +709,35 @@ describe('browser', () => {
     await r.page.click('.tab:has-text("Movies")');
     await r.page.waitForFunction(() => document.querySelectorAll('.chlist .pick').length === 2);
     assert.equal(await r.page.locator('.dlb').count(), 0, 'a TV box (the app says no) shows no download buttons');
+    assert.equal(await r.page.locator('#ndlbar').count(), 0);
     await r.ctx.close();
     r = await openPage({ init: bridge(true) });
     const { page } = r;
+    await page.waitForSelector('#ndlbar');                       // a download that went on while the app was closed shows at once
+    assert.match(await page.textContent('#ndlbar'), /Downloading 1 - 50%/);
     await page.evaluate(() => window.__mv.setLayout('1'));
     await tapPicker(page, 0);
     await page.waitForSelector('.modal .tabs');
     await page.click('.tab:has-text("Movies")');
     await page.waitForFunction(() => document.querySelectorAll('.chlist .dlb').length === 2);
     await page.click('.chlist .dlb >> nth=0');
-    await page.waitForFunction(() => window.__calls.some((c) => c[0] === 'start'));
-    const start = await page.evaluate(() => window.__calls.find((c) => c[0] === 'start'));
-    assert.match(start[1], /^http:\/\/127\.0\.0\.1:\d+\/vod\/p\d\/movie%3A\d+\.\w+\?dl=1&job=[0-9a-f]+&name=/);
-    assert.match(start[2], /\.mp4$/);
+    await page.waitForFunction(() => window.__calls.some((c) => c[0] === 'add'));
+    const add = await page.evaluate(() => window.__calls.find((c) => c[0] === 'add'));
+    assert.match(add[1], /^http:\/\/127\.0\.0\.1:\d+$/);
+    const items = JSON.parse(add[2]);
+    assert.equal(items.length, 1);
+    assert.match(items[0].sid, /^movie:\d+$/);
+    assert.equal(await page.evaluate(() => window.__calls.some((c) => c[0] === 'config' && c[1] === 3 && c[2] === false)), true, 'the limit and Wi-Fi choice reach the app');
     await page.keyboard.press('Escape');
-    await page.evaluate(() => document.getElementById('sm-settings').click());
-    await page.click('#open-downloaded');
-    await page.waitForSelector('.modal:has-text("Big Movie.mp4")');
-    await page.click('.modal button:has-text("Open with")');
-    await page.click('.modal button:has-text("Play")');
+    await page.click('#ndlbar button');
+    await page.waitForSelector('#dl-manage .dl-row');
+    assert.equal(await page.locator('#dl-manage .dl-row').count(), 3);
+    assert.match(await page.textContent('#dl-manage'), /Paused/);
+    assert.match(await page.textContent('#dl-manage'), /1\.0 MB\/s|1 MB\/s|MB\/s/);
+    await page.click('#dl-manage .dl-row[data-id="a1"] button:has-text("Pause")');
+    await page.click('#dl-manage .dl-row[data-id="b2"] button:has-text("Resume")');
+    await page.click('#dl-manage .dl-row[data-id="c3"] button:has-text("Open with")');
+    await page.click('#dl-manage .dl-row[data-id="c3"] button:has-text("Play")');
     await page.waitForSelector('#dlplay');
     assert.equal(await page.evaluate(() => document.documentElement.classList.contains('nativeplay')), true);
     await page.click('#dlplay-pause');
@@ -732,7 +745,7 @@ describe('browser', () => {
     await page.click('#dlplay-close');
     assert.equal(await page.locator('#dlplay').count(), 0);
     const calls = await page.evaluate(() => window.__calls.map((c) => c.join(':')));
-    for (const want of ['open:7', 'play:7', 'pause:true', 'seek:30', 'stop']) assert.ok(calls.includes(want), want + ' in ' + calls.join(' | '));
+    for (const want of ['dpause:a1', 'dresume:b2', 'open:c3', 'play:c3', 'pause:true', 'seek:30', 'stop']) assert.ok(calls.includes(want), want + ' in ' + calls.join(' | '));
     assert.deepEqual(r.errors, []);
     await r.ctx.close();
   });

@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.19.0 - 2026-11-15
+The Android app manages its own downloads (P-35).
+- **No more endless pauses:** Android's download manager paused whenever a connection dropped and could not get a fresh ticket from the server. The app now downloads the files itself in the background: a dropped connection, a network change or an app restart carries on from where it stopped, with retries that back off up to 30 seconds and a new ticket when the old one went stale.
+- **Manage it in the app:** Settings > "Downloads..." (or "Manage" on the bar at the bottom) shows every download with progress, speed and why it waits, with Pause, Resume, Cancel and Retry; finished files have Play (in the app, with Pause and -30/+30 s), "Open with..." and Delete.
+- **Settings:** "Download over Wi-Fi only" (downloads wait on mobile data). "Max concurrent downloads" and the server cap, and "keep one provider connection free for watching" still apply; the server's rules are used for every file and every resume.
+- **Server:** a dropped download may resume on its own ticket (a Range request); it counts as running again. Files still end up in `Movies/Multiview`. Files saved by 0.18.0 stay there but are no longer listed in the app.
+- Android 13 and newer ask once for permission to show the progress notification; Android 7 to 9 ask for storage permission.
+- Tests: resume on the same ticket (server), a browser test with a pretend phone bridge, and a check of the app code. The Android code is compiled by CI, not run in the sandbox.
+
+**Upgrading from 0.18.0:** pulling the image is enough. No compose or `.env` change. Install the new APK on the phone.
+
 ## 0.18.0 - 2026-11-15
 Downloads in the Android app on phones and tablets (P-32).
 - **Buttons on phones only:** the app asks Android whether it runs on a TV box. On a phone or tablet the ⬇ buttons and the season button appear; on the Shield they stay hidden (and if the app cannot tell, they stay hidden).

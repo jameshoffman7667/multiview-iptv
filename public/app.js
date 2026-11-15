@@ -63,7 +63,7 @@
   applyTheme();
   var ME = null; // set after /api/me: { admin, user, open, authRequired }
   function loadState() {
-    var d = { layout: '3x3', tiles: [], sel: 0, muted: false, bufSec: 4, keepSec: 0, transport: 'auto', fit: 'contain', failover: true, smallSd: true, autoQ: false, directPlay: false, directDl: false, dlMax: 3, vol: 1, shared: '', theme: 'system', local: false, fpop: true, fmin: 3, fdelay: 0, fopp: true, fsize: 'auto', fage: 60, ftick: true, fpos: 'below', fspeed: 'normal', workers: true, stats: false, labels: false, epgOn: true, favs: {}, pk: {} };
+    var d = { layout: '3x3', tiles: [], sel: 0, muted: false, bufSec: 4, keepSec: 0, transport: 'auto', fit: 'contain', failover: true, smallSd: true, autoQ: false, directPlay: false, directDl: false, dlWifi: false, dlMax: 3, vol: 1, shared: '', theme: 'system', local: false, fpop: true, fmin: 3, fdelay: 0, fopp: true, fsize: 'auto', fage: 60, ftick: true, fpos: 'below', fspeed: 'normal', workers: true, stats: false, labels: false, epgOn: true, favs: {}, pk: {} };
     var j = {};
     try { j = JSON.parse(localStorage.getItem(LS_KEY)) || {}; } catch (e) { j = {}; }
     Object.keys(d).forEach(function (k) { if (j[k] !== undefined && typeof j[k] === typeof d[k]) d[k] = j[k]; });
@@ -1676,6 +1676,7 @@
   function dlEnqueue(items) {
     if (!dlOk() || !items.length) return;
     if (directWanted('directDl', items[0].p)) { dlCopyLinks(items); return; }
+    if (nativeDl()) { nativeAdd(items); return; }
     items.forEach(function (it) { DL.queue.push(it); DL.total++; });
     dlBar();
     dlPump();
@@ -1689,7 +1690,6 @@
       if (r.wait) { DL.queue.unshift(it); DL.waitUntil = Date.now() + 6000; DL.waitMsg = r.reason; return; }
       DL.waitMsg = '';
       DL.run[r.job] = it;
-      if (nativeDl()) { appBridge().downloadStart(location.origin + r.url, it.name + '.' + it.ext); return; }   // Android's download manager saves it to Movies/Multiview
       var a = h('a', { href: r.url, download: '' });
       document.body.appendChild(a);
       a.click();
@@ -1736,23 +1736,89 @@
         h('button', { class: 'btn', type: 'button', id: 'dlplay-close', text: 'Close', onclick: dlPlayClose }))));
     appBridge().downloadPlay(id);
   }
+  // ---- the Android app's own download manager (P-35): the app keeps the queue, retries and resumes; the page only shows it.
+  var NDL = { list: [], timer: null, rows: null, onChange: null };
+  function nativeCfg() { try { appBridge().downloadConfig(clamp(Math.floor(Number(S.dlMax)) || 3, 1, 6), !!S.dlWifi); } catch (e) { /* old app */ } }
+  function nativeAdd(items) {
+    nativeCfg();
+    appBridge().downloadAdd(location.origin, JSON.stringify(items.map(dlItem)));
+    banner('Added ' + items.length + ' to the downloads (Settings > Downloads shows progress)', 4000);
+    nativePoll(true);
+  }
+  function nativeActive() { return NDL.list.some(function (d) { return d.state === 'queued' || d.state === 'running' || d.state === 'waiting'; }); }
+  function nativePoll(again) {
+    clearTimeout(NDL.timer);
+    NDL.timer = null;
+    if (!nativeDl()) return;
+    try { NDL.list = JSON.parse(appBridge().downloadStatus()) || []; } catch (e) { NDL.list = []; }
+    nativeBar();
+    if (NDL.onChange) NDL.onChange();
+    if (again !== false && (nativeActive() || NDL.onChange)) NDL.timer = setTimeout(nativePoll, 1500);
+  }
+  function nativeBar() {
+    var box = $('#ndlbar');
+    var act = NDL.list.filter(function (d) { return d.state === 'queued' || d.state === 'running' || d.state === 'waiting'; });
+    var bad = NDL.list.filter(function (d) { return d.state === 'failed'; });
+    if (!act.length && !bad.length) { if (box) box.remove(); return; }
+    if (!box) { box = h('div', { id: 'ndlbar', class: 'dlbar', role: 'status' }); document.body.appendChild(box); }
+    var done = 0; var total = 0;
+    act.forEach(function (d) { done += d.done; total += d.total; });
+    box.textContent = '';
+    box.appendChild(h('span', { text: act.length ? 'Downloading ' + act.length + (total ? ' - ' + Math.round(100 * done / total) + '%' : '') : bad.length + ' download' + (bad.length === 1 ? '' : 's') + ' failed' }));
+    box.appendChild(h('button', { class: 'btn', type: 'button', text: 'Manage', onclick: openDownloaded }));
+  }
+  function nativeText(d) {
+    var pct = d.total ? Math.round(100 * d.done / d.total) : 0;
+    var size = d.total ? fmtBytes(d.done) + ' of ' + fmtBytes(d.total) : (d.done ? fmtBytes(d.done) : '');
+    if (d.state === 'done') return 'Saved in Movies/Multiview' + (d.total ? ' - ' + fmtBytes(d.total) : '');
+    if (d.state === 'queued') return 'Waiting for a free download slot' + (size ? ' - ' + size : '');
+    if (d.state === 'paused') return 'Paused' + (size ? ' - ' + size + ' (' + pct + '%)' : '');
+    if (d.state === 'failed') return (d.reason || 'Failed') + (size ? ' - ' + size : '');
+    if (d.state === 'waiting') return (d.reason || 'Waiting') + (size ? ' - ' + size + ' (' + pct + '%)' : '');
+    return (d.reason || 'Downloading') + (size ? ' - ' + size + ' (' + pct + '%)' : '') + (d.speed > 0 ? ' - ' + fmtBytes(d.speed) + '/s' : '');
+  }
   function openDownloaded() {
-    var list = h('div', { class: 'chlist' });
-    var m = openModal({ title: 'Downloaded on this phone (Movies/Multiview)', wide: true, body: [list], foot: h('button', { class: 'btn', type: 'button', text: 'Close', onclick: function () { m.close(); } }) });
-    function load() {
-      var files = [];
-      try { files = JSON.parse(appBridge().downloadList()) || []; } catch (e) { files = []; }
-      list.textContent = '';
-      if (!files.length) { list.appendChild(h('div', { class: 'note', text: 'Nothing downloaded yet. Use the ⬇ button on a movie or episode.' })); return; }
-      files.sort(function (x, y) { return y.time - x.time; }).forEach(function (f) {
-        list.appendChild(h('div', { class: 'ch' },
-          h('div', { class: 'nm' }, h('b', { text: f.name }), h('small', { text: fmtBytes(f.size) })),
-          h('button', { class: 'btn', type: 'button', text: 'Play', onclick: function () { m.close(); dlPlay(f.id, f.name); } }),
-          h('button', { class: 'btn', type: 'button', text: 'Open with...', onclick: function () { appBridge().downloadOpen(f.id); } }),
-          h('button', { class: 'btn', type: 'button', text: 'Delete', onclick: function () { confirmBox('Delete ' + f.name + ' from this phone?', 'Delete', function () { appBridge().downloadDelete(f.id); setTimeout(load, 300); }); } })));
-      });
+    var existing = $('#dl-manage');
+    if (existing) return;
+    try { appBridge().downloadForgetMissing(); } catch (e) { /* old app */ }
+    var list = h('div', { class: 'chlist', id: 'dl-manage' });
+    var m = openModal({ title: 'Downloads on this phone (saved in Movies/Multiview)', wide: true, body: [list], foot: h('button', { class: 'btn', type: 'button', text: 'Close', onclick: function () { m.close(); } }) });
+    var rows = {};
+    function act(fn, id) { return function () { try { appBridge()[fn](id); } catch (e) { /* old app */ } nativePoll(); }; }
+    function btn(text, fn) { return h('button', { class: 'btn', type: 'button', text: text, onclick: fn }); }
+    function buttons(d) {
+      if (d.state === 'done') return [btn('Play', function () { m.close(); dlPlay(d.id, d.name); }), btn('Open with...', act('downloadOpen', d.id)), btn('Delete', function () { confirmBox('Delete ' + d.name + ' from this phone?', 'Delete', act('downloadRemove', d.id)); })];
+      if (d.state === 'paused') return [btn('Resume', act('downloadResume', d.id)), btn('Cancel', act('downloadRemove', d.id))];
+      if (d.state === 'failed') return [btn('Retry', act('downloadResume', d.id)), btn('Remove', act('downloadRemove', d.id))];
+      return [btn('Pause', act('downloadPause', d.id)), btn('Cancel', act('downloadRemove', d.id))];
     }
-    load();
+    function render() {
+      if (!$('#dl-manage')) { NDL.onChange = null; return; }
+      var ids = {};
+      NDL.list.forEach(function (d) {
+        ids[d.id] = true;
+        var r = rows[d.id];
+        var pct = d.total ? Math.min(100, Math.round(100 * d.done / d.total)) : 0;
+        if (!r || r.state !== d.state) {
+          if (r) r.el.remove();
+          var status = h('small', { class: 'dl-status' });
+          var fill = h('i', { style: 'width:0%' });
+          var el = h('div', { class: 'ch dl-row', 'data-id': d.id },
+            h('div', { class: 'nm' }, h('b', { text: d.name }), status, d.state === 'done' ? null : h('div', { class: 'bar' }, fill)),
+            h('div', { class: 'dl-btns' }, buttons(d)));
+          list.appendChild(el);
+          r = rows[d.id] = { el: el, status: status, fill: fill, state: d.state };
+        }
+        r.status.textContent = nativeText(d);
+        r.fill.style.width = pct + '%';
+      });
+      Object.keys(rows).forEach(function (id) { if (!ids[id]) { rows[id].el.remove(); delete rows[id]; } });
+      var none = $('#dl-none');
+      if (!NDL.list.length && !none) list.appendChild(h('div', { class: 'note', id: 'dl-none', text: 'Nothing downloaded yet. Use the ⬇ button on a movie or episode.' }));
+      if (NDL.list.length && none) none.remove();
+    }
+    NDL.onChange = render;
+    nativePoll();
   }
   function dlReset() { DL.queue = []; DL.total = 0; DL.done = 0; DL.failed = []; DL.waitMsg = ''; dlBar(); }
   function dlBar() {
@@ -3466,7 +3532,7 @@
     var dlSel = h('select', { id: 'set-dlmax' });
     [1, 2, 3, 4, 5, 6].forEach(function (n) { dlSel.appendChild(h('option', { value: String(n), text: n + (n === 3 ? ' (default)' : '') })); });
     dlSel.value = String(S.dlMax);
-    dlSel.addEventListener('change', function () { S.dlMax = Number(dlSel.value); saveSoon(); dlPump(); });
+    dlSel.addEventListener('change', function () { S.dlMax = Number(dlSel.value); saveSoon(); dlPump(); if (nativeDl()) nativeCfg(); });
     var bufSel = h('select');
     [0, 2, 4, 8, 15, 30, 60, 120, 300].forEach(function (n) { bufSel.appendChild(h('option', { value: String(n), text: secLabel(n) + (n === 4 ? ' (default)' : '') })); });
     bufSel.value = String(S.bufSec);
@@ -3548,6 +3614,7 @@
         check('Small tiles prefer the SD version of a channel (less to download and decode)', 'smallSd', function () { tiles.forEach(function (t) { t.applyQuality(); }); }),
         check('Auto quality for every channel that has no quality chosen (starts low, steps up as the buffer grows, steps down when it drains)', 'autoQ', function () { tiles.forEach(function (t) { if (t.cfg && !t.cfg.vod && !t.cfg.q) t.start(); }); }),
         dlOk() ? field('Max concurrent downloads (this device; the rest wait in the queue)', dlSel) : null,
+        nativeDl() ? check('Download over Wi-Fi only (downloads wait on mobile data)', 'dlWifi', nativeCfg) : null,
         isAdmin() ? dlCapBlock() : null,
         isAdmin() ? check('Play movies and episodes straight from the provider (not through the server; falls back to the server if it fails)', 'directPlay', function () { tiles.forEach(function (t) { if (t.cfg && t.cfg.vod) t.start(); }); }) : null,
         isAdmin() && dlOk() ? check('Download buttons copy the provider\'s direct link instead of downloading through the server', 'directDl') : null,
@@ -3563,7 +3630,7 @@
       ],
       foot: [
         !isAdmin() ? null : h('button', { class: 'btn', type: 'button', text: 'Clear all tiles', onclick: function () { m.close(); S.tiles = S.tiles.map(function () { return null; }); tiles.forEach(function (t) { t.setCfg(null); }); saveSoon(); updateHint(); } }),
-        nativeDl() ? h('button', { class: 'btn', type: 'button', id: 'open-downloaded', text: 'Downloaded files...', onclick: function () { m.close(); openDownloaded(); } }) : null,
+        nativeDl() ? h('button', { class: 'btn', type: 'button', id: 'open-downloaded', text: 'Downloads...', onclick: function () { m.close(); openDownloaded(); } }) : null,
         window.MVApp ? h('button', { class: 'btn', type: 'button', text: 'Server address (TV app)...', onclick: function () { m.close(); window.MVApp.changeServer(); } }) : null,
         h('button', { class: 'btn', type: 'button', text: 'Restart all streams', onclick: function () { m.close(); tiles.forEach(function (t) { t.reload(); }); } }),
         h('button', { class: 'btn', type: 'button', text: 'Close', onclick: function () { m.close(); } })
@@ -4489,6 +4556,7 @@
   function enter(me) {
     banner('');
     ME = { admin: !!me.admin, user: me.user, open: !!me.open, authRequired: !!me.authRequired };
+    if (nativeDl()) { nativeCfg(); nativePoll(); }                  // downloads that went on while the app was closed
     document.body.classList.toggle('viewer', !ME.admin);
     sideSync();
     ovlSync();

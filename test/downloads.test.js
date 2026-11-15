@@ -135,6 +135,26 @@ describe('download API', () => {
     assert.equal(s, 'failed');
   });
 
+  test('a cut-off download can resume on the same ticket with a Range request (the Android app does this)', async () => {
+    const t = json(await ticket(admin));
+    let got = 0;
+    await new Promise((resolve) => {
+      const req = http.request(new URL(t.url, ctx.base), { headers: { Cookie: admin } }, (res) => {
+        res.on('data', (c) => { got += c.length; if (got > 100000) { req.destroy(); resolve(); } });
+      });
+      req.on('error', resolve);
+      req.end();
+    });
+    await sleep(200);
+    const st = async () => json(await request(ctx.base, '/api/dl/state', { headers: { Cookie: admin } })).jobs[t.job];
+    assert.equal(await st(), 'failed');
+    const rest = await request(ctx.base, t.url, { headers: { Cookie: admin, Range: `bytes=${got}-` } });
+    assert.equal(rest.status, 206);
+    assert.equal(rest.buf.length, 40 * 1024 * 1024 - got);
+    await sleep(100);
+    assert.equal(await st(), 'done', 'the resumed request finishes the job');
+  });
+
   test('a ticket that is not valid is refused', async () => {
     const r = await request(ctx.base, '/vod/a/movie%3A501.mp4?dl=1&job=nope', { headers: { Cookie: admin } });
     assert.equal(r.status, 410);

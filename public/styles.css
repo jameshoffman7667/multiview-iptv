@@ -156,6 +156,10 @@ body.stats .tile .stats { display: block; }
 .dlplay { position: fixed; inset: 0; z-index: 90; pointer-events: none; }
 .dlplay-bar { position: absolute; left: 0; right: 0; bottom: 0; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 10px 12px; background: rgba(0,0,0,.7); pointer-events: auto; }
 .dlplay-bar b { flex: 1 1 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#dl-manage .dl-row { flex-wrap: wrap; gap: 8px; }
+#dl-manage .dl-row .nm { flex: 1 1 220px; min-width: 0; }
+#dl-manage .dl-btns { display: flex; gap: 6px; flex-wrap: wrap; }
+#dl-manage .dl-status { display: block; opacity: .8; }
 .ch .dlb { flex: none; width: 40px; border: 1px solid transparent; border-radius: 8px; background: var(--panel2); font-size: 16px; color: var(--text); cursor: pointer; }
 .ch .dlb:hover, .ch .dlb:focus { border-color: var(--accent); }
 .dlbar { position: fixed; left: 50%; transform: translateX(-50%); bottom: 12px; z-index: 40; max-width: 92%; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 8px 12px; border-radius: 10px; background: var(--panel); border: 1px solid var(--line, #444); box-shadow: 0 4px 16px rgba(0,0,0,.4); font-size: 13px; }

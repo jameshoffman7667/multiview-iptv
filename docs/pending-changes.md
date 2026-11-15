@@ -5,7 +5,7 @@ Requests logged here are not built yet. Say "build" to fold them into a new vers
 With every push, say whether the compose/stack file must change or whether pulling the new image is enough.
 Every build rewrites deploy/RELEASE.md using the FULL template of the app spec (section 8: Update, Image, Short, Long, Release commit, Type, Port, Public hostname, env vars, Data, Resources, Healthcheck, Verify, PWA, Docker build, Rollback naming the exact previous tag, Known issues, Backup tier). Server tests use `wget` (no curl on vm101). The server's real stack file is the homelab repo's stacks/multiview-iptv/compose.yaml (stack.yml here is only a reference); never tell anyone to update the Dockhand stack. Fixed `Update:` line: `Update: now` only when the user said "build, push and update" for that release, otherwise `Update: later`.
 
-Current released version: 0.18.0 (being pushed)
+Current released version: 0.19.0 (being pushed)
 
 ### P-1 - Rebuild the on-screen menu as a traditional video player overlay
 Requested: 2026-10-18. Tap any screen (single view or multiview) to show a full-screen overlay over everything:
@@ -239,5 +239,6 @@ Built 2026-11-15 in 0.18.0. Not tested on a real phone or on a Shield (the sandb
 
 ### P-35 - Manage phone downloads in the app (they keep pausing)
 Requested: 2026-11-15 (James: "The downloads keep pausing. Possible to manage the downloading in app?")
-Type: minor (native Android work) plus a server fix   Status: Pending
+Type: minor (native Android work) plus a server fix   Status: Built in 0.19.0 (option B)
 Notes: likely causes in 0.18.0: (1) Android's download manager pauses on any dropped connection or network change and resumes by itself, but the server ticket is single-use in practice: the first drop marks the job failed (the page then shows a failure and frees the queue slot), and a resume 10+ minutes later gets 410 and stays paused; a resumed request is also not counted as a running download, so the connection rules are skipped. (2) On mobile data the download manager queues big files "for Wi-Fi" until Wi-Fi is back. (3) Providers cut long connections. Options: (A) small: let a ticket be reused for resumes of the same file (while the job lives), keep it "active" across resumes, and show in "Downloaded files" the live status with the reason (waiting for network / Wi-Fi / retry), progress, and Pause, Resume, Cancel, Retry buttons (resume = remove and re-enqueue with a new ticket, continuing from the bytes already saved via Range). (B) bigger: replace the download manager with the app's own downloader in a foreground service (own retries, Range resume, Wi-Fi-only choice, speed, queue in the page; saves to Movies/Multiview through MediaStore). Recommendation: A first, B only if A is not enough. Questions: what does the notification say when it pauses ("Waiting for network", "Waiting for Wi-Fi", "Paused")? Wi-Fi or mobile data? Does it resume by itself later?
+Decided 2026-11-15 (James): "Build B" (the app's own downloader), push and update when done. Built 2026-11-15 in 0.19.0. Not tested on a real phone (no Android SDK in the sandbox; CI compiles). Files saved by 0.18.0's download manager stay in Movies/Multiview but are no longer listed in the app.

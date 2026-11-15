@@ -70,7 +70,8 @@ class Downloads {
     const j = this.jobs.get(String(id || ''));
     return !!j && j.user === user && j.state !== 'expired';
   }
-  start(id) { const j = this.jobs.get(id); if (j && j.state === 'ticket') { j.state = 'active'; j.at = Date.now(); } }
+  // a ticket starts the download; the Android app resumes a dropped download (a Range request) on the same ticket, so a failed job may go active again
+  start(id) { const j = this.jobs.get(id); if (j && (j.state === 'ticket' || j.state === 'failed')) { j.state = 'active'; j.at = Date.now(); } }
   end(id, ok) { const j = this.jobs.get(id); if (j && j.state === 'active') { j.state = ok ? 'done' : 'failed'; j.at = Date.now(); } }
 
   states(user) {
