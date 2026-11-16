@@ -5,7 +5,7 @@ Requests logged here are not built yet. Say "build" to fold them into a new vers
 With every push, say whether the compose/stack file must change or whether pulling the new image is enough.
 Every build rewrites deploy/RELEASE.md using the FULL template of the app spec (section 8: Update, Image, Short, Long, Release commit, Type, Port, Public hostname, env vars, Data, Resources, Healthcheck, Verify, PWA, Docker build, Rollback naming the exact previous tag, Known issues, Backup tier). Server tests use `wget` (no curl on vm101). The server's real stack file is the homelab repo's stacks/multiview-iptv/compose.yaml (stack.yml here is only a reference); never tell anyone to update the Dockhand stack. Fixed `Update:` line: `Update: now` only when the user said "build, push and update" for that release, otherwise `Update: later`.
 
-Current released version: 0.20.0 (being pushed)
+Current released version: 0.21.0 (being pushed)
 
 ### P-1 - Rebuild the on-screen menu as a traditional video player overlay
 Requested: 2026-10-18. Tap any screen (single view or multiview) to show a full-screen overlay over everything:
@@ -363,3 +363,8 @@ Fantasy Manager reply to handoff 2 received 2026-11-15 (Fantasy Manager 4.20.0, 
 - Part 3: Fantasy Manager has no league-wide NFL box scores (only James's roster players), so P-43 uses a public feed (ESPN's unofficial endpoints first, SportsBlaze backup).
 Effect on Multiview: the summary cleaner must accept the new fields (`projection`, `liveProjection`, `projectedColour`; team `projection`, `projected`, `projectedColour`); `projected` already passes through but its meaning changed, and nothing draws it yet, so nothing existing breaks. P-46 and P-47 are unblocked (they now only need Fantasy Manager 4.20.0 deployed to show colours; before that they show grey or nothing). Proposed drawing: P-46 team line shows `projected` (expected final) in `projectedColour`; for the opponent use his own `projectedColour` as sent. P-47 player line: before kickoff the pregame `projection` in grey, while live `liveProjection` in `projectedColour`, after the final the pregame `projection` in `projectedColour` (so the score can be compared to what was expected). Empty colour = grey.
 Built 2026-11-15 in 0.20.0. POST /api/direct/report (admins) every 15 s from each page with direct streams; the server forgets a report after 45 s; /api/state shows `direct` per provider and `directStreams`; the Providers window counts them in the bar and lists them; the download wait rule counts them. Advisory only.
+
+### P-53 - Save recordings to the device
+Requested: 2026-11-15 (James: "Can recordings currently be downloaded to the device. If not add this feature and build push and update")
+Type: minor (new button)   Status: Built in 0.21.0
+Notes: answer found in the code: in a browser the Recordings page already had a Download link (the server sends the file with Content-Disposition and Range), but the Android app's web view has no download handler, so the link did nothing there. Built: in the Android app a finished recording (done or stopped) has "Save to phone", which hands the file to the app's own downloader (Movies/Multiview, resumes with Range, Wi-Fi only option, size check, Copy report). Recordings still being recorded are not offered. The old Download link stays in browsers. Needs the new APK (native change); not tested on a phone.

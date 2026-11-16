@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.21.0 - 2026-11-15
+Save finished recordings to the phone (P-53).
+- **The problem:** in a browser the Recordings page has a Download link, but inside the Android app that link did nothing (the app's web view cannot save links).
+- **Now:** in the app, each finished recording has "Save to phone". It uses the app's own downloader (Movies/Multiview, background, resumes after a drop, Wi-Fi only option, size check, Copy report). Recordings still being recorded are not offered. Browsers keep the Download link.
+- Tests: a browser test for the button and the item sent to the app; static checks that the downloader only accepts the server's /recordings paths and keeps the path across restarts.
+
+**Upgrading from 0.20.0:** pulling the image is enough. No compose or `.env` change. The button needs the new APK (CI builds it); the server needs nothing new (the recording file route already supports Range).
+
 ## 0.20.0 - 2026-11-15
 Phone downloads tidied and fixed, ticker sizes and projections, grouped Settings, and direct streams reported to the server (P-39, P-40, P-41, P-44, P-45, P-46, P-47, P-48, P-51, P-52).
 - **Downloads bar (P-39):** shows for 3 seconds when a download is added, finishes or fails, then hides so the bottom menu is free. Progress lives in a new "On this phone" section at the top of Recordings & Downloads (same Pause, Resume, Cancel, Retry, Play, Open with, Delete buttons).

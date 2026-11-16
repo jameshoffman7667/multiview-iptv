@@ -758,6 +758,29 @@ describe('browser', () => {
     await r.ctx.close();
   });
 
+  test('Android app: a finished server recording can be saved to the phone through the app\'s downloader (the web view cannot save links)', async () => {
+    const bridge = `window.__calls = []; window.__status = [];
+      window.MVApp = { canPip: function () { return false; }, setAutoPip: function () {}, changeServer: function () {}, localPause: function () {}, localStop: function () {},
+      downloadSupported: function () { return true; }, downloadConfig: function () {}, downloadAdd: function (o, j) { window.__calls.push(['add', o, j]); },
+      downloadStatus: function () { return JSON.stringify(window.__status); }, downloadForgetMissing: function () {}, downloadPause: function () {}, downloadResume: function () {}, downloadRemove: function () {}, downloadPlay: function () {}, downloadOpen: function () {} };`;
+    const r = await openPage({ init: bridge });
+    const { page } = r;
+    await page.route('**/api/recordings', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ usage: { bytes: 5000, free: 0 }, items: [
+      { id: 'r1', kind: 'record', status: 'done', file: 'r1.mp4', title: 'Big Game', name: 'ESPN', size: 5000 },
+      { id: 'r2', kind: 'record', status: 'recording', file: 'r2.mp4', title: 'Live now', name: 'CNN', size: 100 }] }) }));
+    await page.evaluate(() => document.getElementById('sm-recs').click());
+    await page.waitForSelector('.recrow');
+    assert.equal(await page.locator('a:has-text("Download")').count(), 0, 'no dead download link inside the app');
+    assert.equal(await page.locator('button:has-text("Save to phone")').count(), 1, 'only the finished recording offers it');
+    await page.click('button:has-text("Save to phone")');
+    await page.waitForFunction(() => window.__calls.some((c) => c[0] === 'add'));
+    const item = JSON.parse(await page.evaluate(() => window.__calls.find((c) => c[0] === 'add')[2]))[0];
+    assert.equal(item.p, 'rec'); assert.equal(item.sid, 'r1'); assert.equal(item.ext, 'mp4'); assert.equal(item.name, 'Big Game');
+    assert.equal(item.path, '/recordings/r1.mp4?dl=1');
+    assert.deepEqual(r.errors, []);
+    await r.ctx.close();
+  });
+
   test('long buffer: settings offer minutes, the stream asks for that much, a memory note appears', async () => {
     const { ctx, page, errors } = await openPage({ state: { layout: '1', tiles: [{ p: 'p1', sid: '1', name: 'ESPN' }], bufSec: 4 } });
     await page.keyboard.press('Escape');

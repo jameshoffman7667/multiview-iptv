@@ -118,3 +118,11 @@ test('P-40: the downloader keeps one writer per file, checks the size, never sho
   assert.match(dl, /isBusy\(/, 'the same file is not queued twice');
   assert.ok(!/password|secret|token/i.test(dl.slice(dl.indexOf('private static String report'), dl.indexOf('private final Context'))), 'the report never carries credentials');
 });
+
+test('recordings can be saved to the phone: the downloader takes a /recordings path, needs no ticket and refuses other paths', () => {
+  const dl = read('android/app/src/main/java/app/iptvmultiview/tv/Downloader.java');
+  assert.match(dl, /path\.startsWith\("\/recordings\/"\) && !path\.contains\(".."\)/);
+  assert.match(dl, /it\.job = it\.path;/);
+  assert.match(dl, /The recording is no longer on the server/);
+  assert.match(dl, /o\.put\("path", it\.path\)/, 'kept across a restart');
+});

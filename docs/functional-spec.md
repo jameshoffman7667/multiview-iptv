@@ -1,4 +1,4 @@
-# IPTV Multiview - functional spec (current state, v0.20.0)
+# IPTV Multiview - functional spec (current state, v0.21.0)
 
 Edited in place on every release; it describes what the app does now, not its history (see `CHANGELOG.md`).
 
@@ -71,9 +71,10 @@ A self-hosted relay and browser UI for Xtream Codes IPTV providers. One shared p
 - **Rebuild an APK only** (a build that failed or an APK nobody has installed): Actions > Build and push image > Run workflow with *android_only* on, *tag* = the existing tag (e.g. `v0.15.0`, empty = the version in package.json) and *overwrite* off. It refuses to replace an APK already attached to the release unless *overwrite* is on (only if the F-Droid updater has not downloaded it). The versionCode does not change on a rebuild, so a crash already on the Shield needs a patch release.
 - **Known limits:** the first F-Droid APK is untested until James confirms it installs and opens on the Shield. If it breaks, get a logcat (`adb logcat -b crash`) before changing anything.
 
-## Settings, downloads page, ticker and menu details (0.20.0)
+## Settings, downloads page, ticker and menu details (0.21.0)
 - **Settings** are grouped under collapsible headers (Playback and buffering, Shared screen, Downloads and direct play, Display, Fantasy ticker and pop-ups, Admin tools, Install and device, Keyboard shortcuts), collapsed on open; which are open is remembered while the page lives (not stored), with Collapse all / Expand all on top. The fullscreen, password and users buttons stay above the groups.
 - **Phone downloads:** the bottom bar shows for 3 s when a download is added, finishes or fails. "On this phone" is the first section of Recordings & Downloads (Settings > Downloads... opens the same page). Each download has Copy report (the app's last server answers; no credentials). The Android downloader keeps one writer per part file, verifies Range answers and the final size, and shows at most 100%.
+- **Recordings on the phone:** in the Android app a finished recording has "Save to phone" (the app's downloader fetches `/recordings/<id>.<ext>?dl=1` with Range, saves to Movies/Multiview); browsers keep the Download link.
 - **Ticker:** size Small / Medium / Large (default) per device; Large = 56 px (48 px on phones). In the mini player (PiP) it is a 26 px strip with league name and scores. Under each pinned league's scores the team's expected final (`projected`) shows after the names fade, coloured by `projectedColour` (grey when empty); under each player's score his projection: `projection` (pregame) before kickoff, `liveProjection` while live, `projection` after the final, coloured by `projectedColour`. Needs Fantasy Manager 4.20.0.
 - **Pop-up size:** on screens narrower than about 1250 px Small / Medium / Large take about 50% / 75% / 100% of the width.
 - **Change channel menu:** remembers tab, provider, category, search, expanded rows and spot. On Live and Guide, when the channel on that screen changed since the menu was last used, it opens at that channel (clearing filters that hide it).

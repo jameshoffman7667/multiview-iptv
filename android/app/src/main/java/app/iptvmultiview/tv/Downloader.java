@@ -45,7 +45,7 @@ class Downloader {
     }
 
     static class Item {
-        String id, origin, p, sid, ext, name, state, reason = "", uri = "", job = "";
+        String id, origin, p, sid, ext, name, state, reason = "", uri = "", job = "", path = "";   // path: a file on the server itself (a recording), no provider ticket
         long done, total;
         long speed;                     // bytes per second, about
         boolean stop;                   // asked to pause or cancel: the worker leaves
@@ -101,6 +101,8 @@ class Downloader {
             it.sid = o.getString("sid");
             it.ext = o.optString("ext", "mp4");
             it.name = o.optString("name", it.sid);
+            String path = o.optString("path", "");
+            if (path.startsWith("/recordings/") && !path.contains("..")) it.path = path;    // only the server's own recordings
             it.state = "queued";
             items.add(it);
         }
@@ -316,6 +318,7 @@ class Downloader {
             if (wifiOnly && !onWifiOrWired()) { set(it, "waiting", "Waiting for Wi-Fi (Wi-Fi only is on)"); if (!nap(it, 3000)) return; continue; }
             if (it.fails > 40) { finish(it, "failed", "Gave up after repeated errors - tap Retry"); return; }
             // a ticket from the server: it applies the server cap and keeps one provider connection free for watching
+            if (it.job.isEmpty() && !it.path.isEmpty()) it.job = it.path;     // a recording needs no ticket
             if (it.job.isEmpty()) {
                 JSONObject t;
                 try {
@@ -351,7 +354,7 @@ class Downloader {
                 note(it, "HTTP " + code + (it.done > 0 ? " (asked from byte " + it.done + ")" : "") + ", length " + c.getContentLengthLong() + ", range " + c.getHeaderField("Content-Range"));
                 if (code == 410) { it.job = ""; c.disconnect(); continue; }                    // the ticket went stale: ask for a new one
                 if (code == 401 || code == 403) { finish(it, "failed", code == 401 ? "Signed out - sign in again, then tap Retry" : "Downloads are switched off for this login"); c.disconnect(); return; }
-                if (code == 404) { finish(it, "failed", "The provider no longer has this file"); c.disconnect(); return; }
+                if (code == 404) { finish(it, "failed", it.path.isEmpty() ? "The provider no longer has this file" : "The recording is no longer on the server"); c.disconnect(); return; }
                 if (code == 503 || code == 502) {
                     set(it, "waiting", "The provider is busy or not reachable, retrying");
                     c.disconnect();
@@ -603,7 +606,7 @@ class Downloader {
                 JSONObject o = new JSONObject();
                 o.put("id", it.id); o.put("origin", it.origin); o.put("p", it.p); o.put("sid", it.sid); o.put("ext", it.ext);
                 o.put("name", it.name); o.put("state", it.state); o.put("reason", it.reason); o.put("uri", it.uri);
-                o.put("total", it.total); o.put("done", it.done);
+                o.put("total", it.total); o.put("done", it.done); o.put("path", it.path);
                 a.put(o);
             }
             FileOutputStream f = new FileOutputStream(stateFile);
@@ -629,7 +632,7 @@ class Downloader {
                 Item it = new Item();
                 it.id = o.getString("id"); it.origin = o.getString("origin"); it.p = o.getString("p"); it.sid = o.getString("sid");
                 it.ext = o.optString("ext", "mp4"); it.name = o.optString("name", it.sid); it.uri = o.optString("uri", "");
-                it.total = o.optLong("total", 0); it.done = o.optLong("done", 0);
+                it.total = o.optLong("total", 0); it.done = o.optLong("done", 0); it.path = o.optString("path", "");
                 String st = o.optString("state", "queued");
                 it.state = st.equals("done") || st.equals("paused") || st.equals("failed") ? st : "queued";   // what was running starts again
                 it.reason = it.state.equals("failed") ? o.optString("reason", "") : "";

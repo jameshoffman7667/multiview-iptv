@@ -1639,7 +1639,7 @@
   // In the Android app only phones and tablets download (the app says so; on a TV box it says no and no buttons show).
   function nativeDl() { var b = appBridge(); try { return !!(b && typeof b.downloadSupported === 'function' && b.downloadSupported()); } catch (e) { return false; } }
   function dlOk() { return (!window.MVApp || nativeDl()) && !(ME && ME.download === false); }
-  function dlItem(c) { return { p: c.p, sid: String(c.sid), ext: c.ext || 'mp4', name: c.name || String(c.sid) }; }
+  function dlItem(c) { var o = { p: c.p, sid: String(c.sid), ext: c.ext || 'mp4', name: c.name || String(c.sid) }; if (c.path) o.path = c.path; return o; }
   // ---- direct from the provider (P-34, admins only): movies and episodes are played from the provider's own address, and the
   // download buttons copy those addresses instead (a browser cannot save a cross-origin file under a name, and the provider
   // sends no CORS headers). Anything that goes wrong falls back to the server and is remembered for the rest of the session.
@@ -4034,7 +4034,10 @@
         var btns = [];
         if (it.file && (live || it.status === 'done' || it.status === 'stopped')) {
           btns.push(h('button', { class: 'btn', type: 'button', 'data-act': 'play-' + it.id, text: 'Play', onclick: function () { playRecording(it, url); } }));
-          btns.push(h('a', { class: 'btn', 'data-act': 'dl-' + it.id, href: url + '?dl=1', download: '', text: 'Download' }));
+          if (nativeDl()) {
+            // the app's web view cannot save a link, so a finished recording goes through the app's own downloader (Movies/Multiview)
+            if (!live) btns.push(h('button', { class: 'btn', type: 'button', 'data-act': 'dl-' + it.id, text: 'Save to phone', onclick: function () { nativeAdd([{ p: 'rec', sid: it.id, ext: ext || 'mp4', name: it.title || it.name || ('Recording ' + it.id), path: url + '?dl=1' }]); } }));
+          } else btns.push(h('a', { class: 'btn', 'data-act': 'dl-' + it.id, href: url + '?dl=1', download: '', text: 'Download' }));
         }
         if (live) btns.push(h('button', { class: 'btn', type: 'button', 'data-act': 'stop-' + it.id, text: 'Stop', onclick: function () { api('/api/recordings/' + it.id + '/stop', { method: 'POST', body: {} }).then(poll, function (e) { banner(e.message, 4000); }); } }));
         if (it.status === 'scheduled' || it.status === 'recording') {
