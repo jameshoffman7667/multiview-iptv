@@ -781,6 +781,49 @@ describe('browser', () => {
     await r.ctx.close();
   });
 
+  test('P-58: a recording plays on a screen like a movie (no pop-up); the phone app uses its own player with the login cookie', async () => {
+    const recs = (page) => page.route('**/api/recordings', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ usage: { bytes: 5000, free: 0 }, items: [
+      { id: 'r1', kind: 'record', status: 'done', file: 'r1.mp4', title: 'Big Game', name: 'ESPN', size: 5000 },
+      { id: 'r2', kind: 'record', status: 'recording', file: 'r2.mp4', title: 'Live now', name: 'CNN', size: 100 }] }) }));
+    const a = await openPage({ state: { layout: '1', tiles: [null] } });
+    await recs(a.page);
+    await a.page.evaluate(() => document.getElementById('sm-recs').click());
+    await a.page.waitForSelector('.recrow');
+    await a.page.click('[data-act="play-r1"]');
+    await a.page.waitForFunction(() => window.__mv.S.tiles[0] && window.__mv.S.tiles[0].vod === 'rec');
+    assert.equal(await a.page.evaluate(() => window.__mv.modals), 0, 'the Recordings window closed');
+    assert.equal(await a.page.locator('.recplayer').count(), 0, 'no pop-up player');
+    assert.match(await a.page.$eval('.tile[data-idx="0"] video', (v) => v.getAttribute('src') || v.src), /\/recordings\/r1\.mp4$/);
+    await a.ctx.close();
+    const bridge = `window.__calls = []; window.__status = [];
+      window.MVApp = { canPip: function () { return false; }, setAutoPip: function () {}, changeServer: function () {}, localPause: function () {}, localStop: function () {}, localVolume: function () {}, localBounds: function () {}, localSeek: function () {},
+      localSupported: function () { return true; }, localPlayAuth: function (u, x, y, w, h) { window.__calls.push(['auth', u]); },
+      downloadSupported: function () { return true; }, downloadConfig: function () {}, downloadAdd: function () {}, downloadStatus: function () { return JSON.stringify(window.__status); }, downloadForgetMissing: function () {}, downloadPause: function () {}, downloadResume: function () {}, downloadRemove: function () {}, downloadPlay: function () {}, downloadOpen: function () {} };`;
+    const b = await openPage({ init: bridge, state: { layout: '1', tiles: [null] } });
+    await recs(b.page);
+    await b.page.evaluate(() => document.getElementById('sm-recs').click());
+    await b.page.waitForSelector('.recrow');
+    await b.page.click('[data-act="play-r1"]');
+    await b.page.waitForFunction(() => window.__calls.some((c) => c[0] === 'auth'));
+    assert.match(await b.page.evaluate(() => window.__calls.find((c) => c[0] === 'auth')[1]), /\/recordings\/r1\.mp4$/);
+    await b.ctx.close();
+  });
+
+  test('P-59: a download that went past the announced size says so and still offers the file', async () => {
+    const bridge = `window.__calls = []; window.__status = [{ id: 'a', name: 'Odd Film', state: 'done', reason: '', done: 1000, total: 1000, over: true, written: 2500, report: 'x', speed: 0 }];
+      window.MVApp = { canPip: function () { return false; }, setAutoPip: function () {}, changeServer: function () {}, localPause: function () {}, localStop: function () {},
+      downloadSupported: function () { return true; }, downloadConfig: function () {}, downloadAdd: function () {},
+      downloadStatus: function () { return JSON.stringify(window.__status); }, downloadForgetMissing: function () {}, downloadPause: function () {}, downloadResume: function () {}, downloadRemove: function () {}, downloadPlay: function () {}, downloadOpen: function () {} };`;
+    const r = await openPage({ init: bridge });
+    await r.page.route('**/api/recordings', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ usage: { bytes: 0, free: 0 }, items: [] }) }));
+    await r.page.evaluate(() => document.getElementById('sm-recs').click());
+    await r.page.waitForSelector('.dl-row');
+    const t = await r.page.textContent('.dl-row .dl-status');
+    assert.match(t, /more than it announced/); assert.match(t, /may not play/); assert.match(t, /Past estimate/);
+    assert.ok(await r.page.locator('.dl-row button').count() >= 1, 'Play / Open with are still offered');
+    await r.ctx.close();
+  });
+
   test('long buffer: settings offer minutes, the stream asks for that much, a memory note appears', async () => {
     const { ctx, page, errors } = await openPage({ state: { layout: '1', tiles: [{ p: 'p1', sid: '1', name: 'ESPN' }], bufSec: 4 } });
     await page.keyboard.press('Escape');
@@ -1345,6 +1388,78 @@ describe('browser: picker remembers its place', () => {
     await page.waitForSelector('.chlist .ch .pick');
     await page.waitForFunction(() => document.activeElement && document.activeElement.getAttribute('data-key') === 'big:1050', null, { timeout: 8000 });
     assert.equal(await page.inputValue('input.search'), '', 'the filters that hid the channel were cleared');
+    await ctx.close();
+  });
+
+  test('P-56: the menu resumes exactly where it was left for each screen separately', async () => {
+    const { ctx, page } = await page1();
+    await tapPicker(page, 0);
+    await page.waitForSelector('.chlist .ch');
+    await page.selectOption('select[aria-label="Category"]', 'UK');
+    await page.fill('input.search', 'Chan 5');
+    await page.waitForTimeout(300);
+    await page.locator('.chlist .pick', { hasText: 'Chan 520' }).click();
+    await page.waitForFunction(() => window.__mv.S.tiles[0] && window.__mv.S.tiles[0].name === 'Chan 520');
+    await page.evaluate(() => window.__mv.select(1));
+    await page.keyboard.press('c');
+    await page.waitForSelector('.chlist .ch .pick');
+    await page.fill('input.search', 'Chan 53');
+    await page.waitForTimeout(300);
+    await page.locator('.chlist .pick', { hasText: 'Chan 530' }).click();
+    await page.waitForFunction(() => window.__mv.S.tiles[1] && window.__mv.S.tiles[1].name === 'Chan 530');
+    await page.evaluate(() => window.__mv.select(0));
+    await page.keyboard.press('c');
+    await page.waitForSelector('.chlist .ch .pick');
+    assert.equal(await page.inputValue('input.search'), 'Chan 53', 'screen 1 had not changed, so the menu opens as it was last left (not reset by the other screen)');
+    await ctx.close();
+  });
+
+  test('P-57: the download bar and banners sit above the ticker, pop-ups and menus', async () => {
+    const { ctx, page } = await page1();
+    const z = await page.evaluate(() => {
+      const zi = (cls) => { const e = document.createElement('div'); e.className = cls; document.body.appendChild(e); const v = Number(getComputedStyle(e).zIndex); e.remove(); return v; };
+      return { dlbar: zi('dlbar'), banner: zi('banner'), ftick: zi('ftick'), fpop: zi('fpop'), dlplay: zi('dlplay'), modal: zi('modal-back') };
+    });
+    for (const k of ['ftick', 'fpop', 'dlplay', 'modal']) { assert.ok(z.dlbar > z[k], 'download bar above ' + k + ' ' + JSON.stringify(z)); assert.ok(z.banner > z[k], 'banner above ' + k); }
+    await ctx.close();
+  });
+
+  test('P-60: two fingers pinch and pan one screen\'s video (not the page), one finger stays free, zoom snaps back and resets with the channel', async () => {
+    const { ctx, page } = await page1();
+    await page.evaluate(() => window.__mv.assign(0, { p: 'big', sid: '1050', name: 'Chan 050', icon: '' }));
+    assert.match(await page.getAttribute('meta[name=viewport]', 'content'), /user-scalable=no/, 'the browser does not zoom the page');
+    const fingers = (steps) => page.evaluate((st) => {
+      const el = document.querySelector('.tile[data-idx="0"]'); const r = el.getBoundingClientRect(); const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+      const ev = (type, id, x, y) => el.dispatchEvent(new PointerEvent(type, { pointerId: id, pointerType: 'touch', clientX: x, clientY: y, bubbles: true }));
+      const out = [];
+      st.forEach((s) => {
+        if (s.down) { ev('pointerdown', 1, cx - s.down, cy); if (s.two) ev('pointerdown', 2, cx + s.down, cy); }
+        if (s.move) { ev('pointermove', 1, cx - s.move + (s.dx || 0), cy); if (s.two) ev('pointermove', 2, cx + s.move + (s.dx || 0), cy); }
+        if (s.up) { ev('pointerup', 1, cx, cy); if (s.two) ev('pointerup', 2, cx, cy); }
+        if (s.read) out.push(JSON.parse(JSON.stringify(window.__mv.zoomOf(0))));
+      });
+      return out;
+    }, steps);
+    let r = await fingers([{ down: 30, two: true }, { move: 75, two: true, read: true }]);
+    assert.ok(Math.abs(r[0].s - 2.5) < 0.05 && r[0].x < 0, 'pinch out zooms around the fingers: ' + JSON.stringify(r[0]));
+    assert.notEqual(await page.$eval('.tile[data-idx="0"] video', (v) => getComputedStyle(v).transform), 'none');
+    const before = r[0].x;
+    r = await fingers([{ move: 75, dx: -40, two: true, read: true }]);
+    assert.ok(r[0].x < before, 'two fingers moving together pan');
+    await fingers([{ up: true, two: true }]);
+    r = await fingers([{ down: 30 }, { move: 80, read: true }, { up: true }]);
+    assert.ok(Math.abs(r[0].s - 2.5) < 0.05, 'one finger changes nothing');
+    await fingers([{ down: 30, two: true }, { move: 13, two: true }, { up: true, two: true }]);
+    await fingers([]);
+    const snapped = await page.evaluate(() => window.__mv.zoomOf(0));
+    assert.equal(snapped.s, 1, 'a pinch that ends below about 1.1x snaps back'); assert.equal(snapped.x, 0);
+    await fingers([{ down: 30, two: true }, { move: 60, two: true }, { up: true, two: true }]);
+    assert.ok((await page.evaluate(() => window.__mv.zoomOf(0).s)) > 1.5);
+    await page.evaluate(() => window.__mv.assign(0, { p: 'big', sid: '1051', name: 'Chan 051', icon: '' }));
+    assert.equal(await page.evaluate(() => window.__mv.zoomOf(0).s), 1, 'a new channel resets the zoom');
+    await page.evaluate(() => { const el = document.querySelector('.tile[data-idx="0"]'); el.dispatchEvent(new WheelEvent('wheel', { deltaY: -400, clientX: el.getBoundingClientRect().left + 50, clientY: el.getBoundingClientRect().top + 50, bubbles: true, cancelable: true })); });
+    assert.ok((await page.evaluate(() => window.__mv.zoomOf(0).s)) > 1.5, 'the mouse wheel zooms');
+    assert.equal(await page.evaluate(() => window.__mv.zoomOf(1) && window.__mv.zoomOf(1).s), 1, 'per screen: the others are untouched');
     await ctx.close();
   });
 
@@ -2315,6 +2430,62 @@ describe('player overlay, pull-out menu, recordings, PWA', () => {
     assert.ok(d.its['Quarterback Mine'][0] === 'Proj 20.0' && d.its['Quarterback Mine'][1] === 'rgb(214, 83, 59)', 'after the final: the pregame number in the colour sent');
     assert.ok(d.its['Later Guy'][0] === 'Proj 9.5' && d.its['Later Guy'][1] === 'rgb(139, 147, 167)', 'before kickoff: pregame number in grey');
     assert.ok(byName('Runner Mine')[0] === 'Proj 22.4' && byName('Runner Mine')[1] === 'rgb(63, 174, 88)', 'while live: the live number in the colour sent');
+    assert.deepEqual(errors, []);
+    await ctx.close();
+  });
+
+  test('P-55 and P-54: the ticker and pop-up switches sit at the top of Settings; a switched-off feature hides its options; the league name opens only the fantasy settings', async () => {
+    const { ctx, page, errors } = await tkOpen();
+    await tkSet(page, tkSum());
+    await page.waitForSelector('#ftick:not([hidden])');
+    await page.evaluate(() => { window.__mv.S.fpop = true; window.__mv.S.ftick = true; });
+    await page.click('.ft-name');
+    await page.waitForSelector('#fantasy-menu');
+    assert.equal(await page.locator('#set-all').count(), 0, 'not the whole Settings menu');
+    assert.equal(await page.locator('#fantasy-menu #fm-url').count(), 1, 'the connection fields are in it');
+    assert.equal(await vis(page, '#fantasy-menu #ft-size'), true);
+    assert.equal(await vis(page, '#fantasy-menu #fp-size'), true);
+    await page.click('#fantasy-menu #ft-on');
+    assert.equal(await vis(page, '#fantasy-menu #ft-size'), false, 'ticker off: its options go');
+    assert.equal(await vis(page, '#fantasy-menu #fp-size'), true, 'pop-ups still on: their options stay');
+    await page.click('#fantasy-menu #fp-on');
+    assert.equal(await vis(page, '#fantasy-menu #fp-size'), false, 'both off: only the two switches and the connection are left');
+    assert.equal(await vis(page, '#fantasy-menu #fp-on'), true);
+    await page.click('#fantasy-menu-close');
+    await page.evaluate(() => document.getElementById('sm-settings').click());
+    await page.waitForSelector('#set-all');
+    const order = await page.evaluate(() => {
+      const sw = document.getElementById('ft-on'), all = document.getElementById('set-all');
+      return { before: !!(sw.compareDocumentPosition(all) & Node.DOCUMENT_POSITION_FOLLOWING), on: sw.checked, dup: document.querySelectorAll('#ft-on').length };
+    });
+    assert.equal(order.before, true, 'the switches come before the groups');
+    assert.equal(order.on, false);
+    assert.equal(order.dup, 1, 'moved, not duplicated');
+    await page.click('#set-expand');
+    assert.equal(await vis(page, '#ft-size'), false);
+    await page.click('#ft-on');
+    assert.equal(await vis(page, '#ft-size'), true, 'turned back on: the options return');
+    assert.deepEqual(errors, []);
+    await ctx.close();
+  });
+
+  test('P-54: dragging the score area sideways moves the ticker, letting go resumes the auto scroll', async () => {
+    const { ctx, page, errors } = await tkOpen();
+    await tkSet(page, tkSum());
+    await page.waitForSelector('#ftick:not([hidden])');
+    await page.evaluate(() => { window.__mv.FT.x = 20; });
+    const b = await page.evaluate(() => { const r = document.getElementById('ftick').getBoundingClientRect(); return { x: r.x, y: r.y + r.height / 2, w: r.width }; });
+    await page.mouse.move(b.x + b.w * 0.7, b.y);
+    await page.mouse.down();
+    await page.mouse.move(b.x + b.w * 0.7 - 150, b.y, { steps: 6 });
+    await page.waitForTimeout(120);
+    const mid = await page.evaluate(() => ({ x: window.__mv.FT.x, left: document.getElementById('ft-view').scrollLeft, paused: window.__mv.FT.paused }));
+    assert.ok(Math.abs(mid.x - 170) < 2 && Math.abs(mid.left - 170) < 2, 'the tape followed the finger: ' + JSON.stringify(mid));
+    assert.equal(mid.paused, true);
+    await page.mouse.up();
+    assert.equal(await page.evaluate(() => !!document.querySelector('#fantasy-menu')), false, 'a drag is not a tap');
+    await page.waitForTimeout(1800);
+    assert.equal(await page.evaluate(() => window.__mv.FT.paused), false, 'auto scroll carries on after a short pause');
     assert.deepEqual(errors, []);
     await ctx.close();
   });

@@ -533,6 +533,23 @@ public class MainActivity extends Activity {
             });
         }
 
+        /** P-58: plays a recording from the Multiview server itself (only that server's own /recordings/ files), with the page's login cookie. */
+        @JavascriptInterface
+        public void localPlayAuth(final String url, final double x, final double y, final double w, final double h) {
+            if (url == null || !url.contains("/recordings/") || url.contains("..")) return;
+            runOnUiThread(new Runnable() {
+                @Override
+                public void run() {
+                    // only the server this page came from, so the login cookie never goes anywhere else
+                    Uri page = Uri.parse(String.valueOf(web.getUrl()));
+                    Uri file = Uri.parse(url);
+                    if (page.getHost() == null || !page.getHost().equals(file.getHost()) || page.getPort() != file.getPort()) return;
+                    String cookie = android.webkit.CookieManager.getInstance().getCookie(url);
+                    local.play(url, "", cookie == null ? "" : cookie, x, y, w, h);
+                }
+            });
+        }
+
         @JavascriptInterface
         public void localBounds(final double x, final double y, final double w, final double h) {
             runOnUiThread(new Runnable() {

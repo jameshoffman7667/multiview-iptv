@@ -53,6 +53,7 @@ class Downloader {
         int fails;                      // attempts in a row without progress
         int gen;                        // which worker owns the part file (only the newest may write)
         int reconnects, restarts, badSize;
+        boolean over;                   // the provider sent more than it announced (P-59): saved as is, may not play
         String log = "";                // the last server answers, for the Copy report button
         Thread worker;
     }
@@ -64,7 +65,7 @@ class Downloader {
 
     private static String report(Item it) {
         return "Multiview download report\nName: " + it.name + "\nId: " + it.sid + " (provider " + it.p + ")\nState: " + it.state
-                + (it.reason.isEmpty() ? "" : " - " + it.reason) + "\nBytes: " + it.done + " of " + it.total
+                + (it.reason.isEmpty() ? "" : " - " + it.reason) + "\nBytes: " + it.done + " of " + it.total + (it.over ? " (the provider sent more than it announced; writing stopped past the announced size)" : "")
                 + "\nReconnects: " + it.reconnects + ", restarts from zero: " + it.restarts + ", size mismatches: " + it.badSize
                 + "\nLast server answers:\n" + it.log;
     }
@@ -162,6 +163,8 @@ class Downloader {
                 o.put("reason", it.reason);
                 o.put("done", it.total > 0 ? Math.min(it.done, it.total) : it.done);
                 o.put("total", it.total);
+                o.put("over", it.over);
+                o.put("written", it.done);
                 o.put("report", report(it));
                 o.put("speed", it.speed);
                 out.put(o);
@@ -393,6 +396,7 @@ class Downloader {
                     }
                 }
                 set(it, "running", "");
+                boolean overrun = false;
                 InputStream in = c.getInputStream();
                 OutputStream out = new FileOutputStream(part, append);
                 try {
@@ -404,6 +408,7 @@ class Downloader {
                         out.write(buf, 0, n);
                         it.done += n;
                         it.fails = 0;
+                        if (it.total > 0 && it.done > it.total + Math.max(1048576L, it.total / 100)) { overrun = true; break; }
                         long now = System.currentTimeMillis();
                         if (now - tick >= 1000) { it.speed = (it.done - tickBytes) * 1000 / (now - tick); tick = now; tickBytes = it.done; }
                     }
@@ -414,6 +419,12 @@ class Downloader {
                 long actual = part.length();
                 synchronized (this) { it.done = actual; }
                 note(it, "transfer ended: " + actual + " bytes on disk, server total " + it.total);
+                if (overrun) {
+                    note(it, "the provider sent more than the announced " + it.total + " bytes; stopped writing, keeping the file as it is");
+                    synchronized (this) { it.over = true; }
+                    complete(it, part);
+                    return;
+                }
                 if (it.total > 0 && actual < it.total) throw new IOException("connection ended early");
                 if (it.total > 0 && actual != it.total) {
                     part.delete();
@@ -606,7 +617,7 @@ class Downloader {
                 JSONObject o = new JSONObject();
                 o.put("id", it.id); o.put("origin", it.origin); o.put("p", it.p); o.put("sid", it.sid); o.put("ext", it.ext);
                 o.put("name", it.name); o.put("state", it.state); o.put("reason", it.reason); o.put("uri", it.uri);
-                o.put("total", it.total); o.put("done", it.done); o.put("path", it.path);
+                o.put("total", it.total); o.put("done", it.done); o.put("path", it.path); o.put("over", it.over);
                 a.put(o);
             }
             FileOutputStream f = new FileOutputStream(stateFile);
@@ -632,7 +643,7 @@ class Downloader {
                 Item it = new Item();
                 it.id = o.getString("id"); it.origin = o.getString("origin"); it.p = o.getString("p"); it.sid = o.getString("sid");
                 it.ext = o.optString("ext", "mp4"); it.name = o.optString("name", it.sid); it.uri = o.optString("uri", "");
-                it.total = o.optLong("total", 0); it.done = o.optLong("done", 0); it.path = o.optString("path", "");
+                it.total = o.optLong("total", 0); it.done = o.optLong("done", 0); it.path = o.optString("path", ""); it.over = o.optBoolean("over", false);
                 String st = o.optString("state", "queued");
                 it.state = st.equals("done") || st.equals("paused") || st.equals("failed") ? st : "queued";   // what was running starts again
                 it.reason = it.state.equals("failed") ? o.optString("reason", "") : "";

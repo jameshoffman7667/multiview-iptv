@@ -44,6 +44,11 @@ class LocalPlayer {
     }
 
     void play(String url, String userAgent, double x, double y, double w, double h) {
+        play(url, userAgent, "", x, y, w, h);
+    }
+
+    /** cookie: the login cookie of the server, for a file that lives on the Multiview server itself (a recording). */
+    void play(String url, String userAgent, String cookie, double x, double y, double w, double h) {
         release();
         bx = x; by = y; bw = w; bh = h;
         videoW = 0; videoH = 0;
@@ -56,6 +61,7 @@ class LocalPlayer {
                 .setConnectTimeoutMs(15000)
                 .setReadTimeoutMs(15000);
         if (userAgent != null && !userAgent.isEmpty()) http.setUserAgent(userAgent);
+        if (cookie != null && !cookie.isEmpty()) http.setDefaultRequestProperties(java.util.Collections.singletonMap("Cookie", cookie));
         player = new ExoPlayer.Builder(activity).build();
         player.setVideoSurfaceView(surface);
         player.setVolume(volume);

@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.22.0 - 2026-11-21
+Ticker settings and drag, recordings on a screen, pinch zoom, download overrun stop, menu and overlay fixes, Fire TV prep (P-49, P-54, P-55, P-56, P-57, P-58, P-59, P-60).
+- **Ticker (P-54):** tap the league name for a small Fantasy settings window; drag the score area sideways to move the tape, it resumes by itself.
+- **Switches (P-55):** ticker and pop-up switches at the top of Settings; options of a switched-off feature are hidden.
+- **Menu resume (P-56):** the change channel menu remembers its place per screen, so it resumes exactly after using it for another screen.
+- **Download bar (P-57):** above the ticker, pop-ups and menus.
+- **Recordings (P-58):** Play puts the recording on the selected screen like a movie; the Android app uses its own player.
+- **Downloads (P-59, Android app):** a download stops writing when the provider sends more than it announced; the file is kept, marked "may not play".
+- **Pinch zoom (P-60):** two fingers zoom and pan one screen's video, not the page; mouse wheel and Shift-drag on desktop.
+- **Fire TV (P-49):** manifest and Cast checked for a stick; untested on real hardware.
+- Tests: new browser tests for each item, static checks for the Android parts (server suite 142 pass, 4 skipped).
+
+**Upgrading from 0.21.0:** pulling the image is enough. No compose or `.env` change. P-58 (native player), P-59 and P-49 need the new APK (CI builds it).
+
 ## 0.21.0 - 2026-11-15
 Save finished recordings to the phone (P-53).
 - **The problem:** in a browser the Recordings page has a Download link, but inside the Android app that link did nothing (the app's web view cannot save links).

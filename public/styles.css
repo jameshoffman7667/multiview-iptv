@@ -64,8 +64,8 @@ button { cursor: pointer; }
 
 /* ---------- grid ---------- */
 .grid { color: #e9ecf2; position: absolute; top: 0; left: 0; right: 0; bottom: 0; display: grid; grid-gap: 2px; gap: 2px; background: #000; }
-.tile { position: relative; background: var(--bg); overflow: hidden; min-width: 0; min-height: 0; }
-.tile video { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: #000; object-fit: contain; }
+.tile { position: relative; background: var(--bg); overflow: hidden; min-width: 0; min-height: 0; touch-action: none; }
+.tile video { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: #000; object-fit: contain; transform-origin: 0 0; transform: translate(var(--zx, 0px), var(--zy, 0px)) scale(var(--zs, 1)); }
 body.fill .tile video { object-fit: cover; }
 .tile::after { content: ""; position: absolute; top: 0; left: 0; right: 0; bottom: 0; pointer-events: none; z-index: 5;
   box-shadow: inset 0 0 0 0 var(--sound); transition: box-shadow .08s; }
@@ -162,12 +162,12 @@ body.stats .tile .stats { display: block; }
 #dl-manage .dl-status { display: block; opacity: .8; }
 .ch .dlb { flex: none; width: 40px; border: 1px solid transparent; border-radius: 8px; background: var(--panel2); font-size: 16px; color: var(--text); cursor: pointer; }
 .ch .dlb:hover, .ch .dlb:focus { border-color: var(--accent); }
-.dlbar { position: fixed; left: 50%; transform: translateX(-50%); bottom: 12px; z-index: 40; max-width: 92%; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 8px 12px; border-radius: 10px; background: var(--panel); border: 1px solid var(--line, #444); box-shadow: 0 4px 16px rgba(0,0,0,.4); font-size: 13px; }
+.dlbar { position: fixed; left: 50%; transform: translateX(-50%); bottom: 12px; z-index: 120; max-width: 92%; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 8px 12px; border-radius: 10px; background: var(--panel); border: 1px solid var(--line, #444); box-shadow: 0 4px 16px rgba(0,0,0,.4); font-size: 13px; }
 .dlbar .dlfail { flex-basis: 100%; color: var(--warn); font-size: 12px; }
 .more-row { padding: 10px; text-align: center; }
 
 /* banner + hint */
-.banner { position: fixed; top: 54px; left: 50%; transform: translateX(-50%); z-index: 30; max-width: 90%; padding: 8px 14px; border-radius: 8px; background: var(--err-bg); border: 1px solid var(--bad); color: var(--err-text); font-size: 13px; }
+.banner { position: fixed; top: 54px; left: 50%; transform: translateX(-50%); z-index: 120; max-width: 90%; padding: 8px 14px; border-radius: 8px; background: var(--err-bg); border: 1px solid var(--bad); color: var(--err-text); font-size: 13px; }
 .hint { position: fixed; bottom: 12px; left: 50%; transform: translateX(-50%); z-index: 30; max-width: 90%; padding: 8px 14px; border-radius: 8px; background: var(--glass); border: 1px solid var(--line); font-size: 13px; color: var(--dim); }
 .keys { display: grid; grid-template-columns: auto 1fr; gap: 4px 14px; font-size: 13px; color: var(--dim); }
 .keys b { color: var(--text); font-weight: 600; }
@@ -402,7 +402,8 @@ html.nativeplay, html.nativeplay body, html.nativeplay .grid { background: trans
 .ftick[hidden] { display: none; }
 body.ftick-below .grid { bottom: var(--tk-h); }
 body.ftick-below #shared { bottom: var(--tk-h); height: auto; }
-.ft-view { position: absolute; inset: 0; overflow: hidden; }
+.ft-view { position: absolute; inset: 0; overflow: hidden; touch-action: pan-y; user-select: none; }
+.ft-name { cursor: pointer; }
 .ft-tape { display: flex; width: max-content; height: 100%; }
 .ft-copy { display: flex; height: 100%; flex: none; }
 .ft-seg { display: flex; height: 100%; flex: none; position: relative; align-items: stretch; }

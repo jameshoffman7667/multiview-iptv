@@ -26,6 +26,7 @@
     el.appendChild(typeof c === 'string' || typeof c === 'number' ? document.createTextNode(String(c)) : c);
   }
   function $(sel, root) { return (root || document).querySelector(sel); }
+  function $$(sel, root) { return Array.prototype.slice.call((root || document).querySelectorAll(sel)); }
   function clamp(n, a, b) { return Math.max(a, Math.min(b, n)); }
   function noop() {}
   function fmtSec(x, scale) { return scale < 20 ? x.toFixed(1) : String(Math.round(x)); }
@@ -93,7 +94,7 @@
     if (!t || typeof t.p !== 'string' || t.sid == null) return null;
     var o = { p: t.p, sid: String(t.sid), name: String(t.name || ''), icon: String(t.icon || '') };
     if (t.q === 'sd' || t.q === 'full' || t.q === '480' || t.q === 'auto') o.q = t.q;
-    if (t.vod === 'movie' || t.vod === 'series') { o.vod = t.vod; o.ext = String(t.ext || 'mp4').replace(/[^a-z0-9]/gi, '').slice(0, 5) || 'mp4'; }
+    if (t.vod === 'movie' || t.vod === 'series' || t.vod === 'rec') { o.vod = t.vod; o.ext = String(t.ext || 'mp4').replace(/[^a-z0-9]/gi, '').slice(0, 5) || 'mp4'; }
     return o;
   }
   var saveTimer = null;
@@ -329,6 +330,8 @@
     this.el = h('div', { class: 'tile', tabindex: '0', 'data-idx': String(idx) },
       this.video, this.empty, this.num, this.label, this.speaker, this.status, this.stats);
     this.touch = false;
+    this.z = { s: 1, x: 0, y: 0 };   // P-60: pinch zoom and pan of this screen's video (the page around it is not scaled)
+    this.zoomInit();
     this.back = 0;          // seconds behind live (rewind)
     this.userPaused = false;
     this.avail = 0;         // seconds of rewind available
@@ -354,6 +357,72 @@
     return v;
   };
 
+  // P-60: two fingers pinch and pan the video of one screen (1x - 4x); one finger stays free for taps. Mouse: wheel zooms, Shift or middle button drags.
+  Tile.prototype.zoomSet = function (sc, tx, ty) {
+    var W = this.el.clientWidth, H = this.el.clientHeight;
+    sc = clamp(sc, 1, 4);
+    if (sc === 1) { tx = 0; ty = 0; }
+    this.z = { s: sc, x: clamp(tx, W - W * sc, 0), y: clamp(ty, H - H * sc, 0) };
+    this.el.style.setProperty('--zs', String(this.z.s));
+    this.el.style.setProperty('--zx', this.z.x + 'px');
+    this.el.style.setProperty('--zy', this.z.y + 'px');
+    this.el.classList.toggle('zoomed', sc > 1);
+  };
+  Tile.prototype.zoomReset = function () { if (this.el && this.z && this.z.s !== 1) this.zoomSet(1, 0, 0); };
+  Tile.prototype.zoomInit = function () {
+    var self = this, ptrs = {}, pin = null, pan = null, quiet = 0;
+    function at(e) { var r = self.el.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; }
+    function ids() { return Object.keys(ptrs); }
+    function snap() { if (self.z.s < 1.1) self.zoomSet(1, 0, 0); }
+    this.el.addEventListener('pointerdown', function (e) {
+      if (!self.cfg) return;
+      if (e.pointerType === 'mouse') {
+        if ((e.shiftKey || e.button === 1) && self.z.s > 1) {
+          var p = at(e); pan = { x: p.x, y: p.y, tx: self.z.x, ty: self.z.y, id: e.pointerId };
+          try { self.el.setPointerCapture(e.pointerId); } catch (er) { /* ignore */ }
+          e.preventDefault();
+        }
+        return;
+      }
+      ptrs[e.pointerId] = at(e);
+      var k = ids();
+      if (k.length === 2) {
+        var a = ptrs[k[0]], b = ptrs[k[1]], z = self.z;
+        var cx = (a.x + b.x) / 2, cy = (a.y + b.y) / 2;
+        pin = { k: k, d: Math.max(1, Math.hypot(a.x - b.x, a.y - b.y)), s: z.s, px: (cx - z.x) / z.s, py: (cy - z.y) / z.s };
+        quiet = Date.now() + 400;
+      }
+    });
+    this.el.addEventListener('pointermove', function (e) {
+      if (pan && e.pointerId === pan.id) { var q = at(e); self.zoomSet(self.z.s, pan.tx + q.x - pan.x, pan.ty + q.y - pan.y); quiet = Date.now() + 300; return; }
+      if (!ptrs[e.pointerId]) return;
+      ptrs[e.pointerId] = at(e);
+      if (!pin || ids().length < 2) return;
+      var a = ptrs[pin.k[0]], b = ptrs[pin.k[1]];
+      if (!a || !b) return;
+      var cx = (a.x + b.x) / 2, cy = (a.y + b.y) / 2, sc = clamp(pin.s * Math.hypot(a.x - b.x, a.y - b.y) / pin.d, 1, 4);
+      self.zoomSet(sc, cx - pin.px * sc, cy - pin.py * sc);
+      quiet = Date.now() + 400;
+    });
+    function up(e) {
+      if (pan && e.pointerId === pan.id) { pan = null; return; }
+      if (!ptrs[e.pointerId]) return;
+      delete ptrs[e.pointerId];
+      if (pin && ids().length < 2) { pin = null; snap(); quiet = Date.now() + 400; }
+    }
+    this.el.addEventListener('pointerup', up);
+    this.el.addEventListener('pointercancel', up);
+    // a pinch or pan must not count as a tap on the tile
+    this.el.addEventListener('click', function (e) { if (Date.now() < quiet) { e.stopImmediatePropagation(); e.preventDefault(); } }, true);
+    this.el.addEventListener('wheel', function (e) {
+      if (!self.cfg) return;
+      e.preventDefault();
+      var p = at(e), z = self.z, sc = clamp(z.s * Math.exp(-e.deltaY * 0.002), 1, 4);
+      var px = (p.x - z.x) / z.s, py = (p.y - z.y) / z.s;
+      self.zoomSet(sc < 1.05 ? 1 : sc, p.x - px * sc, p.y - py * sc);
+    }, { passive: false });
+  };
+
   Tile.prototype.render = function () {
     var c = this.cfg;
     this.empty.style.display = c ? 'none' : '';
@@ -377,6 +446,7 @@
 
   Tile.prototype.setCfg = function (cfg) {
     this.cfg = cfg;
+    this.zoomReset();
     this.localFailed = false;
     this.now = null;
     this.back = 0;
@@ -713,7 +783,9 @@
     this.phase = 'vod';
     this.hasPlayed = false;
     this.setStatus('Loading...');
-    var url = location.origin + '/vod/' + enc(c.p) + '/' + enc(c.sid + '.' + (c.ext || 'mp4'));
+    var isRec = c.vod === 'rec';   // P-58: a recording on the server plays on the screen like a movie
+    if (isRec && recNativeOk()) { this.startRecNative(gen); return; }
+    var url = isRec ? location.origin + '/recordings/' + enc(c.sid) + '.' + (c.ext || 'mp4') : location.origin + '/vod/' + enc(c.p) + '/' + enc(c.sid + '.' + (c.ext || 'mp4'));
     var v = this.video;
     var key = c.p + ':' + c.sid;
     var resume = this.resumeKey === key ? this.resumeAt : 0;
@@ -758,9 +830,24 @@
       if (pr && pr.catch) pr.catch(noop);
       applyAudio();
     }
-    if (directWanted('directPlay', c.p)) {
+    if (!isRec && directWanted('directPlay', c.p)) {
       directUrl(c.p, c.sid, c.ext).then(function (d) { if (gen === self.gen) go(d || url, !!d); });
     } else go(url, false);
+  };
+
+  // P-58: in the phone app and on Android TV the app's own player plays the recording (the web view cannot play it); it needs the login cookie
+  function recNativeOk() { var b = appBridge(); try { return !!(b && typeof b.localPlayAuth === 'function' && b.localSupported()); } catch (e) { return false; } }
+  Tile.prototype.startRecNative = function (gen) {
+    var c = this.cfg;
+    this.phase = 'local';
+    this.local = true;
+    this.userPaused = false;
+    this.el.classList.add('native');
+    document.documentElement.classList.add('nativeplay');
+    var rc = this.el.getBoundingClientRect();
+    appBridge().localPlayAuth(location.origin + '/recordings/' + enc(c.sid) + '.' + (c.ext || 'mp4'), rc.left, rc.top, rc.width, rc.height);
+    applyAudio();
+    ovlSync();
   };
 
   Tile.prototype.retryVod = function (gen, msg, delay) {
@@ -1655,6 +1742,7 @@
     var list = [];
     tiles.forEach(function (t) {
       if (!t.cfg || t.idx >= visibleCount()) return;
+      if (t.local && t.cfg.vod === 'rec') return;
       if (t.local) list.push({ p: t.cfg.p, kind: 'live', id: String(t.cfg.sid), name: t.cfg.name || '' });
       else if (t.directNow && t.phase === 'vod') list.push({ p: t.cfg.p, kind: t.cfg.vod === 'series' ? 'series' : 'movie', id: String(t.cfg.sid), name: t.cfg.name || '' });
     });
@@ -1805,6 +1893,7 @@
   function nativeText(d) {
     var pct = d.total ? Math.min(100, Math.round(100 * d.done / d.total)) : 0;
     var size = d.total ? fmtBytes(d.done) + ' of ' + fmtBytes(d.total) : (d.done ? fmtBytes(d.done) : '');
+    if (d.state === 'done' && d.over) return 'Saved, but the provider sent more than it announced (' + fmtBytes(d.written || d.done) + ' written, ' + fmtBytes(d.total) + ' announced) - it may not play. Past estimate.';
     if (d.state === 'done') return 'Saved in Movies/Multiview' + (d.total ? ' - ' + fmtBytes(d.total) : '');
     if (d.state === 'queued') return 'Waiting for a free download slot' + (size ? ' - ' + size : '');
     if (d.state === 'paused') return 'Paused' + (size ? ' - ' + size + ' (' + pct + '%)' : '');
@@ -1907,6 +1996,10 @@
   function isBehind(t) { return !!t && !!t.cfg && !t.cfg.vod && (!!t.userPaused || (t.back || 0) >= 3); }
   function goLive() {
     var t = curTile();
+    if (t && t.cfg && t.cfg.vod === 'rec') {   // a recording that is still being written: jump to the newest part
+      try { if (t.local) appBridge().localSeek(36000); else { var sk = t.video.seekable; if (sk && sk.length) t.video.currentTime = sk.end(sk.length - 1); } } catch (e) { /* not seekable */ }
+      return;
+    }
     if (!t || !t.cfg || t.cfg.vod || sharedOn()) return;
     if (!isBehind(t)) { t.start(); banner('Reconnecting to live', 2000); return; }   // the page thinks it is live; make sure it is
     t.back = 0;
@@ -1976,6 +2069,7 @@
   function skip(sec) {
     var t = curTile();
     if (!t || !t.cfg || sharedOn()) return;
+    if (t.local && t.cfg.vod === 'rec') { try { appBridge().localSeek(sec); } catch (e) { /* old app */ } return; }
     if (t.cfg.vod) { try { t.video.currentTime = Math.max(0, t.video.currentTime + sec); } catch (e) { /* not seekable */ } return; }
     liveSeek(t, (t.back || 0) - sec);
   }
@@ -2045,7 +2139,7 @@
     }
     if (!ovl.dragging) o.time.textContent = c ? (c.vod || !t.userPaused || (t.back || 0) >= 3 ? seekLabel(Number(o.seek.value)) : 'Paused') : '';
     var behind = isBehind(t) && !shared;
-    o.live.hidden = !c || !!c.vod;
+    o.live.hidden = !c || (!!c.vod && !(c.vod === 'rec' && c.recording));
     o.live.classList.toggle('behind', behind);
     o.live.title = behind ? 'Go to live' : 'Watching live';
     if (t && t.cfg && !t.cfg.vod && ovl.shown) fetchAvail(t);
@@ -2265,7 +2359,31 @@
   }
   function ftEnsure() {
     if ($('#ftick')) return;
-    document.body.appendChild(h('div', { id: 'ftick', class: 'ftick', hidden: true }, h('div', { id: 'ft-view', class: 'ft-view' }, h('div', { id: 'ft-tape', class: 'ft-tape' }))));
+    var tick = h('div', { id: 'ftick', class: 'ftick', hidden: true }, h('div', { id: 'ft-view', class: 'ft-view' }, h('div', { id: 'ft-tape', class: 'ft-tape' })));
+    document.body.appendChild(tick);
+    // P-54: tap the league name for the fantasy settings; drag the score area sideways to move the tape, let go and it carries on
+    tick.addEventListener('click', function (e) { if (e.target.closest && e.target.closest('.ft-name')) openFantasyMenu(); });
+    var drag = null, resume = 0;
+    tick.addEventListener('pointerdown', function (e) {
+      if (e.target.closest && e.target.closest('.ft-name')) return;
+      if (e.pointerType === 'mouse' && e.button !== 0) return;
+      clearTimeout(resume);
+      drag = { x: e.clientX, fx: FT.x, id: e.pointerId };
+      FT.paused = true;
+      try { tick.setPointerCapture(e.pointerId); } catch (er) { /* not captured */ }
+    });
+    tick.addEventListener('pointermove', function (e) {
+      if (!drag || e.pointerId !== drag.id || !FT.copyW) return;
+      var x = (drag.fx - (e.clientX - drag.x)) % FT.copyW;
+      FT.x = x < 0 ? x + FT.copyW : x;
+    });
+    function dragEnd(e) {
+      if (!drag || e.pointerId !== drag.id) return;
+      drag = null;
+      resume = setTimeout(function () { FT.paused = false; }, 1500);
+    }
+    tick.addEventListener('pointerup', dragEnd);
+    tick.addEventListener('pointercancel', dragEnd);
   }
   function ftSet(sum) {
     ftEnsure();
@@ -2837,7 +2955,7 @@
   // ---------------------------------------------------------------- channel picker
   // Everything the picker shows (provider, tab, category, search, favorites, rows expanded, scroll position and the
   // channel chosen last) lives in S.pk, so it opens again exactly where it was left.
-  var PK_DEFAULT = { prov: '', tab: 'live', cat: '', q: '', favs: false, limit: 100, scroll: 0, last: '', seen: '' };
+  var PK_DEFAULT = { prov: '', tab: 'live', cat: '', q: '', favs: false, limit: 100, scroll: 0, last: '', seen: {} };
   function pkState() {
     var p = S.pk && typeof S.pk === 'object' ? S.pk : {};
     Object.keys(PK_DEFAULT).forEach(function (k) { if (typeof p[k] !== typeof PK_DEFAULT[k]) p[k] = PK_DEFAULT[k]; });
@@ -2898,8 +3016,8 @@
     if (pk.tab === 'live' || pk.tab === 'guide') {
       var curCfg = tiles[slot] && tiles[slot].cfg;
       var cur = curCfg && !curCfg.vod ? curCfg.p + ':' + curCfg.sid : '';
-      if (cur && cur !== pk.seen) { pk.last = cur; pk.jump = true; }
-      if (cur) pk.seen = cur;
+      if (cur && cur !== pk.seen[slot]) { pk.last = cur; pk.jump = true; }
+      if (cur) pk.seen[slot] = cur;
     }
     var restore = pk.scroll > 0 || !!pk.last;   // scroll back to the remembered spot once the list is on screen
     var jumpTries = 0;
@@ -3256,7 +3374,7 @@
 
     function choose(r) {
       pk.last = r.p + ':' + r.sid;
-      if (!r.vod) pk.seen = pk.last;
+      if (!r.vod) pk.seen[slot] = pk.last;
       pk.jump = false;
       remember();
       if (r.vod === 'series') { openEpisodes(r, slot, function () { m.close(); }); return; }
@@ -3431,7 +3549,7 @@
       say('Saving...');
       api('/api/fantasy/config', { method: 'POST', body: { url: url.value, token: tok.value } }).then(function (c) {
         tok.value = '';
-        fpReload().then(function () { if (wrap.isConnected) { fmFill(wrap, c); var m = $('#fm-msg'); if (m) m.textContent = 'Saved.'; } });
+        fpReload().then(function () { fpSwRefresh(); if (wrap.isConnected) { fmFill(wrap, c); var m = $('#fm-msg'); if (m) m.textContent = 'Saved.'; } });
       }, fail);
     } });
     var test = h('button', { class: 'btn', type: 'button', id: 'fm-test', text: 'Test connection', onclick: function () {
@@ -3441,7 +3559,7 @@
       }, fail);
     } });
     rm.addEventListener('click', function () {
-      api('/api/fantasy/config', { method: 'DELETE' }).then(function () { url.value = ''; tok.value = ''; fpReload().then(function () { if (wrap.isConnected) { fmFill(wrap, { configured: false }); var m = $('#fm-msg'); if (m) m.textContent = 'Removed.'; } }); }, fail);
+      api('/api/fantasy/config', { method: 'DELETE' }).then(function () { url.value = ''; tok.value = ''; fpReload().then(function () { fpSwRefresh(); if (wrap.isConnected) { fmFill(wrap, { configured: false }); var m = $('#fm-msg'); if (m) m.textContent = 'Removed.'; } }); }, fail);
     });
     wrap.appendChild(h('div', { class: 'fpset fmconn' },
       h('div', { class: 'field' }, h('label', { text: 'Fantasy Manager address (private LAN or Tailscale only)' }), url),
@@ -3449,6 +3567,41 @@
       msg,
       h('div', { class: 'viewbtns' }, save, test, rm)));
     wrap.appendChild(fantasyBody());
+  }
+  // P-55: the two switches live at the top of Settings (and in the ticker sub menu); options of a switched-off feature are hidden
+  function fpOptSync() {
+    $$('[data-fo="pop"]').forEach(function (e) { e.hidden = !S.fpop; });
+    $$('[data-fo="tk"]').forEach(function (e) { e.hidden = !S.ftick; });
+    $$('input[data-fsw="pop"]').forEach(function (e) { e.checked = !!S.fpop; });
+    $$('input[data-fsw="tk"]').forEach(function (e) { e.checked = !!S.ftick; });
+  }
+  function fantasySwitches() {
+    var slot = h('div', { class: 'fpsw-slot' });
+    fpSwFill(slot);
+    return slot;
+  }
+  function fpSwRefresh() { $$('.fpsw-slot').forEach(fpSwFill); fpOptSync(); }
+  function fpSwFill(slot) {
+    slot.textContent = '';
+    if (!isAdmin() || !FP.avail) return;
+    var tkOn = h('input', { type: 'checkbox', id: 'ft-on', 'data-fsw': 'tk' });
+    tkOn.checked = !!S.ftick;
+    tkOn.addEventListener('change', function () { S.ftick = tkOn.checked; saveSoon(); ftApply(); fpOptSync(); });
+    var on = h('input', { type: 'checkbox', id: 'fp-on', 'data-fsw': 'pop' });
+    on.checked = !!S.fpop;
+    on.addEventListener('change', function () { S.fpop = on.checked; saveSoon(); fpApply(); fpOptSync(); });
+    slot.appendChild(h('div', { class: 'fpset fpsw' },
+      h('label', { class: 'check' }, tkOn, h('span', { text: 'Score ticker along the bottom' })),
+      h('label', { class: 'check' }, on, h('span', { text: 'Score pop-ups when a player scores' }))));
+  }
+  // P-54: tapping the league name on the ticker opens only the Fantasy Manager settings
+  function openFantasyMenu() {
+    if (!isAdmin() || !FP.avail) return;
+    if ($('#fantasy-menu')) return;
+    var wrap = h('div', { id: 'fmwrap2' });
+    var m = openModal({ title: 'Fantasy ticker settings', body: [h('div', { id: 'fantasy-menu' }, fantasySwitches(), fantasyBody(), wrap)], foot: [h('button', { class: 'btn', type: 'button', id: 'fantasy-menu-close', text: 'Close', onclick: function () { m.close(); } })] });
+    fmFill(wrap);
+    fpOptSync();
   }
   function fantasyBody() {
     function numSel(key, list, label) {
@@ -3459,9 +3612,6 @@
       sel.addEventListener('change', function () { S[key] = Number(sel.value); saveSoon(); });
       return sel;
     }
-    var on = h('input', { type: 'checkbox', id: 'fp-on' });
-    on.checked = !!S.fpop;
-    on.addEventListener('change', function () { S.fpop = on.checked; saveSoon(); fpApply(); });
     var opp = h('input', { type: 'checkbox', id: 'fp-opp' });
     opp.checked = !!S.fopp;
     opp.addEventListener('change', function () { S.fopp = opp.checked; saveSoon(); });
@@ -3477,9 +3627,6 @@
     delay.id = 'fp-delay';
     var age = numSel('fage', [15, 30, 60, 120, 300], function (n) { return n + ' seconds' + (n === 60 ? ' (default)' : ''); });
     age.id = 'fp-age';
-    var tkOn = h('input', { type: 'checkbox', id: 'ft-on' });
-    tkOn.checked = !!S.ftick;
-    tkOn.addEventListener('change', function () { S.ftick = tkOn.checked; saveSoon(); ftApply(); });
     var tkPos = h('select', { id: 'ft-pos' }, h('option', { value: 'below', text: 'Below the video (keeps the score bug clear)' }), h('option', { value: 'overlap', text: 'Overlap the video (for streams with their own ticker)' }));
     tkPos.value = S.fpos;
     tkPos.addEventListener('change', function () { S.fpos = tkPos.value; saveSoon(); ftApply(); });
@@ -3490,20 +3637,19 @@
     tkSpeed.value = S.fspeed;
     tkSpeed.addEventListener('change', function () { S.fspeed = tkSpeed.value; saveSoon(); });
     if (!FP.avail) return h('div', null);
-    return h('div', { class: 'fpset' },
-      h('label', { class: 'check' }, on, h('span', { text: 'Show a pop-up when a player scores (Fantasy Manager)' })),
-      note,
-      FP.avail ? h('div', null,
-        h('div', { class: 'field' }, h('label', { text: 'Smallest score that pops up' }), min),
-        h('div', { class: 'field' }, h('label', { text: 'Delay (to line up with a delayed stream)' }), delay),
-        h('label', { class: 'check' }, opp, h('span', { text: "Also show players on my opponents' teams" })),
-        h('div', { class: 'field' }, h('label', { text: 'Pop-up size' }), size),
-        h('div', { class: 'field' }, h('label', { text: 'Drop a pop-up that is this late' }), age),
-        h('label', { class: 'check' }, tkOn, h('span', { text: 'Show the score ticker along the bottom' })),
-        h('div', { class: 'field' }, h('label', { text: 'Ticker position' }), tkPos),
-        h('div', { class: 'field' }, h('label', { text: 'Ticker size' }), tkSize),
-        h('div', { class: 'field' }, h('label', { text: 'Ticker speed' }), tkSpeed),
-        h('div', { class: 'viewbtns' }, test)) : null);
+    var pop = h('div', { 'data-fo': 'pop' },
+      h('div', { class: 'field' }, h('label', { text: 'Smallest score that pops up' }), min),
+      h('div', { class: 'field' }, h('label', { text: 'Delay (to line up with a delayed stream)' }), delay),
+      h('label', { class: 'check' }, opp, h('span', { text: "Also show players on my opponents' teams" })),
+      h('div', { class: 'field' }, h('label', { text: 'Pop-up size' }), size),
+      h('div', { class: 'field' }, h('label', { text: 'Drop a pop-up that is this late' }), age),
+      h('div', { class: 'viewbtns' }, test));
+    var tk = h('div', { 'data-fo': 'tk' },
+      h('div', { class: 'field' }, h('label', { text: 'Ticker position' }), tkPos),
+      h('div', { class: 'field' }, h('label', { text: 'Ticker size' }), tkSize),
+      h('div', { class: 'field' }, h('label', { text: 'Ticker speed' }), tkSpeed));
+    pop.hidden = !S.fpop; tk.hidden = !S.ftick;
+    return h('div', { class: 'fpset' }, note, tk, pop);
   }
 
 
@@ -3747,6 +3893,7 @@
           h('button', { class: 'btn', type: 'button', id: 'set-full', text: fsElement() ? 'Exit fullscreen' : 'Fullscreen', onclick: toggleFullscreen }),
           ME && ME.user ? h('button', { class: 'btn', type: 'button', id: 'set-pw', text: 'Change my password...', onclick: function () { m.close(); changeOwnPassword(); } }) : null,
           isAdmin() ? h('button', { class: 'btn', type: 'button', id: 'set-users', text: 'Users and logins...', onclick: function () { m.close(); openUsers(); } }) : null),
+        fantasySwitches(),
         setAllRow(),
         setGroup('play', 'Playback and buffering', [
           field('Start playing after (video collected before a tile starts; smoother, adds delay)', bufSel),
@@ -4033,7 +4180,7 @@
         var url = '/recordings/' + it.id + '.' + (ext || 'mp4');
         var btns = [];
         if (it.file && (live || it.status === 'done' || it.status === 'stopped')) {
-          btns.push(h('button', { class: 'btn', type: 'button', 'data-act': 'play-' + it.id, text: 'Play', onclick: function () { playRecording(it, url); } }));
+          btns.push(h('button', { class: 'btn', type: 'button', 'data-act': 'play-' + it.id, text: 'Play', onclick: function () { m.close(); playRecording(it, url); } }));
           if (nativeDl()) {
             // the app's web view cannot save a link, so a finished recording goes through the app's own downloader (Movies/Multiview)
             if (!live) btns.push(h('button', { class: 'btn', type: 'button', 'data-act': 'dl-' + it.id, text: 'Save to phone', onclick: function () { nativeAdd([{ p: 'rec', sid: it.id, ext: ext || 'mp4', name: it.title || it.name || ('Recording ' + it.id), path: url + '?dl=1' }]); } }));
@@ -4066,9 +4213,15 @@
     poll();
     timer = setInterval(poll, 5000);
   }
+  // P-58: the recording opens on a screen (the selected one) like a movie: same controls, seeking and resume
   function playRecording(it, url) {
-    var v = h('video', { class: 'recplayer', src: url, controls: true, autoplay: true, playsinline: true });
-    var pm = openModal({ title: it.title || it.name, wide: true, body: [v, it.status === 'recording' ? h('div', { class: 'note', text: 'Still recording: you can play what exists so far; reopen to see more.' }) : null], foot: closeBtn({ close: function () { pm.close(); } }), onClose: function () { try { v.pause(); v.removeAttribute('src'); v.load(); } catch (e) { /* gone */ } } });
+    var ext = (url.split('?')[0].split('.').pop() || 'mp4').replace(/[^a-z0-9]/gi, '').slice(0, 5) || 'mp4';
+    var slot = S.sel < visibleCount() ? S.sel : 0;
+    var cfg = { p: 'rec', sid: String(it.id), name: it.title || it.name || ('Recording ' + it.id), icon: '', vod: 'rec', ext: ext };
+    if (it.status === 'recording') cfg.recording = true;
+    assign(slot, cfg);
+    select(slot);
+    if (it.status === 'recording') banner('Still recording: this plays what exists so far. The LIVE button jumps to the newest part.', 5000);
   }
 
   // a programme in the guide that has not started: offer to record it
@@ -4695,6 +4848,7 @@
     document.addEventListener('pointerdown', function (e) { if (side.open && !side.el.contains(e.target)) sideClose(); }, true);
     ['mousemove', 'mousedown', 'touchstart', 'pointerdown', 'wheel'].forEach(function (ev) { document.addEventListener(ev, toolbarWake, { passive: true }); });
     ['click', 'touchstart'].forEach(function (ev) { document.addEventListener(ev, userGesture, { passive: true }); });
+    ['gesturestart', 'gesturechange'].forEach(function (ev) { document.addEventListener(ev, function (e) { e.preventDefault(); }); });
     document.addEventListener('fullscreenchange', onFullscreenChange);
     document.addEventListener('webkitfullscreenchange', onFullscreenChange);
     document.addEventListener('visibilitychange', function () {
@@ -4776,5 +4930,5 @@
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init); else init();
 
   // test hook (harmless in production)
-  window.__mv = { away: awayFor, fpReload: fpReload, updateReady: updateReady, ovlShow: ovlShow, ovlHide: ovlHide, get ovl() { return ovl; }, get side() { return side; }, castState: castState, openRecordings: openRecordings, get S() { return S; }, get ME() { return ME; }, applyView: applyView, tiles: tiles, LAYOUTS: LAYOUTS, setLayout: setLayout, select: select, assign: assign, toggleZoom: toggleZoom, sharedApply: sharedApply, get shared() { return shared; }, get zoom() { return zoom; }, get modals() { return modals.length; }, get FP() { return FP; }, fpIncoming: fpIncoming, fpTest: fpTest, get FT() { return FT; }, diagVerdict: diagVerdict, diagReport: diagReport, openDiag: openDiag, ftSet: ftSet, ftCheck: function () { ftMeasure(); ftCheck($('#ft-view')); }, fpScale: fpScale };
+  window.__mv = { zoomOf: function (i) { return tiles[i] ? tiles[i].z : null; }, away: awayFor, fpReload: fpReload, updateReady: updateReady, ovlShow: ovlShow, ovlHide: ovlHide, get ovl() { return ovl; }, get side() { return side; }, castState: castState, openRecordings: openRecordings, get S() { return S; }, get ME() { return ME; }, applyView: applyView, tiles: tiles, LAYOUTS: LAYOUTS, setLayout: setLayout, select: select, assign: assign, toggleZoom: toggleZoom, sharedApply: sharedApply, get shared() { return shared; }, get zoom() { return zoom; }, get modals() { return modals.length; }, get FP() { return FP; }, fpIncoming: fpIncoming, fpTest: fpTest, get FT() { return FT; }, diagVerdict: diagVerdict, diagReport: diagReport, openDiag: openDiag, ftSet: ftSet, ftCheck: function () { ftMeasure(); ftCheck($('#ft-view')); }, fpScale: fpScale };
 })();

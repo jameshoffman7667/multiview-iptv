@@ -5,7 +5,7 @@ Requests logged here are not built yet. Say "build" to fold them into a new vers
 With every push, say whether the compose/stack file must change or whether pulling the new image is enough.
 Every build rewrites deploy/RELEASE.md using the FULL template of the app spec (section 8: Update, Image, Short, Long, Release commit, Type, Port, Public hostname, env vars, Data, Resources, Healthcheck, Verify, PWA, Docker build, Rollback naming the exact previous tag, Known issues, Backup tier). Server tests use `wget` (no curl on vm101). The server's real stack file is the homelab repo's stacks/multiview-iptv/compose.yaml (stack.yml here is only a reference); never tell anyone to update the Dockhand stack. Fixed `Update:` line: `Update: now` only when the user said "build, push and update" for that release, otherwise `Update: later`.
 
-Current released version: 0.21.0 (being pushed)
+Current released version: 0.22.0 (being pushed)
 
 ### P-1 - Rebuild the on-screen menu as a traditional video player overlay
 Requested: 2026-10-18. Tap any screen (single view or multiview) to show a full-screen overlay over everything:
@@ -330,7 +330,7 @@ Built 2026-11-15 in 0.20.0. Groups: Playback and buffering, Shared screen, Downl
 
 ### P-49 - Fire TV (Fire Stick) support check
 Requested: 2026-11-15 (James: "Will the current app work on a firestick? What would it take to make it?")
-Type: patch or minor (depends on test results)        Status: Pending
+Type: patch or minor (depends on test results)        Status: Built in 0.22.0
 Notes / questions: the APK already declares leanback and the TV launcher (minSdk 24 = Fire OS 6 and newer). Open points: the Google Cast library (guard so it is skipped without Google Play services), key/remote handling and WebView version on the stick, and the Fire TV model (Vega OS sticks cannot run Android APKs). Need: Fire TV model and Fire OS version.
 
 ### P-50 - Share a bet slip image to a WhatsApp group (future)
@@ -373,22 +373,22 @@ Answers 2026-11-21 (James), to the open-items questions: P-38 resolved (buttons 
 
 ### P-54 - Ticker: tap the league name area to open the fantasy settings
 Requested: 2026-11-21 (James: "Add the ability to interact with the ticker. Tapping the league name area brings up the fantasy integration settings.")
-Type: minor (new interaction)   Status: Pending
+Type: minor (new interaction)   Status: Built in 0.22.0
 Notes / questions: plan: a tap or Enter on the pinned league name opens Settings with "Fantasy ticker and pop-ups" already expanded and scrolled into view (the Fantasy Manager address, token, leagues, ticker and pop-up options are all there). It must not break the ticker's scrolling or the score pop-ups. Admins only, as the ticker is. Question: should the same tap also work on the score area, or only the league name?
 
 ### P-55 - Ticker and Pop-ups on/off switches at the top of Settings
 Requested: 2026-11-21 (James: "Add toggles to turn the ticker and pop up on/off to the top of the settings.")
-Type: minor (small)   Status: Pending
+Type: minor (small)   Status: Built in 0.22.0
 Notes / questions: plan: two switches, "Ticker" and "Score pop-ups", above the collapsible groups (shown only when the fantasy ticker is available). They are the same settings that exist inside the Fantasy group today, so I would move them to the top and not show them twice. Per device, as now.
 
 ### P-56 - Change channel menu does not return to its last state (bug)
 Requested: 2026-11-21 (James: "when opening the change channel menu it should return to its last state i.e. Tab, scroll position, search term, etc.")
-Type: patch (bug)   Status: Pending
+Type: patch (bug)   Status: Built in 0.22.0
 Notes / questions: the menu already saves tab, provider, category, search, expanded rows and scroll when it closes. Likely cause, introduced by P-51 in 0.20.0: the "channel changed since the menu was last used" check remembers one channel for the whole app, so opening the menu for a different screen (or after the channel changed) jumps to that channel and drops the saved spot. Plan: remember the channel per screen, and make the jump apply only when the channel on that screen changed since this screen's menu was last used; everything else restores exactly. Plus a browser test that reopens the menu for two different screens and checks tab, search, category and scroll each time. Question: when does it lose its place: every time, only on another screen, only after the app restarts, or only after changing the channel?
 
 ### P-57 - Download pop-up shows above everything, including menus and the ticker
 Requested: 2026-11-21 (James: "when a download starts the pop up should appear over everything including the menus and ticker.")
-Type: patch   Status: Pending
+Type: patch   Status: Built in 0.22.0
 Notes / questions: cause: the downloads bar has a lower stacking level (40) than dialogs (50), the ticker (60) and the score pop-ups (70), so it is hidden under them. Plan: raise it above all of them (it stays visible for 3 s, bottom centre, and sits above the ticker instead of behind it). The "Added to downloads" banner gets the same treatment.
 
 Decisions 2026-11-21 (James), P-54 and P-55:
@@ -397,7 +397,7 @@ Decisions 2026-11-21 (James), P-54 and P-55:
 
 ### P-58 - Play recordings in the main playback screen, not a pop-up (and make them actually start)
 Requested: 2026-11-21 (James: "Recording playback seems to be in a pop up instead of in the main playback screen, and never starts playing. Move this to the main playback screen")
-Type: minor (changed behaviour)   Status: Pending
+Type: minor (changed behaviour)   Status: Built in 0.22.0
 Notes / questions: cause found in the code: Play on the Recordings page (`playRecording`) puts a plain video element in a dialog, with none of the player's own controls, and it relies on the web view's autoplay, which Android blocks without a tap. Plan: play a recording on a screen (tile) like a movie: the same overlay controls (pause, seek bar and 10 s / 30 s skips, full screen), resume point from the file, Range seeking from `/recordings/<id>.<ext>`, and the app's native player where the web view cannot decode the file. Which screen: the one that is selected (or screen 1 when none), replacing what it shows; Back or the change channel button returns to the live channel that was there. A recording still being recorded plays what exists so far with a Live-edge jump. Questions: (1) which device does it fail on (Shield, phone app, browser), (2) what file type are the recordings (mp4, mkv or ts; Settings or the file name on the Recordings page shows it), (3) when it "never starts", is it a black pop-up with controls, a spinner, or an error message?
 
 Answers 2026-11-21 (James), P-58: phone app; file type not known. Screenshot: the pop-up for "NFL Football : Pittsburgh Steelers at Cincinnati Bengals" is marked Live (still being recorded), the player sits at 0:00 with a spinner and never plays. Findings from the code: the server records H.264/H.265 as the provider sends it (video copied, not converted) with AAC audio into a fragmented MP4 (`frag_keyframe+empty_moov`), so every recording is an .mp4. A fragmented MP4 that is still growing has no total length, and the phone's web view often cannot play it (or a provider video format such as HEVC) and shows a spinner. Updated plan: in the phone app and on the Shield, recordings play through the app's native player (ExoPlayer, the same one local mode and saved downloads use), which handles fragmented MP4 and HEVC, inside the main playback screen with the player controls; the browser keeps the web player but also in the main screen. A recording that is still being recorded plays what exists so far and a Live-edge button re-opens the file at the end. Open question: does a FINISHED recording play in the phone app? (If yes, only the growing file is the problem.)
@@ -406,12 +406,12 @@ Answer 2026-11-21 (James), P-58: finished recordings do not play in the phone ap
 
 ### P-59 - Phone downloads still run past the estimated size (shown capped at 100%)
 Requested: 2026-11-21 (James: "Downloads also only show up to 100% now but the actual file size goes way past the estimated size.")
-Type: patch (bug)   Status: Pending
+Type: patch (bug)   Status: Built in 0.22.0
 Notes / questions: 0.21.0 only caps the shown percentage; it did not stop the file growing, so the end-of-download size check never runs because the download never ends on its own. The server forwards the provider's own Content-Length / Content-Range unchanged, so the provider announces one size and then sends more (or the announced size is only an estimate, which some Xtream servers give for converted files). Plan: (1) the report shows the announced size, the bytes written and the last answers, so it can be read; (2) when the bytes pass the announced size by more than a small margin the downloader stops writing, marks the download "The provider sent more than it announced", keeps the file as "may not play" with Play and Open with... still offered, and does not loop; (3) the page shows "past estimate" instead of silently capping at 100%. Needs the Copy report text of one such download (tap Copy report on it and paste it here) to tell "announced size too small" from "extra data after the end"; the file name and the size in the file manager help too.
 
 ### P-60 - Pinch to zoom scales and pans the video of that screen, not the whole UI
 Requested: 2026-11-21 (James: "Pinch to zoom on the screen scales the ui but not the video. This should instead scale and pan the video but not the ui, per screen")
-Type: minor (new gesture)   Status: Pending
+Type: minor (new gesture)   Status: Built in 0.22.0
 Notes / questions: cause: the page has no pinch handling of its own (viewport is `width=device-width, initial-scale=1`), so the web view's built-in page zoom scales everything. Plan: turn page zoom off (`maximum-scale=1, user-scalable=no`, `touch-action: none` on the screens) and add our own gesture per screen: two fingers pinch zoom the video of that screen (1x to 4x, around the fingers), one finger drags to pan when zoomed in (clamped so the picture never leaves the screen), double tap resets to 1x, and it works the same in a multiview layout, in zoomed (single screen) mode and in the mini player. The ticker, menus and overlay stay at normal size. Mouse wheel (Ctrl or plain wheel over a screen) zooms and drag pans on desktop. The zoom belongs to that screen and resets when its channel changes or when the screen is removed. Not for the native local player in the Android app unless James wants it too (it has its own surface). Questions: (1) should the zoom be kept when the channel on that screen changes, or reset (plan: reset)? (2) what does a double tap do now for you (plan: when zoomed it resets to 1x, otherwise it keeps its current action)?
 
 Decision 2026-11-21 (James), P-60: no double tap to reset, and panning needs two fingers (one finger stays free for taps, the overlay and the player controls). So: two fingers pinch to zoom and the same two fingers moving together pan the picture; there is no double-tap action. To get back to normal size you pinch out until it is below about 1.1x and it snaps to 1x (the picture also snaps back to centre). Mouse wheel zooms and Shift or middle-button drag pans on desktop. Resets when the screen's channel changes (plan, not contradicted).

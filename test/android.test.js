@@ -126,3 +126,29 @@ test('recordings can be saved to the phone: the downloader takes a /recordings p
   assert.match(dl, /The recording is no longer on the server/);
   assert.match(dl, /o\.put\("path", it\.path\)/, 'kept across a restart');
 });
+
+test('P-59: the downloader stops writing past the announced size and keeps the file marked as such', () => {
+  const dl = read('android/app/src/main/java/app/iptvmultiview/tv/Downloader.java');
+  assert.match(dl, /it\.done > it\.total \+ Math\.max\(1048576L, it\.total \/ 100\)/);
+  assert.match(dl, /overrun = true; break;/);
+  assert.match(dl, /it\.over = true;/);
+  assert.match(dl, /o\.put\("over", it\.over\)/);
+  assert.match(dl, /sent more than it announced/, 'the report says so');
+});
+
+test('P-58: the native player takes a recording from this server only, with the page cookie', () => {
+  const main = read('android/app/src/main/java/app/iptvmultiview/tv/MainActivity.java');
+  assert.match(main, /public void localPlayAuth\(/);
+  assert.match(main, /url\.contains\("\/recordings\/"\)/);
+  assert.match(main, /page\.getHost\(\)\.equals\(file\.getHost\(\)\)/, 'never sends the cookie to another host');
+  assert.match(read('android/app/src/main/java/app/iptvmultiview/tv/LocalPlayer.java'), /setDefaultRequestProperties/);
+});
+
+test('P-49: Fire TV readiness - no touchscreen needed, leanback launcher, Cast skipped on a TV', () => {
+  const manifest = read('android/app/src/main/AndroidManifest.xml');
+  assert.match(manifest, /android\.hardware\.touchscreen" android:required="false"/);
+  assert.match(manifest, /LEANBACK_LAUNCHER/);
+  const cast = read('android/app/src/main/java/app/iptvmultiview/tv/CastHelper.java');
+  assert.match(cast, /UI_MODE_TYPE_TELEVISION/);
+  assert.match(cast, /catch \(Throwable/, 'a device without Google Play services never crashes');
+});
