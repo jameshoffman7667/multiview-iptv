@@ -257,7 +257,7 @@ Notes: with the right versions the app downloads by itself (0.19.0 APK plus serv
 
 ### P-38 - Download buttons for series in the Android app
 Requested: 2026-11-15 (James: "The apk still doesn't have the download button per episode and series")
-Type: minor or patch (depends on the answer)   Status: Blocked (waiting on an answer)
+Type: minor or patch (depends on the answer)   Status: Dropped 2026-11-21 (James: "Buttons are there now" in 0.21.0; the earlier APK was stale)
 Notes: in the code the episode list (opened by tapping a series) has a button per episode and "Download this season", shown in the app on phones just like the Movies tab (which does work for James). So either the episode list is not showing them on his phone, or he means a button on the series row itself (all seasons). Questions: (a) after tapping a series, does the episode list show no buttons at all? (b) or do you want a button on the series row in the list that downloads every season? (c) which app and server versions?
 
 ### P-39 - Downloads bar: disappear after 3 s; status in the Recordings and downloads page
@@ -280,12 +280,12 @@ Built 2026-11-15 in 0.20.0. Settings > Fantasy ticker: Small (70%), Medium (85%)
 
 ### P-42 - Ticker parts: fantasy and betting on/off, alternating when both are on
 Requested: 2026-11-15 (James: options to turn the fantasy or betting ticker components on or off; if both are on, go back and forth between them)
-Type: minor (new setting)   Status: Pending (the betting part waits for P-43)
+Type: minor (new setting)   Status: Pending (builds together with P-43)
 Notes: two switches in Settings (Fantasy scores, Bets). One on: the ticker shows only that part. Both on: it alternates, one full pass of the tape each (or every N seconds, your choice). Question: alternate after each full pass of the tape, or on a timer (for example 30 s)? The Bets switch appears once P-43 exists.
 
 ### P-43 - Share a FanDuel bet by email; the app tracks it in the ticker
 Requested: 2026-11-15 (James: "Add an option to share a fan duel bet to an email address, and the app will track the bet in the ticker as well")
-Type: minor (large, new integration)   Status: Blocked (waiting on answers)
+Type: minor (large, new integration)   Status: Pending (design agreed; waiting for a build message)
 Notes: needs three things the app does not have yet. (1) Receiving mail: the app only sends mail (SMTP2GO). Options: a dedicated mailbox the server checks (IMAP, for example a Gmail address with an app password, kept in the server .env), or Cloudflare Email Routing to a small webhook on the app. (2) Reading the bet from what FanDuel sends: the share email or link must carry the legs (player, stat line, over/under, odds, stake); FanDuel has no public API, so this is parsing a message and its format may change. (3) Live results: each leg needs live stats; Fantasy Manager's NFL feed may cover players and yards/receptions/touchdowns, but not every FanDuel market (alt lines, parlays with game totals, other sports). Safe handling: stored bets are text only (no FanDuel login ever), shown to admins only. Questions: (a) which mailbox can receive the share (a Gmail address you own, or an address on hoffmanhouse.ca)? (b) please forward one real shared-bet email (hide anything private) so I can see what it contains; (c) which bets matter most: NFL player props, parlays, anything else? (d) shown only to admins like the fantasy ticker?
 
 ### P-44 - Shrink the ticker more in mini player mode
@@ -330,7 +330,7 @@ Built 2026-11-15 in 0.20.0. Groups: Playback and buffering, Shared screen, Downl
 
 ### P-49 - Fire TV (Fire Stick) support check
 Requested: 2026-11-15 (James: "Will the current app work on a firestick? What would it take to make it?")
-Type: patch or minor (depends on test results)        Status: Blocked
+Type: patch or minor (depends on test results)        Status: Pending
 Notes / questions: the APK already declares leanback and the TV launcher (minSdk 24 = Fire OS 6 and newer). Open points: the Google Cast library (guard so it is skipped without Google Play services), key/remote handling and WebView version on the stick, and the Fire TV model (Vega OS sticks cannot run Android APKs). Need: Fire TV model and Fire OS version.
 
 ### P-50 - Share a bet slip image to a WhatsApp group (future)
@@ -368,3 +368,5 @@ Built 2026-11-15 in 0.20.0. POST /api/direct/report (admins) every 15 s from eac
 Requested: 2026-11-15 (James: "Can recordings currently be downloaded to the device. If not add this feature and build push and update")
 Type: minor (new button)   Status: Built in 0.21.0
 Notes: answer found in the code: in a browser the Recordings page already had a Download link (the server sends the file with Content-Disposition and Range), but the Android app's web view has no download handler, so the link did nothing there. Built: in the Android app a finished recording (done or stopped) has "Save to phone", which hands the file to the app's own downloader (Movies/Multiview, resumes with Range, Wi-Fi only option, size check, Copy report). Recordings still being recorded are not offered. The old Download link stays in browsers. Needs the new APK (native change); not tested on a phone.
+
+Answers 2026-11-21 (James), to the open-items questions: P-38 resolved (buttons are there now, Dropped). P-37 and P-40: not tried yet on 0.21.0, stay open (send the Copy report if a download restarts or is the wrong size). P-43: scope confirmed as a full build (email receiver, Gemini reader, Settings allow-list, ESPN live stats in the ticker, NFL only), but James answered "Not yet" to building it now, so it waits for a build message; P-42 builds with it. P-50: keep for later (stays Blocked). P-49: Fire TV Stick 4K (Fire OS) confirmed as the target; James chose "Prepare fixes now": guard anything that needs Google Play services, check remote keys and the WebView, add a Fire TV note to the spec; untested on a stick (answer is not a build message yet). Deployed: Multiview 0.21.0 and Fantasy Manager 4.20.0 are both deployed, so P-46 and P-47 can be checked on a live game.
