@@ -370,3 +370,23 @@ Type: minor (new button)   Status: Built in 0.21.0
 Notes: answer found in the code: in a browser the Recordings page already had a Download link (the server sends the file with Content-Disposition and Range), but the Android app's web view has no download handler, so the link did nothing there. Built: in the Android app a finished recording (done or stopped) has "Save to phone", which hands the file to the app's own downloader (Movies/Multiview, resumes with Range, Wi-Fi only option, size check, Copy report). Recordings still being recorded are not offered. The old Download link stays in browsers. Needs the new APK (native change); not tested on a phone.
 
 Answers 2026-11-21 (James), to the open-items questions: P-38 resolved (buttons are there now, Dropped). P-37 and P-40: not tried yet on 0.21.0, stay open (send the Copy report if a download restarts or is the wrong size). P-43: scope confirmed as a full build (email receiver, Gemini reader, Settings allow-list, ESPN live stats in the ticker, NFL only), but James answered "Not yet" to building it now, so it waits for a build message; P-42 builds with it. P-50: keep for later (stays Blocked). P-49: Fire TV Stick 4K (Fire OS) confirmed as the target; James chose "Prepare fixes now": guard anything that needs Google Play services, check remote keys and the WebView, add a Fire TV note to the spec; untested on a stick (answer is not a build message yet). Deployed: Multiview 0.21.0 and Fantasy Manager 4.20.0 are both deployed, so P-46 and P-47 can be checked on a live game.
+
+### P-54 - Ticker: tap the league name area to open the fantasy settings
+Requested: 2026-11-21 (James: "Add the ability to interact with the ticker. Tapping the league name area brings up the fantasy integration settings.")
+Type: minor (new interaction)   Status: Pending
+Notes / questions: plan: a tap or Enter on the pinned league name opens Settings with "Fantasy ticker and pop-ups" already expanded and scrolled into view (the Fantasy Manager address, token, leagues, ticker and pop-up options are all there). It must not break the ticker's scrolling or the score pop-ups. Admins only, as the ticker is. Question: should the same tap also work on the score area, or only the league name?
+
+### P-55 - Ticker and Pop-ups on/off switches at the top of Settings
+Requested: 2026-11-21 (James: "Add toggles to turn the ticker and pop up on/off to the top of the settings.")
+Type: minor (small)   Status: Pending
+Notes / questions: plan: two switches, "Ticker" and "Score pop-ups", above the collapsible groups (shown only when the fantasy ticker is available). They are the same settings that exist inside the Fantasy group today, so I would move them to the top and not show them twice. Per device, as now.
+
+### P-56 - Change channel menu does not return to its last state (bug)
+Requested: 2026-11-21 (James: "when opening the change channel menu it should return to its last state i.e. Tab, scroll position, search term, etc.")
+Type: patch (bug)   Status: Pending
+Notes / questions: the menu already saves tab, provider, category, search, expanded rows and scroll when it closes. Likely cause, introduced by P-51 in 0.20.0: the "channel changed since the menu was last used" check remembers one channel for the whole app, so opening the menu for a different screen (or after the channel changed) jumps to that channel and drops the saved spot. Plan: remember the channel per screen, and make the jump apply only when the channel on that screen changed since this screen's menu was last used; everything else restores exactly. Plus a browser test that reopens the menu for two different screens and checks tab, search, category and scroll each time. Question: when does it lose its place: every time, only on another screen, only after the app restarts, or only after changing the channel?
+
+### P-57 - Download pop-up shows above everything, including menus and the ticker
+Requested: 2026-11-21 (James: "when a download starts the pop up should appear over everything including the menus and ticker.")
+Type: patch   Status: Pending
+Notes / questions: cause: the downloads bar has a lower stacking level (40) than dialogs (50), the ticker (60) and the score pop-ups (70), so it is hidden under them. Plan: raise it above all of them (it stays visible for 3 s, bottom centre, and sits above the ticker instead of behind it). The "Added to downloads" banner gets the same treatment.
